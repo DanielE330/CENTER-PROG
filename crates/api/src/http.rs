@@ -41,7 +41,7 @@ impl IntoResponse for ApiError {
 const MONEY_KEYS: &[&str] = &[
     "opening_balance", "p10", "p50", "p90", "amount", "median_path_deficit", "max_deficit_p90",
     "deficit_given_break_median", "amount_kop", "balance_kop", "mae_model", "mae_last_value", "mae_drift",
-    "plan_in", "plan_out", "fact_in", "fact_out", "plan", "fact", "diff",
+    "plan_in", "plan_out", "fact_in", "fact_out", "plan", "fact", "diff", "predicted", "actual",
 ];
 
 /// Суммы в JSON — десятичные строки (JS не теряет точность).
@@ -337,6 +337,41 @@ pub async fn upload_import(State(st): State<AppState>, p: Principal, Path(cid): 
     Ok((StatusCode::CREATED, Json(out)))
 }
 
+pub async fn list_imports(State(st): State<AppState>, p: Principal, Path(cid): Path<String>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let c = lock(&st);
+    let mut s = c
+        .prepare("SELECT id, filename, status, created_at, summary FROM imports WHERE company_id=? ORDER BY created_at DESC LIMIT 50")
+        .map_err(internal)?;
+    let items: Vec<Value> = s
+        .query_map([&cid], |r| {
+            let summary: Value = serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or(Value::Null);
+            Ok(json!({"import_id": r.get::<_, String>(0)?, "filename": r.get::<_, String>(1)?, "status": r.get::<_, String>(2)?,
+                "created_at": r.get::<_, String>(3)?, "rows_ok": summary["stats"]["rows_ok"], "errors_total": summary["errors_total"],
+                "date_from": summary["stats"]["date_from"], "date_to": summary["stats"]["date_to"]}))
+        })
+        .map_err(internal)?
+        .filter_map(|x| x.ok())
+        .collect();
+    Ok(Json(json!({"items": items})))
+}
+
+#[derive(Deserialize)]
+pub struct CompanyPatch {
+    name: String,
+}
+
+pub async fn update_company(State(st): State<AppState>, p: Principal, Path(cid): Path<String>, Json(b): Json<CompanyPatch>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let name = b.name.trim();
+    if name.chars().count() < 2 || name.chars().count() > 200 {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_company_name", "Название от 2 до 200 символов"));
+    }
+    lock(&st).execute("UPDATE companies SET name=? WHERE id=?", params![name, cid]).map_err(internal)?;
+    audit(&st, &p, "company.update", &cid, "ok");
+    Ok(Json(json!({"company_id": cid, "company_name": name})))
+}
+
 pub async fn get_import(State(st): State<AppState>, p: Principal, Path((cid, iid)): Path<(String, String)>) -> R<Json<Value>> {
     authorize(&p, &cid)?;
     let c = lock(&st);
@@ -398,6 +433,9 @@ pub struct TxQuery {
     offset: Option<i64>,
     category: Option<String>,
     direction: Option<String>,
+    q: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
 }
 
 pub async fn list_transactions(State(st): State<AppState>, p: Principal, Path(cid): Path<String>, Query(q): Query<TxQuery>) -> R<Json<Value>> {
@@ -406,16 +444,24 @@ pub async fn list_transactions(State(st): State<AppState>, p: Principal, Path(ci
     let offset = q.offset.unwrap_or(0).max(0);
     let cat = q.category.unwrap_or_default();
     let dir = q.direction.unwrap_or_default();
+    let search = q.q.unwrap_or_default().trim().to_lowercase();
+    let order_col = match q.sort.as_deref() {
+        Some("amount") => "ABS(amount_kop)",
+        Some("counterparty") => "counterparty COLLATE NOCASE",
+        Some("category") => "category",
+        _ => "date",
+    };
+    let dir_sql = if q.order.as_deref() == Some("asc") { "ASC" } else { "DESC" };
     let c = lock(&st);
-    let where_ = "company_id=?1 AND (?2='' OR category=?2) AND (?3='' OR (?3='in' AND amount_kop>0) OR (?3='out' AND amount_kop<0))";
-    let total: i64 = c.query_row(&format!("SELECT COUNT(*) FROM transactions WHERE {where_}"), params![cid, cat, dir], |r| r.get(0)).map_err(internal)?;
+    let where_ = "company_id=?1 AND (?2='' OR category=?2) AND (?3='' OR (?3='in' AND amount_kop>0) OR (?3='out' AND amount_kop<0)) AND (?6='' OR instr(lower(counterparty),?6)>0 OR instr(lower(purpose),?6)>0)";
+    let total: i64 = c.query_row(&format!("SELECT COUNT(*) FROM transactions WHERE {where_}"), params![cid, cat, dir, "", "", search], |r| r.get(0)).map_err(internal)?;
     let mut s = c
         .prepare(&format!(
-            "SELECT id, date, amount_kop, counterparty, purpose, category, category_conf, manual, balance_kop FROM transactions WHERE {where_} ORDER BY date DESC, id DESC LIMIT ?4 OFFSET ?5"
+            "SELECT id, date, amount_kop, counterparty, purpose, category, category_conf, manual, balance_kop FROM transactions WHERE {where_} ORDER BY {order_col} {dir_sql}, id {dir_sql} LIMIT ?4 OFFSET ?5"
         ))
         .map_err(internal)?;
     let items: Vec<Value> = s
-        .query_map(params![cid, cat, dir, limit, offset], |r| {
+        .query_map(params![cid, cat, dir, limit, offset, search], |r| {
             Ok(json!({"id": r.get::<_, i64>(0)?, "date": r.get::<_, String>(1)?, "amount_kop": r.get::<_, i64>(2)?, "counterparty": r.get::<_, String>(3)?,
                 "purpose": r.get::<_, String>(4)?, "category": r.get::<_, String>(5)?, "category_confidence": r.get::<_, f64>(6)?,
                 "manual": r.get::<_, i64>(7)? == 1, "balance_kop": r.get::<_, Option<i64>>(8)?}))
@@ -700,7 +746,7 @@ pub async fn create_scenario(State(st): State<AppState>, p: Principal, Path(cid)
     authorize(&p, &cid)?;
     let h = horizon_of(b.horizon_days)?;
     let s = &b.scenario;
-    if !(0..=90).contains(&s.delay_days) || !(0.0..=100.0).contains(&s.revenue_drop_pct) || !(0.0..=300.0).contains(&s.fixed_cost_growth_pct) || s.extra_expense_kop.map_or(false, |v| v <= 0 || v >= 1_000_000_000_000_000) {
+    if !(0..=90).contains(&s.delay_days) || !(0.0..=100.0).contains(&s.revenue_drop_pct) || !(0.0..=300.0).contains(&s.fixed_cost_growth_pct) || s.extra_expense_kop.map_or(false, |v| v <= 0 || v >= 1_000_000_000_000_000) || s.extra_income_kop.map_or(false, |v| v <= 0 || v >= 1_000_000_000_000_000) {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_scenario", "Параметры сценария вне допустимых пределов"));
     }
     if s.is_empty() {
