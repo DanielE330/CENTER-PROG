@@ -1,0 +1,28 @@
+/* Design tokens — Fintech Minimal */
+:root {
+  --c-primary: #176b45;
+  --c-primary-hover: #125a39;
+  --c-primary-soft: #e5f4ea;
+  --c-app: #f7f9f7;
+  --c-surface: #ffffff;
+  --c-line: #e2e8e3;
+  --c-ink: #202923;
+  --c-muted: #66716a;
+  --c-warning: #d97706;
+  --c-warning-soft: #fef3e2;
+  --c-danger: #dc5252;
+  --c-danger-soft: #fdecec;
+  --c-neutral-series: #9aa59e;
+
+  --radius-card: 14px;
+  --radius-control: 9px;
+  --border: 1px solid var(--c-line);
+  --shadow-card: 0 1px 2px rgba(32, 41, 35, 0.04);
+  --shadow-pop: 0 8px 24px rgba(32, 41, 35, 0.12);
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+
+  --sidebar-w: 240px;
+  --sidebar-w-collapsed: 72px;
+  --header-h: 68px;
+}

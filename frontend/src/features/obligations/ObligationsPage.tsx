@@ -1,0 +1,111 @@
+import { useMemo, useState } from 'react'
+import { ArrowDownLeft, ArrowUpRight, CalendarClock } from 'lucide-react'
+import { PageContainer, PageHeader, Card } from '../../components/shared/Page'
+import { QueryBoundary } from '../../components/shared/QueryBoundary'
+import { DataTable } from '../../components/shared/DataTable'
+import type { Column } from '../../components/shared/DataTable'
+import { EmptyState } from '../../components/shared/States'
+import { MockBadge, ObligationStatusBadge } from '../../components/shared/StatusBadge'
+import { Select } from '../../components/ui/Input'
+import { useObligations } from '../../hooks/queries'
+import { formatCurrency, formatDate } from '../../lib/formatters'
+import type { Obligation } from '../../types'
+
+const columns: Column<Obligation>[] = [
+  {
+    key: 'name',
+    header: 'Название',
+    sortValue: (o) => o.name,
+    render: (o) => (
+      <span className="inline-flex items-center gap-2 font-medium min-w-[200px]">
+        {o.kind === 'payment' ? <ArrowUpRight size={15} className="text-warning shrink-0" aria-label="Платёж" /> : <ArrowDownLeft size={15} className="text-primary shrink-0" aria-label="Поступление" />}
+        {o.name}
+      </span>
+    ),
+  },
+  { key: 'date', header: 'Плановая дата', sortValue: (o) => o.date, render: (o) => formatDate(o.date) },
+  { key: 'status', header: 'Статус', sortValue: (o) => o.status, render: (o) => <ObligationStatusBadge status={o.status} /> },
+  {
+    key: 'amount',
+    header: 'Ожидаемая сумма',
+    numeric: true,
+    sortValue: (o) => o.amount,
+    render: (o) => <span className={o.kind === 'receipt' ? 'text-primary font-semibold' : 'font-semibold'}>{o.kind === 'receipt' ? '+' : '−'}{formatCurrency(o.amount)}</span>,
+  },
+  { key: 'note', header: 'Источник / примечание', render: (o) => <span className="text-muted">{o.note ?? '—'}</span> },
+]
+
+export default function ObligationsPage() {
+  const query = useObligations()
+  const [kind, setKind] = useState('all')
+  const [status, setStatus] = useState('all')
+
+  return (
+    <PageContainer>
+      <PageHeader title="Платежи и обязательства" description="Запланированные платежи и ожидаемые поступления." actions={<MockBadge />} />
+      <QueryBoundary query={query}>
+        {(all) => <Body all={all} kind={kind} setKind={setKind} status={status} setStatus={setStatus} />}
+      </QueryBoundary>
+    </PageContainer>
+  )
+}
+
+function Body({ all, kind, setKind, status, setStatus }: { all: Obligation[]; kind: string; setKind: (v: string) => void; status: string; setStatus: (v: string) => void }) {
+  const rows = useMemo(
+    () => all.filter((o) => (kind === 'all' || o.kind === kind) && (status === 'all' || o.status === status)),
+    [all, kind, status],
+  )
+
+  if (all.length === 0) {
+    return (
+      <div className="card">
+        <EmptyState icon={<CalendarClock size={22} />} title="Нет запланированных позиций" description="Платежи и ожидаемые поступления появятся после загрузки данных." />
+      </div>
+    )
+  }
+
+  const overdue = all.filter((o) => o.status === 'overdue').length
+
+  return (
+    <>
+      {overdue > 0 && (
+        <p className="rounded-card border border-danger/40 bg-danger-soft p-3 text-sm">
+          <b className="text-danger">Просрочено позиций: {overdue}.</b> Просроченные платежи и поступления не включаются в прогноз.
+        </p>
+      )}
+      <Card>
+        <div className="grid gap-3 p-4 sm:grid-cols-[200px_200px]">
+          <Select
+            aria-label="Тип"
+            value={kind}
+            onChange={(e) => setKind(e.target.value)}
+            options={[{ value: 'all', label: 'Платежи и поступления' }, { value: 'payment', label: 'Только платежи' }, { value: 'receipt', label: 'Только поступления' }]}
+          />
+          <Select
+            aria-label="Статус"
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            options={[
+              { value: 'all', label: 'Все статусы' },
+              { value: 'planned', label: 'Запланирован' },
+              { value: 'expected', label: 'Ожидается' },
+              { value: 'completed', label: 'Выполнен' },
+              { value: 'overdue', label: 'Просрочен' },
+            ]}
+          />
+        </div>
+        {rows.length === 0 ? (
+          <EmptyState title="Ничего не найдено" description="Измените фильтры." />
+        ) : (
+          <DataTable
+            columns={columns}
+            rows={rows}
+            getRowKey={(o) => o.id}
+            defaultSort={{ key: 'date', dir: 'asc' }}
+            rowClassName={(o) => (o.status === 'overdue' ? 'bg-danger-soft' : undefined)}
+          />
+        )}
+      </Card>
+    </>
+  )
+}
