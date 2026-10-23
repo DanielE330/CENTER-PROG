@@ -19,10 +19,11 @@ ALIASES = {
     "debit": ["списание", "дебет", "расход", "debit", "сумма списания"],
     "credit": ["поступление", "кредит", "приход", "credit", "сумма поступления"],
     "direction": ["направление", "тип операции", "тип", "direction", "type"],
-    "counterparty": ["контрагент", "наименование контрагента", "наименование", "counterparty", "название контрагента"],
+    "counterparty": ["контрагент", "наименование контрагента", "наименование", "counterparty", "название контрагента", "counterparty_name"],
     "inn": ["инн", "инн контрагента", "inn", "counterparty_inn"],
-    "purpose": ["назначение платежа", "назначение", "purpose", "description", "описание"],
-    "balance": ["остаток", "остаток на конец дня", "остаток на счете", "balance", "balance_after", "остаток на счёте"],
+    "purpose": ["назначение платежа", "назначение", "purpose", "description", "описание", "payment_purpose"],
+    "source_id": ["operation_id", "id операции", "номер операции"],
+    "balance": ["остаток", "остаток на конец дня", "остаток на счете", "balance", "balance_after", "остаток на счёте", "balance_eod"],
 }
 IN_WORDS = {"in", "credit", "приход", "поступление", "кредит", "income", "+", "входящий"}
 OUT_WORDS = {"out", "debit", "расход", "списание", "дебет", "expense", "-", "исходящий"}
@@ -161,6 +162,7 @@ def parse_statement(filename: str, data: bytes) -> dict:
             if str(get("balance") or "").strip():
                 balance = parse_money(get("balance"))
             direction = "in" if signed > 0 else "out"
+            sid = str(get("source_id") or "").strip()[:100]
             purpose = str(get("purpose") or "").strip()[:1000]
             cat, conf = categorize(purpose, direction)
             txs.append(
@@ -177,6 +179,8 @@ def parse_statement(filename: str, data: bytes) -> dict:
                     "category_confidence": conf,
                 }
             )
+            if sid:
+                txs[-1]["source_id"] = sid
         except RowError as e:
             errors.append({"row": i, "code": e.code})  # само содержимое строки не возвращаем
 
@@ -185,19 +189,77 @@ def parse_statement(filename: str, data: bytes) -> dict:
 
 def _stats(txs: list[dict], errors: list[dict], has_balance: bool) -> dict:
     stats = {"rows_ok": len(txs), "rows_rejected": len(errors), "has_balance": has_balance}
-    if txs:
-        ds = sorted(t["date"] for t in txs)
-        stats["date_from"], stats["date_to"] = ds[0], ds[-1]
-        stats["days_span"] = (date.fromisoformat(ds[-1]) - date.fromisoformat(ds[0])).days + 1
-        # сверка остатков: баланс(строка) - баланс(пред. строка) == сумма(строка), если строки идут по порядку
-        mism, checked = 0, 0
-        prev = None
-        for t in sorted(txs, key=lambda t: (t["date"], t["row_no"])):
-            if t["balance_kop"] is not None and prev is not None:
-                checked += 1
-                if int(t["balance_kop"]) - prev != int(t["amount_kop"]):
-                    mism += 1
-            prev = int(t["balance_kop"]) if t["balance_kop"] is not None else prev
-        stats["balance_checked"] = checked
-        stats["balance_mismatches"] = mism
+    if not txs:
+        return stats
+    ordered = sorted(txs, key=lambda t: (t["date"], t["row_no"]))
+    ds = [t["date"] for t in ordered]
+    d0, d1 = date.fromisoformat(ds[0]), date.fromisoformat(ds[-1])
+    stats["date_from"], stats["date_to"] = ds[0], ds[-1]
+    stats["days_span"] = (d1 - d0).days + 1
+
+    # пропуски: разрыв между соседними датами операций > 5 календарных дней
+    gaps, gap_days, prev = [], 0, None
+    for dd in sorted(set(ds)):
+        cur = date.fromisoformat(dd)
+        if prev is not None and (cur - prev).days > 5:
+            gaps.append([prev.isoformat(), dd])
+            gap_days += (cur - prev).days - 1
+        prev = cur
+    stats["gap_days"] = gap_days
+    stats["missing_period_count"] = len(gaps)
+    stats["first_gap_dates"] = gaps[:5]
+
+    # вероятные точные дубли (не удаляем; импортёр дедуплицирует по номеру вхождения)
+    seen: set = set()
+    dups = 0
+    for t in ordered:
+        k = (t["date"], t["amount_kop"], t["inn"], t["purpose"], t["counterparty"])
+        if k in seen:
+            dups += 1
+        else:
+            seen.add(k)
+    stats["suspected_duplicates"] = dups
+
+    # сверка остатков
+    days: dict[str, list] = {}
+    for t in ordered:
+        if t["balance_kop"] is not None:
+            days.setdefault(t["date"], []).append(t)
+    checked = mism = 0
+    mode = None
+    opening = None
+    if days:
+        running = any(len({x["balance_kop"] for x in v}) > 1 for v in days.values())
+        mode = "running" if running else "eod"
+        if mode == "eod":
+            net: dict[str, int] = {}
+            for t in ordered:
+                net[t["date"]] = net.get(t["date"], 0) + int(t["amount_kop"])
+            pb = None
+            for dd in sorted(days):
+                b = int(days[dd][-1]["balance_kop"])
+                if pb is None:
+                    opening = b - net[dd]
+                else:
+                    checked += 1
+                    if b - pb != net[dd]:
+                        mism += 1
+                pb = b
+        else:
+            pb = None
+            for t in ordered:
+                if t["balance_kop"] is None:
+                    continue
+                b = int(t["balance_kop"])
+                if pb is None:
+                    opening = b - int(t["amount_kop"])
+                else:
+                    checked += 1
+                    if b - pb != int(t["amount_kop"]):
+                        mism += 1
+                pb = b
+    stats["balance_mode"] = mode
+    stats["balance_checked"] = checked
+    stats["balance_mismatches"] = mism
+    stats["opening_balance_kop"] = None if opening is None else str(opening)
     return stats

@@ -223,3 +223,33 @@ def test_http_corrupt_xlsx():
     r = client.post("/internal/v1/parse", files={"file": ("a.xlsx", b"notzip", "application/octet-stream")})
     assert r.status_code == 422
     assert r.json()["detail"]["code"] == "unreadable_file"
+
+
+DS_HDR = "company_id;operation_id;operation_date;amount;direction;counterparty_inn;counterparty_name;payment_purpose;balance_eod\n"
+
+
+def test_dataset_format_eod_balance_gaps_duplicates():
+    csv_ = (
+        DS_HDR
+        + "C1;C1-1;2024-10-01;100.00;Поступление;0012345678;ООО А;Оплата по УПД № 1 от 01.09.2024. Без налога (НДС);1100.00\n"
+        + "C1;C1-2;2024-10-01;40.00;Списание;0012345678;ООО А;Единый налоговый платёж;1100.00\n"
+        + "C1;C1-3;2024-10-02;10.00;Списание;;ООО Б;Комиссия за ведение счета;1080.00\n"
+        + "C1;C1-4;2024-10-02;10.00;Списание;;ООО Б;Комиссия за ведение счета;1080.00\n"
+        + "C1;C1-5;2024-10-20;5.00;Поступление;;X;;2000.00\n"
+    )
+    r = parse_statement("s.csv", ("﻿" + csv_).encode("utf-8"))
+    t, s = r["transactions"], r["stats"]
+    assert s["rows_rejected"] == 0 and t[0]["inn"] == "0012345678" and t[0]["source_id"] == "C1-1"
+    assert [x["category"] for x in t[:3]] == ["revenue", "taxes", "bank_fees"]
+    assert s["balance_mode"] == "eod" and s["opening_balance_kop"] == "104000"
+    assert s["balance_checked"] == 2 and s["balance_mismatches"] == 1  # 10-02 -> 10-20: пропуск
+    assert s["suspected_duplicates"] == 1
+    assert s["missing_period_count"] == 1 and s["gap_days"] == 17
+    assert s["first_gap_dates"] == [["2024-10-02", "2024-10-20"]]
+
+
+def test_running_balance_mode_detected():
+    r = parse_statement("s.csv", b"date;amount;balance\n2024-01-01;100;1100\n2024-01-01;-50;1050\n2024-01-02;10;1060\n")
+    s = r["stats"]
+    assert s["balance_mode"] == "running" and s["balance_checked"] == 2 and s["balance_mismatches"] == 0
+    assert s["opening_balance_kop"] == "100000"

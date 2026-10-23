@@ -227,7 +227,7 @@ pub async fn me(State(st): State<AppState>, p: Principal) -> Json<Value> {
 
 // ---------- импорт ----------
 const CATEGORIES: &[&str] = &[
-    "revenue", "other_income", "suppliers", "payroll", "rent", "taxes", "loans", "utilities", "bank_fees", "marketing", "transfers", "other_expense",
+    "revenue", "other_income", "suppliers", "payroll", "rent", "taxes", "loans", "utilities", "bank_fees", "marketing", "transfers", "refunds", "other_expense",
 ];
 
 fn dedup_keys(txs: &[Value]) -> Vec<String> {
