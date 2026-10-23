@@ -11,9 +11,13 @@ use chrono::{Datelike, Duration, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const MODEL_VERSION: &str = "baseline-recurring-bootstrap/1";
+pub const MODEL_VERSION: &str = "recurring-bootstrap/2";
 const N_PATHS: usize = 1000;
-const RESIDUAL_WINDOW_DAYS: i64 = 120;
+/// Окно остаточного потока: столько последних валидных рабочих дней (≈120 календарных).
+const RESIDUAL_BDAYS: usize = 86;
+const RESIDUAL_MAX_CAL_DAYS: i64 = 300;
+/// Пропуск выписки: календарный разрыв между соседними датами операций больше стольких дней.
+const GAP_MIN_SPAN_DAYS: i64 = 5;
 const DEFAULT_PAY_DELAY: [i64; 7] = [0, 0, 1, 2, 3, 5, 7];
 const OVERDUE_IN_DELAY: [i64; 6] = [1, 2, 3, 5, 7, 10];
 
@@ -56,6 +60,11 @@ pub struct Scenario {
     pub extra_expense_kop: Option<i64>,
     #[serde(default)]
     pub extra_expense_date: Option<NaiveDate>,
+    /// Дополнительное ожидаемое поступление (копейки, положительное число) и дата.
+    #[serde(default)]
+    pub extra_income_kop: Option<i64>,
+    #[serde(default)]
+    pub extra_income_date: Option<NaiveDate>,
 }
 
 impl Scenario {
@@ -64,6 +73,7 @@ impl Scenario {
             && self.revenue_drop_pct == 0.0
             && self.fixed_cost_growth_pct == 0.0
             && self.extra_expense_kop.is_none()
+            && self.extra_income_kop.is_none()
     }
 }
 
@@ -162,16 +172,154 @@ pub enum ForecastError {
     NoBalance,
 }
 
+/// Модель остаточного потока (то, что не вошло в регулярные платежи).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResidualMode {
+    /// Блочный bootstrap недель (выровнены по дню недели), только по рабочим дням.
+    Block,
+    /// Среднее по дню недели + bootstrap недельных сумм отклонений.
+    WeekdayMean,
+    /// То же, но уровень по дням недели масштабируется EWMA последних недель.
+    Ewma,
+}
+
+#[allow(dead_code)]
+impl ResidualMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            ResidualMode::Block => "block",
+            ResidualMode::WeekdayMean => "weekday_mean",
+            ResidualMode::Ewma => "ewma",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Params {
     pub horizon: usize,
     pub seed: u64,
     pub n_paths: usize,
+    pub residual: ResidualMode,
+    /// Доля статистического дрейфа (регулярные + остаточный поток), сохраняемая в медиане: 1 — весь,
+    /// 0 — медиана остаётся на текущем остатке (наивный прогноз), разброс траекторий сохраняется.
+    pub drift_keep: f64,
+    /// Дополнительное экспоненциальное затухание дрейфа с горизонтом (дней); <= 0 — выключено.
+    pub drift_tau: f64,
+    /// Доля «циклической» формы (провалы/всплески внутри горизонта относительно линейного тренда), 1 — вся.
+    pub shape_keep: f64,
+    /// Возврат остатка к типичному уровню: доля разрыва, закрываемая за рабочий день (0 — выключено).
+    pub revert: f64,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { horizon: 30, seed: 42, n_paths: N_PATHS }
+        Params { horizon: 30, seed: 42, n_paths: N_PATHS, residual: ResidualMode::Block, drift_keep: 0.0, drift_tau: 0.0, shape_keep: 0.5, revert: 0.015 }
     }
+}
+
+// ---------- производственный календарь РФ (приближение) ----------
+/// Рабочие субботы (переносы), встречающиеся в данных.
+const WORK_SATURDAYS: [(i32, u32, u32); 3] = [(2024, 11, 2), (2024, 12, 28), (2025, 11, 1)];
+/// Перенесённые выходные в будни (сверх фиксированных праздников).
+const EXTRA_OFF: [(i32, u32, u32); 14] = [
+    (2024, 11, 4),
+    (2024, 12, 30),
+    (2025, 5, 2),
+    (2025, 5, 8),
+    (2025, 6, 13),
+    (2025, 11, 3),
+    (2026, 1, 9),
+    (2026, 3, 9),
+    (2026, 5, 11),
+    (2026, 12, 31),
+    (2027, 5, 3),
+    (2027, 5, 10),
+    (2027, 6, 14),
+    (2027, 12, 31),
+];
+
+pub fn is_business_day(d: NaiveDate) -> bool {
+    let key = (d.year(), d.month(), d.day());
+    if WORK_SATURDAYS.contains(&key) {
+        return true;
+    }
+    if d.weekday().num_days_from_monday() >= 5 {
+        return false;
+    }
+    if EXTRA_OFF.contains(&key) {
+        return false;
+    }
+    let (m, day) = (d.month(), d.day());
+    !((m == 1 && day <= 8) || (m == 2 && day == 23) || (m == 3 && day == 8) || (m == 5 && (day == 1 || day == 9)) || (m == 6 && day == 12) || (m == 11 && day == 4) || (m == 12 && day == 31))
+}
+
+/// Ближайший рабочий день не раньше d.
+pub fn roll_forward(mut d: NaiveDate) -> NaiveDate {
+    while !is_business_day(d) {
+        d += Duration::days(1);
+    }
+    d
+}
+
+/// Сдвиг на n рабочих дней (n может быть отрицательным); d предполагается рабочим.
+fn bd_add(mut d: NaiveDate, n: i64) -> NaiveDate {
+    let (step, mut left) = if n >= 0 { (1, n) } else { (-1, -n) };
+    while left > 0 {
+        d += Duration::days(step);
+        if is_business_day(d) {
+            left -= 1;
+        }
+    }
+    d
+}
+
+/// Число рабочих дней от a до b (со знаком): рабочие дни в (a, b] при b >= a.
+fn bd_diff(a: NaiveDate, b: NaiveDate) -> i64 {
+    let (lo, hi, sign) = if b >= a { (a, b, 1) } else { (b, a, -1) };
+    let mut c = 0;
+    let mut d = lo;
+    while d < hi {
+        d += Duration::days(1);
+        if is_business_day(d) {
+            c += 1;
+        }
+    }
+    c * sign
+}
+
+/// Пропуски выписки: интервалы (первый..последний пропущенный день, включительно).
+/// Кандидат — разрыв между соседними датами операций больше GAP_MIN_SPAN_DAYS календарных дней
+/// и не меньше 3 пустых рабочих дней (длинные праздники — не пропуск). Если есть остатки и они
+/// «сходятся» (остаток дня = прошлый остаток + операции дня), это тихий период, а не пропуск.
+pub fn detect_gaps(txs: &[Tx], balances: Option<&BTreeMap<NaiveDate, i64>>) -> Vec<(NaiveDate, NaiveDate)> {
+    let mut net: BTreeMap<NaiveDate, i64> = BTreeMap::new();
+    for t in txs {
+        *net.entry(t.date).or_default() += t.amount;
+    }
+    let dates: Vec<NaiveDate> = net.keys().copied().collect();
+    let mut out = vec![];
+    for w in dates.windows(2) {
+        let (p, n) = (w[0], w[1]);
+        if (n - p).num_days() <= GAP_MIN_SPAN_DAYS {
+            continue;
+        }
+        let empty_bdays = bd_diff(p, n - Duration::days(1));
+        if empty_bdays < 3 {
+            continue;
+        }
+        if let Some(b) = balances {
+            let bp = b.range(..=p).next_back().map(|x| *x.1);
+            let bn = b.range(..=n).next_back().map(|x| *x.1);
+            if let (Some(bp), Some(bn)) = (bp, bn) {
+                if (bn - bp - net[&n]).abs() <= 100 {
+                    continue;
+                }
+            }
+        }
+        out.push((p + Duration::days(1), n - Duration::days(1)));
+    }
+    out
 }
 
 // ---------- RNG ----------
@@ -236,6 +384,21 @@ fn rule_key(t: &Tx) -> String {
     format!("{dir}:{id}")
 }
 
+/// Ключ второго уровня: контрагент + «основа» назначения платежа (первые 4 слова без цифр).
+/// Нужен, когда один контрагент (например, банк) получает разные регулярные платежи:
+/// зарплата-аванс, зарплата-расчёт, кредит, комиссия.
+fn rule_key2(t: &Tx) -> String {
+    let stem: Vec<String> = t
+        .purpose
+        .to_lowercase()
+        .split(|c: char| !c.is_alphabetic())
+        .filter(|w| w.chars().count() > 2)
+        .take(4)
+        .map(|w| w.to_string())
+        .collect();
+    format!("{}#{}", rule_key(t), stem.join(" "))
+}
+
 /// Остатки на конец дня: берётся остаток последней по порядку операции дня.
 pub fn daily_balances(txs: &[(Tx, Option<i64>)]) -> BTreeMap<NaiveDate, i64> {
     let mut m = BTreeMap::new();
@@ -259,13 +422,17 @@ pub fn detect_rules(txs: &[Tx], as_of: NaiveDate) -> Vec<Rule> {
     }
     let first_full_month = month_idx(first) + 1; // первый месяц истории может быть неполным
     let last_full_month = month_idx(as_of) - 1;
-    let first_full_week = (first + Duration::days(7)).iso_week();
-    let _ = first_full_week;
+    let mut gap_months: HashSet<i32> = HashSet::new();
+    for (gs, ge) in detect_gaps(txs, None) {
+        for mi in month_idx(gs)..=month_idx(ge) {
+            gap_months.insert(mi);
+        }
+    }
 
-    let mut rules = vec![];
-    for (key, mut g) in groups {
+    let analyze = |key: String, mut g: Vec<&Tx>| -> Option<Rule> {
+        let mut found: Option<Rule> = None;
         if g.len() < 4 {
-            continue;
+            return None;
         }
         g.sort_by_key(|t| t.date);
         let last_date = g.last().unwrap().date;
@@ -281,22 +448,33 @@ pub fn detect_rules(txs: &[Tx], as_of: NaiveDate) -> Vec<Rule> {
         let lo = by_month.keys().next().copied().unwrap().max(first_full_month);
         let hi = by_month.keys().next_back().copied().unwrap().min(last_full_month);
         let mut done = false;
-        if hi - lo + 1 >= 3 {
-            let span_months = (hi - lo + 1) as usize;
+        let eligible: Vec<i32> = (lo..=hi).filter(|mi| !gap_months.contains(mi)).collect();
+        if eligible.len() >= 3 {
+            let span_months = eligible.len();
             let mut cnt_freq: HashMap<usize, usize> = HashMap::new();
-            for mi in lo..=hi {
-                *cnt_freq.entry(by_month.get(&mi).map_or(0, |v| v.len())).or_default() += 1;
+            for mi in &eligible {
+                *cnt_freq.entry(by_month.get(mi).map_or(0, |v| v.len())).or_default() += 1;
             }
             if let Some((&m, &freq)) = cnt_freq.iter().filter(|(c, _)| **c == 1 || **c == 2).max_by_key(|(_, f)| **f) {
                 if freq as f64 / span_months as f64 >= 0.75 && freq >= 3 {
-                    let months: Vec<i32> = (lo..=hi).filter(|mi| by_month.get(mi).map_or(0, |v| v.len()) == m).collect();
+                    let months: Vec<i32> = eligible.iter().copied().filter(|mi| by_month.get(mi).map_or(0, |v| v.len()) == m).collect();
                     let mut anchors = vec![];
                     let mut amounts = vec![];
                     let mut jitters = vec![];
                     for k in 0..m {
                         let days: Vec<i64> = months.iter().map(|mi| by_month[mi][k].date.day() as i64).collect();
                         let anchor = median_i64(&days);
-                        jitters.push(days.iter().map(|d| d - anchor).collect::<Vec<_>>());
+                        // сдвиг — в рабочих днях относительно номинальной даты (перенесённой с выходного)
+                        jitters.push(
+                            months
+                                .iter()
+                                .map(|mi| {
+                                    let (y, m0) = (mi.div_euclid(12), mi.rem_euclid(12) as u32);
+                                    let nominal = roll_forward(NaiveDate::from_ymd_opt(y, m0 + 1, (anchor as u32).min(days_in_month(y, m0 + 1))).unwrap());
+                                    bd_diff(nominal, by_month[mi][k].date)
+                                })
+                                .collect::<Vec<_>>(),
+                        );
                         let mut am: Vec<i64> = months.iter().map(|mi| by_month[mi][k].amount).collect();
                         let n = am.len();
                         am = am.split_off(n.saturating_sub(6));
@@ -305,7 +483,7 @@ pub fn detect_rules(txs: &[Tx], as_of: NaiveDate) -> Vec<Rule> {
                     }
                     let all: Vec<i64> = amounts.iter().flatten().copied().collect();
                     if (as_of - last_date).num_days() <= 70 {
-                        rules.push(Rule {
+                        found = Some(Rule {
                             key: key.clone(),
                             counterparty: counterparty.clone(),
                             category: category.clone(),
@@ -325,7 +503,7 @@ pub fn detect_rules(txs: &[Tx], as_of: NaiveDate) -> Vec<Rule> {
             }
         }
         if done {
-            continue;
+            return found;
         }
 
         // ---- weekly ----
@@ -349,7 +527,7 @@ pub fn detect_rules(txs: &[Tx], as_of: NaiveDate) -> Vec<Rule> {
                 let n = am.len();
                 am = am.split_off(n.saturating_sub(6));
                 if (as_of - last_date).num_days() <= 21 {
-                    rules.push(Rule {
+                    found = Some(Rule {
                         key,
                         counterparty,
                         category,
@@ -363,6 +541,32 @@ pub fn detect_rules(txs: &[Tx], as_of: NaiveDate) -> Vec<Rule> {
                         amounts: vec![am],
                         jitters: vec![jit],
                     });
+                }
+            }
+        }
+            found
+    };
+
+    let mut rules = vec![];
+    let mut keys: Vec<String> = groups.keys().cloned().collect();
+    keys.sort();
+    for key in keys {
+        let g = groups.remove(&key).unwrap();
+        if let Some(r) = analyze(key, g.clone()) {
+            rules.push(r);
+            continue;
+        }
+        // разные регулярные платежи одному контрагенту: пробуем разделить по назначению
+        let mut sub: HashMap<String, Vec<&Tx>> = HashMap::new();
+        for t in &g {
+            sub.entry(rule_key2(t)).or_default().push(t);
+        }
+        if sub.len() > 1 {
+            let mut sk: Vec<String> = sub.keys().cloned().collect();
+            sk.sort();
+            for k2 in sk {
+                if let Some(r) = analyze(k2.clone(), sub.remove(&k2).unwrap()) {
+                    rules.push(r);
                 }
             }
         }
@@ -386,21 +590,23 @@ struct Occurrence {
 fn expand_rules(rules: &[Rule], txs: &[Tx], as_of: NaiveDate, horizon: usize) -> Vec<Occurrence> {
     let end = as_of + Duration::days(horizon as i64 + 7);
     let mut out = vec![];
+    let cur_m = month_idx(as_of);
+    let mut cur_counts: HashMap<String, usize> = HashMap::new();
+    for t in txs.iter().filter(|t| month_idx(t.date) == cur_m) {
+        *cur_counts.entry(rule_key(t)).or_default() += 1;
+        *cur_counts.entry(rule_key2(t)).or_default() += 1;
+    }
     for (ri, r) in rules.iter().enumerate() {
         match r.kind {
             "monthly" => {
                 // сколько раз платёж уже был в текущем месяце
-                let cur_m = month_idx(as_of);
-                let this_month_cnt = txs
-                    .iter()
-                    .filter(|t| rule_key(t) == r.key && month_idx(t.date) == cur_m)
-                    .count();
+                let this_month_cnt = cur_counts.get(&r.key).copied().unwrap_or(0);
                 let mut mi = cur_m;
                 while mi <= month_idx(end) {
                     let (y, m0) = (mi.div_euclid(12), mi.rem_euclid(12) as u32);
                     for (k, &a) in r.anchors.iter().enumerate() {
                         let day = a.min(days_in_month(y, m0 + 1));
-                        let d = NaiveDate::from_ymd_opt(y, m0 + 1, day).unwrap();
+                        let d = roll_forward(NaiveDate::from_ymd_opt(y, m0 + 1, day).unwrap());
                         if d > as_of && d <= end {
                             out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone() });
                         } else if mi == cur_m && d <= as_of && k >= this_month_cnt && (as_of - d).num_days() <= 20 {
@@ -465,23 +671,46 @@ pub fn forecast(
     let rules = detect_rules(txs, as_of);
     let rule_keys: HashSet<&str> = rules.iter().map(|r| r.key.as_str()).collect();
 
-    // --- остаточный поток по дням (в окне), с нулевыми днями ---
-    let win_start = (as_of - Duration::days(RESIDUAL_WINDOW_DAYS - 1)).max(first);
+    // --- пропуски выписки и остаточный поток по валидным рабочим дням ---
+    let gaps = detect_gaps(txs, Some(balances));
+    let in_gap = |d: NaiveDate| gaps.iter().any(|(s, e)| d >= *s && d <= *e);
+    // идём назад от as_of, пока не наберём RESIDUAL_BDAYS валидных рабочих дней
+    let mut win_start = as_of;
+    let mut n_valid = 0usize;
+    {
+        let mut d = as_of;
+        while d >= first && (as_of - d).num_days() < RESIDUAL_MAX_CAL_DAYS && n_valid < RESIDUAL_BDAYS {
+            win_start = d;
+            if is_business_day(d) && !in_gap(d) {
+                n_valid += 1;
+            }
+            d -= Duration::days(1);
+        }
+    }
     let n_win = ((as_of - win_start).num_days() + 1) as usize;
     let mut res_in = vec![0i64; n_win];
     let mut res_out = vec![0i64; n_win];
-    for t in txs.iter().filter(|t| t.date >= win_start && !rule_keys.contains(rule_key(t).as_str())) {
+    let valid: Vec<bool> = (0..n_win).map(|i| { let d = win_start + Duration::days(i as i64); is_business_day(d) && !in_gap(d) }).collect();
+    for t in txs.iter().filter(|t| t.date >= win_start && !(rule_keys.contains(rule_key(t).as_str()) || rule_keys.contains(rule_key2(t).as_str()))) {
         let i = (t.date - win_start).num_days() as usize;
+        if !valid[i] {
+            // операция в день, считавшийся нерабочим (неточность календаря) — всё равно учитываем в сумме, но день валидным не делаем
+            continue;
+        }
         if t.amount > 0 {
             res_in[i] += t.amount;
         } else {
             res_out[i] += t.amount;
         }
     }
+    let gap_days_total: i64 = gaps.iter().map(|(s, e)| (*e - *s).num_days() + 1).sum();
 
     // --- сценарий ---
+    // Явно названный контрагент сдвигается в любом направлении (перенос своего платежа);
+    // без названия сдвигается самый крупный клиент (только поступления).
+    let explicit_cp = scenario.delay_counterparty.as_deref().map_or(false, |c| !c.trim().is_empty());
     let delay_cp: Option<String> = if scenario.delay_days != 0 {
-        scenario.delay_counterparty.clone().or_else(|| {
+        scenario.delay_counterparty.clone().filter(|c| !c.trim().is_empty()).or_else(|| {
             rules.iter().filter(|r| r.direction == "in").max_by_key(|r| r.amount).map(|r| r.counterparty.clone())
         })
     } else {
@@ -509,6 +738,9 @@ pub fn forecast(
     if let (Some(a), Some(d)) = (scenario.extra_expense_kop, scenario.extra_expense_date) {
         occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: -a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: String::new() });
     }
+    if let (Some(a), Some(d)) = (scenario.extra_income_kop, scenario.extra_income_date) {
+        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: "\u{0}scenario-income".into() });
+    }
 
     // --- плановый календарь (детерминированный, для объяснений) ---
     let mut planned: Vec<PlannedItem> = occs
@@ -522,13 +754,13 @@ pub fn forecast(
                 }
                 None => {
                     let e = events.iter().find(|e| e.amount == o.fixed_amount && e.counterparty == o.counterparty);
-                    (o.fixed_amount, e.map_or("Внеплановый расход".to_string(), |e| e.title.clone()), e.map_or("scenario".to_string(), |e| e.source.clone()))
+                    (o.fixed_amount, e.map_or(if o.fixed_amount > 0 { "Дополнительное поступление".to_string() } else { "Внеплановый расход".to_string() }, |e| e.title.clone()), e.map_or("scenario".to_string(), |e| e.source.clone()))
                 }
             };
             let amt = scale_amount(amt, in_scale, out_scale, o.rule_ix.is_some());
-            let mut date = o.base;
-            if delay_cp.as_deref() == Some(o.counterparty.as_str()) && amt > 0 {
-                date += Duration::days(scenario.delay_days);
+            let mut date = roll_forward(o.base);
+            if delay_cp.as_deref() == Some(o.counterparty.as_str()) && (amt > 0 || explicit_cp) {
+                date = roll_forward(date + Duration::days(scenario.delay_days));
             }
             PlannedItem { date, amount: amt, title, source, overdue: o.overdue }
         })
@@ -537,38 +769,127 @@ pub fn forecast(
 
     // --- траектории ---
     let mut rng = Rng::new(p.seed);
-    let start_wd = (as_of + Duration::days(1)).weekday().num_days_from_monday() as i64;
+    let first_fc = as_of + Duration::days(1);
+    let start_wd = first_fc.weekday().num_days_from_monday() as i64;
     let win_start_wd = win_start.weekday().num_days_from_monday() as i64;
+    let wd_of = |i: usize| ((win_start_wd + i as i64).rem_euclid(7)) as usize;
     // индексы окна, с которых блок из 7 дней начинается в нужный день недели
-    let aligned: Vec<usize> = (0..n_win.saturating_sub(6))
-        .filter(|i| (win_start_wd + *i as i64).rem_euclid(7) == start_wd)
-        .collect();
-    let use_blocks = n_win >= 14 && !aligned.is_empty();
-    let mean_in = if n_win > 0 { res_in.iter().sum::<i64>() / n_win as i64 } else { 0 };
-    let mean_out = if n_win > 0 { res_out.iter().sum::<i64>() / n_win as i64 } else { 0 };
+    let aligned: Vec<usize> = (0..n_win.saturating_sub(6)).filter(|i| (win_start_wd + *i as i64).rem_euclid(7) == start_wd).collect();
+    // пулы валидных дней по дню недели (подстановка вместо праздников/пропусков в источнике)
+    let mut pools: Vec<Vec<usize>> = vec![vec![]; 7];
+    for i in 0..n_win {
+        if valid[i] {
+            pools[wd_of(i)].push(i);
+        }
+    }
+    let use_blocks = n_valid >= 14 && !aligned.is_empty();
+    let nv = n_valid.max(1) as i64;
+    let mean_in = (0..n_win).filter(|i| valid[*i]).map(|i| res_in[i]).sum::<i64>() / nv;
+    let mean_out = (0..n_win).filter(|i| valid[*i]).map(|i| res_out[i]).sum::<i64>() / nv;
+    // профиль по дням недели (для WeekdayMean/Ewma)
+    let mut prof_in = [0f64; 7];
+    let mut prof_out = [0f64; 7];
+    for wd in 0..7 {
+        if !pools[wd].is_empty() {
+            prof_in[wd] = pools[wd].iter().map(|&i| res_in[i] as f64).sum::<f64>() / pools[wd].len() as f64;
+            prof_out[wd] = pools[wd].iter().map(|&i| res_out[i] as f64).sum::<f64>() / pools[wd].len() as f64;
+        }
+    }
+    // EWMA-уровень: последние недели против среднего по окну
+    let (mut lvl_in, mut lvl_out) = (1.0f64, 1.0f64);
+    if p.residual == ResidualMode::Ewma && n_valid >= 20 {
+        let weeks = n_win / 7;
+        let (mut e_in, mut e_out, mut wsum) = (0.0, 0.0, 0.0);
+        let (mut a_in, mut a_out) = (0.0, 0.0);
+        for k in 0..weeks {
+            // k = 0 — последняя неделя
+            let hi = n_win - k * 7;
+            let lo = hi - 7;
+            let (wi, wo): (f64, f64) = (lo..hi).filter(|i| valid[*i]).fold((0.0, 0.0), |a, i| (a.0 + res_in[i] as f64, a.1 + res_out[i] as f64));
+            let w = 0.5f64.powf(k as f64 / 3.0);
+            e_in += w * wi;
+            e_out += w * wo;
+            wsum += w;
+            a_in += wi;
+            a_out += wo;
+        }
+        if wsum > 0.0 && weeks > 0 {
+            let (m_in, m_out) = (e_in / wsum, e_out / wsum);
+            let (g_in, g_out) = (a_in / weeks as f64, a_out / weeks as f64);
+            if g_in > 0.0 { lvl_in = (m_in / g_in).clamp(0.5, 2.0); }
+            if g_out < 0.0 { lvl_out = (m_out / g_out).clamp(0.5, 2.0); }
+        }
+    }
+    let lambda = |t: usize| -> f64 { p.drift_keep.clamp(0.0, 1.0) * if p.drift_tau > 0.0 { (-(t as f64 + 1.0) / p.drift_tau).exp() } else { 1.0 } };
+    let fc_bday: Vec<bool> = (0..h).map(|t| is_business_day(first_fc + Duration::days(t as i64))).collect();
+    let fc_wd: Vec<usize> = (0..h).map(|t| (start_wd as usize + t) % 7).collect();
 
     let n = p.n_paths;
     let mut by_day: Vec<Vec<i64>> = vec![Vec::with_capacity(n); h];
     let mut min_bal: Vec<i64> = Vec::with_capacity(n);
     let mut first_break: Vec<Option<usize>> = Vec::with_capacity(n);
 
+    let mut paths: Vec<i64> = Vec::with_capacity(n * h);
+    let mut stat_paths: Vec<i64> = Vec::with_capacity(n * h);
     for _ in 0..n {
         let mut flows = vec![0i64; h];
-        // остаточный поток
+        let mut stat0 = vec![0i64; h]; // статистический дрейф без сценарных масштабов
+        // остаточный поток: только в рабочие дни, выходные несут нулевой поток
         let mut d = 0;
         while d < h {
+            let blk = (h - d).min(7);
             if use_blocks {
                 let s = aligned[rng.below(aligned.len())];
-                for k in 0..7 {
-                    if d + k >= h {
-                        break;
+                match p.residual {
+                    ResidualMode::Block => {
+                        for k in 0..blk {
+                            let t = d + k;
+                            if !fc_bday[t] {
+                                continue;
+                            }
+                            let src = if valid[s + k] {
+                                s + k
+                            } else {
+                                let pool = &pools[fc_wd[t]];
+                                if pool.is_empty() { continue; }
+                                pool[rng.below(pool.len())]
+                            };
+                            let (xi, xo) = (res_in[src], res_out[src]);
+                            flows[t] += (xi as f64 * in_scale).round() as i64 + xo;
+                            stat0[t] += xi + xo;
+                        }
                     }
-                    flows[d + k] += (res_in[s + k] as f64 * in_scale).round() as i64 + res_out[s + k];
+                    ResidualMode::WeekdayMean | ResidualMode::Ewma => {
+                        // отклонение недельной суммы источника от профиля, равномерно по рабочим дням блока
+                        let (mut dev_in, mut dev_out) = (0.0, 0.0);
+                        for k in 0..7 {
+                            if valid[s + k] {
+                                dev_in += res_in[s + k] as f64 - prof_in[wd_of(s + k)];
+                                dev_out += res_out[s + k] as f64 - prof_out[wd_of(s + k)];
+                            }
+                        }
+                        let nb = (0..blk).filter(|k| fc_bday[d + k]).count().max(1) as f64;
+                        for k in 0..blk {
+                            let t = d + k;
+                            if !fc_bday[t] {
+                                continue;
+                            }
+                            let xi = prof_in[fc_wd[t]] * lvl_in + dev_in / nb;
+                            let xo = prof_out[fc_wd[t]] * lvl_out + dev_out / nb;
+                            flows[t] += (xi * in_scale).round() as i64 + xo.round() as i64;
+                            stat0[t] += (xi + xo).round() as i64;
+                        }
+                    }
                 }
                 d += 7;
             } else {
-                flows[d] += (mean_in as f64 * in_scale).round() as i64 + mean_out;
-                d += 1;
+                for k in 0..blk {
+                    if fc_bday[d + k] {
+                        flows[d + k] += (mean_in as f64 * in_scale).round() as i64 + mean_out;
+                        stat0[d + k] += mean_in + mean_out;
+                    }
+                }
+                d += 7;
             }
         }
         // события
@@ -585,25 +906,75 @@ pub fn forecast(
                 }
                 None => (o.fixed_amount, 0),
             };
+            let raw_amount = amount;
             amount = scale_amount(amount, in_scale, out_scale, o.rule_ix.is_some());
             let mut shift = jitter;
             if o.income_delay {
                 shift += if o.overdue { OVERDUE_IN_DELAY[rng.below(OVERDUE_IN_DELAY.len())] - 1 } else { DEFAULT_PAY_DELAY[rng.below(DEFAULT_PAY_DELAY.len())] };
             }
-            if amount > 0 && delay_cp.as_deref() == Some(o.counterparty.as_str()) {
-                shift += scenario.delay_days;
+            // сдвиги (джиттер, задержка оплаты) — в рабочих днях от номинальной даты, перенесённой с выходного
+            let mut date = bd_add(roll_forward(o.base), shift);
+            if (amount > 0 || explicit_cp) && delay_cp.as_deref() == Some(o.counterparty.as_str()) {
+                date = roll_forward(date + Duration::days(scenario.delay_days));
             }
-            let idx = ((o.base - as_of).num_days() - 1 + shift).max(0);
+            let idx = (date - first_fc).num_days().max(0);
             if (idx as usize) < h {
                 flows[idx as usize] += amount;
+                if o.rule_ix.is_some() {
+                    stat0[idx as usize] += raw_amount;
+                }
             }
         }
-        // баланс
-        let mut b = opening;
+        let mut st = 0i64;
+        for i in 0..h {
+            st += stat0[i];
+            paths.push(flows[i]);
+            stat_paths.push(st);
+        }
+    }
+    // сжатие статистического дрейфа к нулю: сдвигаем все траектории на (1-λ)·медиана накопленного дрейфа
+    let mut shift = vec![0i64; h];
+    if h > 0 && (p.drift_keep < 1.0 || p.drift_tau > 0.0 || p.shape_keep < 1.0) {
+        let med: Vec<f64> = (0..h)
+            .map(|t| {
+                let mut col: Vec<i64> = (0..n).map(|k| stat_paths[k * h + t]).collect();
+                col.sort_unstable();
+                col[n / 2] as f64
+            })
+            .collect();
+        let end = med[h - 1];
+        // доля пройденных рабочих дней: выходные не несут потока и не двигают тренд
+        let total_bd = fc_bday.iter().filter(|b| **b).count().max(1) as f64;
+        let mut done_bd = 0.0;
+        for t in 0..h {
+            if fc_bday[t] {
+                done_bd += 1.0;
+            }
+            let lin = end * done_bd / total_bd; // линейный дрейф
+            let shape = med[t] - lin; // форма внутри горизонта
+            shift[t] = ((1.0 - lambda(t)) * lin + (1.0 - p.shape_keep.clamp(0.0, 1.0)) * shape).round() as i64;
+        }
+    }
+    // типичный уровень остатка (медиана за последние ~120 дней) — к нему тянет возврат к среднему
+    let typical: Option<i64> = {
+        let mut v: Vec<i64> = balances.range(as_of - Duration::days(120)..=as_of).map(|(_, b)| *b).collect();
+        if v.len() >= 20 && p.revert > 0.0 {
+            v.sort_unstable();
+            Some(v[v.len() / 2])
+        } else {
+            None
+        }
+    };
+    for k in 0..n {
         let mut mn = opening;
         let mut fb = None;
-        for (i, f) in flows.iter().enumerate() {
-            b += f;
+        let mut b = opening;
+        for i in 0..h {
+            let prev_shift = if i == 0 { 0 } else { shift[i - 1] };
+            b += paths[k * h + i] - (shift[i] - prev_shift);
+            if let (Some(lv), true) = (typical, fc_bday[i]) {
+                b += (p.revert * (lv - b) as f64).round() as i64;
+            }
             by_day[i].push(b);
             if b < mn {
                 mn = b;
@@ -706,7 +1077,8 @@ pub fn forecast(
 
     // --- качество данных ---
     let mut notes = vec![];
-    let level_q = if history_days < 60 {
+    let recent_gap = gaps.iter().any(|(_, e)| (as_of - *e).num_days() <= 180);
+    let mut level_q = if history_days < 60 {
         notes.push("История короче 60 дней: регулярности не определяются, прогноз приблизительный".to_string());
         "low"
     } else if history_days < 180 {
@@ -715,6 +1087,19 @@ pub fn forecast(
     } else {
         "good"
     };
+    if !gaps.is_empty() {
+        notes.push(format!(
+            "В выписке найдено пропусков: {} (всего {} дн.); эти дни исключены из остаточного потока, остаток после пропуска «скачет»",
+            gaps.len(),
+            gap_days_total
+        ));
+        if recent_gap && level_q == "good" {
+            level_q = "medium";
+        }
+    }
+    if balances.range(..=as_of).any(|(_, b)| *b < 0) {
+        notes.push("В истории есть отрицательный остаток (овердрафт)".to_string());
+    }
     if rules.is_empty() {
         notes.push("Регулярные платежи не найдены".to_string());
     }
@@ -758,6 +1143,8 @@ pub struct HorizonMetric {
     pub mae_last_value: i64,
     pub mae_drift: i64,
     pub model_beats_baselines_share: f64,
+    /// доля фактических остатков внутри полосы [p10, p90]
+    pub band_coverage: f64,
     pub n: usize,
 }
 
@@ -769,25 +1156,48 @@ pub struct Backtest {
     pub alarm_precision: Option<f64>,
     pub alarm_recall: Option<f64>,
     pub actual_gap_windows: usize,
+    pub alarm_tp: usize,
+    pub alarm_fp: usize,
+    pub alarm_fn: usize,
+    /// (прогнозная вероятность разрыва, был ли разрыв) по каждой контрольной дате; для калибровки
+    #[serde(skip)]
+    #[allow(dead_code)]
+    pub risk_samples: Vec<(f64, bool)>,
+    /// Прогноз на 14 дней вперёд, сделанный на каждой контрольной дате, против факта на целевую дату.
+    pub series_14: Vec<SeriesPoint>,
     pub note: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct SeriesPoint {
+    pub date: NaiveDate,
+    pub predicted: i64,
+    pub actual: i64,
 }
 
 /// Rolling-origin: на каждой точке модель видит только прошлое.
 pub fn backtest(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64) -> Option<Backtest> {
+    backtest_with(txs, balances, step_days, &Params { horizon: 30, seed: 1, n_paths: 200, ..Default::default() })
+}
+
+#[allow(dead_code)]
+pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64, params: &Params) -> Option<Backtest> {
     let first = txs.iter().map(|t| t.date).min()?;
     let last = txs.iter().map(|t| t.date).max()?;
     let min_hist = 120;
     let max_h = 30;
     let mut origin = first + Duration::days(min_hist);
-    let mut errs: HashMap<usize, Vec<(i64, i64, i64)>> = HashMap::new();
+    let mut errs: HashMap<usize, Vec<(i64, i64, i64, bool)>> = HashMap::new();
     let (mut tp, mut fp, mut fn_, mut gaps, mut n_orig) = (0, 0, 0, 0, 0);
+    let mut series_14: Vec<SeriesPoint> = vec![];
+    let mut risk_samples: Vec<(f64, bool)> = vec![];
     let bal_at = |d: NaiveDate| balances.range(..=d).next_back().map(|x| *x.1);
     let hs = [7usize, 14, 30];
     while origin + Duration::days(max_h) <= last {
         let hist: Vec<Tx> = txs.iter().filter(|t| t.date <= origin).cloned().collect();
         let hb: BTreeMap<NaiveDate, i64> = balances.range(..=origin).map(|(k, v)| (*k, *v)).collect();
         // as_of = дата последней операции <= origin; приведём к origin через пустые дни
-        let fc = forecast(&hist, &hb, &[], &Scenario::default(), &Params { horizon: 30, seed: 1, n_paths: 200 });
+        let fc = forecast(&hist, &hb, &[], &Scenario::default(), &Params { horizon: 30, ..params.clone() });
         if let Ok(fc) = fc {
             n_orig += 1;
             let base = fc.opening_balance;
@@ -801,11 +1211,17 @@ pub fn backtest(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64)
                 let target = origin + Duration::days(h as i64);
                 if let Some(actual) = bal_at(target) {
                     let idx = h as i64 - gap_days - 1;
-                    let model = if idx >= 0 && (idx as usize) < fc.days.len() { fc.days[idx as usize].p50 } else { base };
-                    errs.entry(h).or_default().push(((model - actual).abs(), (base - actual).abs(), (base + drift * h as i64 - actual).abs()));
+                    let in_range = idx >= 0 && (idx as usize) < fc.days.len();
+                    let model = if in_range { fc.days[idx as usize].p50 } else { base };
+                    let covered = if in_range { let dp = &fc.days[idx as usize]; actual >= dp.p10 && actual <= dp.p90 } else { actual == base };
+                    if h == 14 {
+                        series_14.push(SeriesPoint { date: target, predicted: model, actual });
+                    }
+                    errs.entry(h).or_default().push(((model - actual).abs(), (base - actual).abs(), (base + drift * h as i64 - actual).abs(), covered));
                 }
             }
             let actual_gap = (1..=30).any(|k| bal_at(origin + Duration::days(k)).map_or(false, |b| b < 0));
+            risk_samples.push((fc.risk.shortfall_probability, actual_gap));
             let alarm = fc.risk.shortfall_probability >= 0.5;
             if actual_gap {
                 gaps += 1;
@@ -827,13 +1243,15 @@ pub fn backtest(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64)
         .filter_map(|h| {
             let v = errs.get(h)?;
             let n = v.len() as i64;
-            let beats = v.iter().filter(|(m, l, d)| m <= l && m <= d).count();
+            let beats = v.iter().filter(|(m, l, d, _)| m < l && m < d).count();
+            let cov = v.iter().filter(|x| x.3).count();
             Some(HorizonMetric {
                 horizon: *h,
                 mae_model: v.iter().map(|x| x.0).sum::<i64>() / n,
                 mae_last_value: v.iter().map(|x| x.1).sum::<i64>() / n,
                 mae_drift: v.iter().map(|x| x.2).sum::<i64>() / n,
                 model_beats_baselines_share: beats as f64 / v.len() as f64,
+                band_coverage: cov as f64 / v.len() as f64,
                 n: v.len(),
             })
         })
@@ -844,6 +1262,11 @@ pub fn backtest(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64)
         alarm_precision: if tp + fp > 0 { Some(tp as f64 / (tp + fp) as f64) } else { None },
         alarm_recall: if tp + fn_ > 0 { Some(tp as f64 / (tp + fn_) as f64) } else { None },
         actual_gap_windows: gaps,
+        alarm_tp: tp,
+        alarm_fp: fp,
+        alarm_fn: fn_,
+        risk_samples,
+        series_14,
         note: "Rolling-origin: модель обучается только на данных до точки прогноза; регулярности пересчитываются на каждом срезе. MAE в копейках.".into(),
     })
 }
@@ -900,7 +1323,7 @@ mod tests {
     #[test]
     fn forecast_is_deterministic_for_same_seed() {
         let (v, b) = sample();
-        let p = Params { horizon: 30, seed: 5, n_paths: 200 };
+        let p = Params { horizon: 30, seed: 5, n_paths: 200, ..Default::default() };
         let a = forecast(&v, &b, &[], &Scenario::default(), &p).unwrap();
         let c = forecast(&v, &b, &[], &Scenario::default(), &p).unwrap();
         assert_eq!(a.days.iter().map(|x| x.p50).collect::<Vec<_>>(), c.days.iter().map(|x| x.p50).collect::<Vec<_>>());
@@ -910,7 +1333,7 @@ mod tests {
     fn rent_is_not_double_counted() {
         // без разрыва: на 1 сентября медиана должна упасть примерно на аренду, а не на две
         let (v, b) = sample();
-        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 1, n_paths: 300 }).unwrap();
+        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 1, n_paths: 300, ..Default::default() }).unwrap();
         let before = fc.days[0].p50; // 1 сентября
         let sep1 = fc.days.iter().find(|x| x.date == d(2026, 9, 1)).unwrap().p50;
         assert!((before - sep1).abs() < 15_000_000, "rent applied once");
@@ -922,7 +1345,7 @@ mod tests {
         let (v, mut b) = sample();
         let last = *b.keys().last().unwrap();
         b.insert(last, -50_000_000);
-        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 10, seed: 1, n_paths: 100 }).unwrap();
+        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 10, seed: 1, n_paths: 100, ..Default::default() }).unwrap();
         assert!(fc.risk.shortfall_probability > 0.99);
         assert_eq!(fc.risk.level, "high");
     }
@@ -933,9 +1356,9 @@ mod tests {
         let last = *b.keys().last().unwrap();
         // остаток только чтобы пережить аренду, но не 10-е без клиента
         b.insert(last, 12_000_000);
-        let base = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 3, n_paths: 300 }).unwrap();
+        let base = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 3, n_paths: 300, ..Default::default() }).unwrap();
         let sc = Scenario { delay_days: 20, ..Default::default() };
-        let hit = forecast(&v, &b, &[], &sc, &Params { horizon: 30, seed: 3, n_paths: 300 }).unwrap();
+        let hit = forecast(&v, &b, &[], &sc, &Params { horizon: 30, seed: 3, n_paths: 300, ..Default::default() }).unwrap();
         assert!(hit.risk.shortfall_probability >= base.risk.shortfall_probability);
         assert!(hit.risk.max_deficit_p90 >= base.risk.max_deficit_p90);
     }
@@ -944,7 +1367,7 @@ mod tests {
     fn manual_event_included_once() {
         let (v, b) = sample();
         let ev = Event { id: "1".into(), date: d(2026, 9, 15), amount: -900_000_000, title: "Оборудование".into(), source: "manual".into(), confidence: 1.0, counterparty: String::new() };
-        let fc = forecast(&v, &b, &[ev], &Scenario::default(), &Params { horizon: 30, seed: 1, n_paths: 100 }).unwrap();
+        let fc = forecast(&v, &b, &[ev], &Scenario::default(), &Params { horizon: 30, seed: 1, n_paths: 100, ..Default::default() }).unwrap();
         assert_eq!(fc.planned.iter().filter(|p| p.title == "Оборудование").count(), 1);
         assert!(fc.risk.shortfall_probability > 0.9);
     }
@@ -961,7 +1384,105 @@ mod tests {
         let v: Vec<Tx> = (0..20).map(|i| tx(d(2026, 8, 1) + Duration::days(i), 100_000, "A")).collect();
         let mut b = BTreeMap::new();
         b.insert(d(2026, 8, 20), 1_000_000);
-        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 1, n_paths: 50 }).unwrap();
+        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 1, n_paths: 50, ..Default::default() }).unwrap();
         assert_eq!(fc.quality.level, "low");
+    }
+
+    #[test]
+    fn calendar_rolls_weekends_and_holidays() {
+        assert!(!is_business_day(d(2026, 1, 3)));
+        assert_eq!(roll_forward(d(2026, 1, 3)), d(2026, 1, 12)); // новогодние каникулы + 9 января
+        assert!(is_business_day(d(2025, 11, 1))); // рабочая суббота
+        assert!(!is_business_day(d(2025, 11, 3)));
+        assert_eq!(roll_forward(d(2026, 11, 28)), d(2026, 11, 30));
+        assert_eq!(bd_add(d(2026, 11, 27), 1), d(2026, 11, 30));
+        assert_eq!(bd_diff(d(2026, 11, 27), d(2026, 11, 30)), 1);
+    }
+
+    #[test]
+    fn payment_anchored_to_weekend_moves_to_next_business_day() {
+        // налог 28-го (переносится на рабочий день), история до 30.10.2026; 28.11.2026 — суббота
+        let mut v = vec![];
+        let mut b = BTreeMap::new();
+        let mut bal = 50_000_000i64;
+        let mut day = d(2026, 1, 1);
+        while day <= d(2026, 10, 30) {
+            let mut today = 0;
+            if is_business_day(day) {
+                today += 1_000_000;
+                v.push(tx(day, 1_000_000, "Розница"));
+            }
+            if roll_forward(d(day.year(), day.month(), 28)) == day {
+                v.push(tx(day, -5_000_000, "Казначейство"));
+                today -= 5_000_000;
+            }
+            bal += today;
+            if today != 0 {
+                b.insert(day, bal);
+            }
+            day += Duration::days(1);
+        }
+        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 40, n_paths: 100, ..Default::default() }).unwrap();
+        assert!(fc.planned.iter().all(|p| is_business_day(p.date)), "planned items fall on business days");
+        let tax = fc.planned.iter().find(|p| p.title == "Казначейство" && p.date.month() == 11).expect("November tax planned");
+        assert_eq!(tax.date, d(2026, 11, 30));
+        // выходные не несут потока: медиана не меняется в субботу/воскресенье
+        let sat = fc.days.iter().find(|x| x.date == d(2026, 11, 14)).unwrap().p50;
+        let sun = fc.days.iter().find(|x| x.date == d(2026, 11, 15)).unwrap().p50;
+        assert_eq!(sat, sun);
+    }
+
+    #[test]
+    fn gap_with_balance_jump_is_detected_but_holidays_and_quiet_periods_are_not() {
+        let mut v = vec![];
+        let mut b = BTreeMap::new();
+        let mut bal = 1_000_000i64;
+        let mut day = d(2025, 10, 1);
+        while day <= d(2026, 3, 31) {
+            let hole = day >= d(2026, 2, 2) && day <= d(2026, 2, 27); // пропущено 4 недели
+            if is_business_day(day) {
+                if hole {
+                    bal += 700_000; // операции были, но в выписке их нет
+                } else {
+                    v.push(tx(day, 10_000, "A"));
+                    bal += 10_000;
+                    b.insert(day, bal);
+                }
+            }
+            day += Duration::days(1);
+        }
+        let gaps = detect_gaps(&v, Some(&b));
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert!(gaps[0].0 >= d(2026, 1, 31) && gaps[0].1 <= d(2026, 3, 1));
+        // без остатков — только по разрыву в датах (праздники 30.12–09.01 не считаются)
+        let by_dates = detect_gaps(&v, None);
+        assert_eq!(by_dates.len(), 1);
+        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 14, n_paths: 100, ..Default::default() }).unwrap();
+        assert!(fc.quality.notes.iter().any(|n| n.contains("пропуск")), "{:?}", fc.quality.notes);
+    }
+
+    #[test]
+    fn quiet_period_with_consistent_balance_is_not_a_gap() {
+        let mut v = vec![tx(d(2026, 3, 2), 100, "A")];
+        let mut b = BTreeMap::new();
+        b.insert(d(2026, 3, 2), 1_000_100);
+        v.push(tx(d(2026, 3, 23), -50, "A"));
+        b.insert(d(2026, 3, 23), 1_000_050); // баланс сходится: просто тихие три недели
+        assert!(detect_gaps(&v, Some(&b)).is_empty());
+        assert_eq!(detect_gaps(&v, None).len(), 1);
+    }
+
+    #[test]
+    fn very_short_history_and_overdraft_do_not_panic() {
+        let v = vec![tx(d(2026, 9, 28), 500_000, "A"), tx(d(2026, 9, 29), -900_000, "B"), tx(d(2026, 9, 30), 100_000, "A")];
+        let mut b = BTreeMap::new();
+        b.insert(d(2026, 9, 30), -300_000);
+        for h in [1usize, 7, 30] {
+            let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: h, n_paths: 50, ..Default::default() }).unwrap();
+            assert_eq!(fc.quality.level, "low");
+            assert_eq!(fc.days.len(), h);
+            assert!(fc.risk.shortfall_probability > 0.5, "overdraft opening means high risk");
+            assert!(fc.quality.notes.iter().any(|n| n.contains("овердрафт")));
+        }
     }
 }
