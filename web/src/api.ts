@@ -49,5 +49,5 @@ export const dateRu = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateS
 export const CATEGORY_RU: Record<string, string> = {
   revenue: "Выручка", other_income: "Прочие поступления", suppliers: "Поставщики", payroll: "Зарплата", rent: "Аренда",
   taxes: "Налоги и взносы", loans: "Кредиты и займы", utilities: "Коммунальные и связь", bank_fees: "Банковские комиссии",
-  marketing: "Маркетинг", transfers: "Внутренние переводы", other_expense: "Прочие расходы",
+  marketing: "Маркетинг", transfers: "Внутренние переводы", refunds: "Возвраты", other_expense: "Прочие расходы",
 };

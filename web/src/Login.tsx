@@ -1,17 +1,7 @@
 import { useState } from "react";
 import { api } from "./api";
-
-type Me = { email: string; company_id: string; company_name: string };
-
-function PasswordField({ label, value, onChange, autoComplete, show, minLength }: {
-  label: string; value: string; onChange: (v: string) => void; autoComplete: string; show: boolean; minLength?: number;
-}) {
-  return (
-    <label>{label}
-      <input type={show ? "text" : "password"} value={value} onChange={(e) => onChange(e.target.value)} required minLength={minLength} autoComplete={autoComplete} />
-    </label>
-  );
-}
+import type { Me } from "./ctx";
+import { Field } from "./ui";
 
 export default function Login({ onDone }: { onDone: (m: Me) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -24,6 +14,7 @@ export default function Login({ onDone }: { onDone: (m: Me) => void }) {
   const [busy, setBusy] = useState(false);
   const reg = mode === "register";
   const mismatch = reg && confirm !== "" && confirm !== password;
+  const type = show ? "text" : "password";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -42,20 +33,23 @@ export default function Login({ onDone }: { onDone: (m: Me) => void }) {
   return (
     <div className="center">
       <form className="card login" onSubmit={submit}>
-        <h1>Кассовый прогноз</h1>
-        <p className="muted">Узнайте о кассовом разрыве заранее, а не в день платежа.</p>
+        <div className="brand"><span className="logo-mark">ЦИ</span>Кассовый прогноз</div>
+        <div>
+          <h1>{reg ? "Регистрация" : "Вход"}</h1>
+          <p className="muted">Узнайте о кассовом разрыве заранее, а не в день платежа.</p>
+        </div>
         {reg && (
-          <label>Название юридического лица
+          <Field label="Название юридического лица">
             <input value={company} onChange={(e) => setCompany(e.target.value)} required minLength={2} maxLength={200} placeholder="ООО «Ромашка»" autoComplete="organization" />
-          </label>
+          </Field>
         )}
-        <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" /></label>
-        <PasswordField label="Пароль" value={password} onChange={setPassword} show={show} minLength={8} autoComplete={reg ? "new-password" : "current-password"} />
-        {reg && <PasswordField label="Повторите пароль" value={confirm} onChange={setConfirm} show={show} minLength={8} autoComplete="new-password" />}
+        <Field label="Email"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" /></Field>
+        <Field label="Пароль"><input type={type} value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} autoComplete={reg ? "new-password" : "current-password"} /></Field>
+        {reg && <Field label="Повторите пароль"><input type={type} value={confirm} onChange={(e) => setConfirm(e.target.value)} required minLength={8} autoComplete="new-password" /></Field>}
         {mismatch && <div className="small neg" role="alert">Пароли не совпадают</div>}
         <label className="check"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Показать пароль</label>
-        {error && <div className="alert high" role="alert">{error}</div>}
-        <button disabled={busy || mismatch}>{reg ? "Зарегистрироваться" : "Войти"}</button>
+        {error && <div className="alert" role="alert">{error}</div>}
+        <button className="btn" disabled={busy || mismatch}>{reg ? "Зарегистрироваться" : "Войти"}</button>
         <button type="button" className="link" onClick={() => { setMode(reg ? "login" : "register"); setError(""); setConfirm(""); }}>
           {reg ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Регистрация"}
         </button>

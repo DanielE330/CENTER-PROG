@@ -1,0 +1,11 @@
+.hero-text { font-size: 15px; line-height: 1.55; max-width: 720px; }
+.hero-text b { font-weight: 600; }
+.plist { display: flex; flex-direction: column; }
+.plist-row { display: grid; grid-template-columns: 56px 1fr auto; gap: 10px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.plist-row:last-child { border-bottom: 0; }
+.plist-date { color: var(--muted); font-size: 13px; padding-top: 2px; }
+.plist-title { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.warn-item { padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.warn-item:last-child { border-bottom: 0; }
+.warn-item ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+.fresh { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
