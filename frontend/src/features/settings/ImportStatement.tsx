@@ -56,7 +56,7 @@ export function ImportStatement() {
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
-        className="flex flex-col items-center gap-2 rounded-card border border-dashed border-line px-4 py-6 text-center hover:bg-app cursor-pointer"
+        className="flex flex-col items-center gap-2 rounded-card border border-dashed border-line px-4 py-6 text-center hover:bg-hover cursor-pointer"
       >
         <FileUp size={22} className="text-primary" />
         <span className="text-sm font-medium">{file ? 'Выбрать другой файл' : 'Выберите файл выписки'}</span>

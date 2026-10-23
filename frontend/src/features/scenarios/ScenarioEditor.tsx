@@ -76,7 +76,7 @@ export function ScenarioEditor({ scenario, items, today, onOverride, onAddExtra,
                     </td>
                     <td>
                       {changed && !locked && (
-                        <button onClick={() => onOverride(o.id, null)} aria-label="Сбросить" title="Сбросить" className="p-1.5 rounded-md text-muted hover:bg-app cursor-pointer">
+                        <button onClick={() => onOverride(o.id, null)} aria-label="Сбросить" title="Сбросить" className="p-1.5 rounded-md text-muted hover:bg-hover cursor-pointer">
                           <RotateCcw size={15} />
                         </button>
                       )}
@@ -122,7 +122,7 @@ export function ScenarioEditor({ scenario, items, today, onOverride, onAddExtra,
                   <b>{x.name}</b> <span className="text-muted">· {x.kind === 'receipt' ? 'поступление' : 'платёж'} · {formatDate(x.date, 'd MMM')}</span>
                 </span>
                 <span className="tnum font-semibold">{formatCurrency(x.amount)}</span>
-                <button onClick={() => onRemoveExtra(x.id)} aria-label="Удалить" className="p-1.5 rounded-md text-muted hover:bg-app cursor-pointer">
+                <button onClick={() => onRemoveExtra(x.id)} aria-label="Удалить" className="p-1.5 rounded-md text-muted hover:bg-hover cursor-pointer">
                   <Trash2 size={15} />
                 </button>
               </li>

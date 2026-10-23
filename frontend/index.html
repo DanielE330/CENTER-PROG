@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Apply the saved theme before first paint to avoid a flash.
+      try { if (localStorage.getItem('ci.theme') === 'dark') document.documentElement.dataset.theme = 'dark' } catch (e) {}
+    </script>
     <title>Центр-инвест — Управление ликвидностью</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

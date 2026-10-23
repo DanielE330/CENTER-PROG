@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bell, Building2, ChevronDown, Menu } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { ThemeToggle } from './ThemeToggle'
 import { useForecast } from '../../hooks/queries'
 import { formatShortDate } from '../../lib/formatters'
 
@@ -19,7 +20,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
 
   return (
     <header className="h-[var(--header-h)] shrink-0 bg-surface border-b border-line flex items-center gap-3 px-4 sm:px-6 lg:px-8">
-      <button onClick={onMenu} aria-label="Открыть меню" className="md:hidden p-2 -ml-2 rounded-md hover:bg-app cursor-pointer">
+      <button onClick={onMenu} aria-label="Открыть меню" className="md:hidden p-2 -ml-2 rounded-md hover:bg-hover cursor-pointer">
         <Menu size={20} />
       </button>
 
@@ -32,12 +33,13 @@ export function Header({ onMenu }: { onMenu: () => void }) {
       </div>
 
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
+        <ThemeToggle />
         <div className="relative" ref={ref}>
           <button
             onClick={() => setOpen((v) => !v)}
             aria-label="Уведомления"
             aria-expanded={open}
-            className="relative grid place-items-center size-10 rounded-control hover:bg-app text-muted cursor-pointer"
+            className="relative grid place-items-center size-10 rounded-control hover:bg-hover text-muted cursor-pointer"
           >
             <Bell size={19} />
             {risk?.shortageDate && <span className="absolute top-2 right-2.5 size-2 rounded-full bg-danger" />}
@@ -46,7 +48,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
             <div className="card absolute right-0 top-12 w-80 max-w-[calc(100vw-2rem)] p-3 z-40" style={{ boxShadow: 'var(--shadow-pop)' }}>
               <p className="text-sm font-semibold px-2 pb-2">Уведомления</p>
               {risk?.shortageDate ? (
-                <Link to="/forecast" onClick={() => setOpen(false)} className="block rounded-control p-2 hover:bg-app">
+                <Link to="/forecast" onClick={() => setOpen(false)} className="block rounded-control p-2 hover:bg-hover">
                   <p className="text-sm font-medium text-danger">Возможна нехватка средств</p>
                   <p className="text-xs text-muted mt-0.5">Ожидаемая дата — {formatShortDate(risk.shortageDate)}. Откройте прогноз.</p>
                 </Link>

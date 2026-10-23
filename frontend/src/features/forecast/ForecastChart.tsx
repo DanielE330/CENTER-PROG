@@ -4,6 +4,7 @@ import type { EChartsOption } from 'echarts'
 import type { ForecastPoint } from '../../types'
 import { formatCompact, formatCurrency, formatDate, formatShortDate } from '../../lib/formatters'
 import { cssVar } from '../../lib/utils'
+import { useTheme } from '../../lib/theme'
 
 export interface CompareSeries {
   name: string
@@ -22,6 +23,7 @@ interface Props {
 }
 
 export function ForecastChart({ points, today, shortageDate, compare, forecastName = 'Прогноз', height = 380 }: Props) {
+  const theme = useTheme()
   const option = useMemo<EChartsOption>(() => {
     const primary = cssVar('--c-primary', '#176B45')
     const danger = cssVar('--c-danger', '#DC5252')
@@ -30,6 +32,8 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
     const neutral = cssVar('--c-neutral-series', '#9AA59E')
     const line = cssVar('--c-line', '#E2E8E3')
     const ink = cssVar('--c-ink', '#202923')
+    const surface = cssVar('--c-surface', '#FFFFFF')
+    const onDanger = cssVar('--c-on-primary', '#FFFFFF')
 
     const dates = points.map((p) => p.date)
     const compareByDate = new Map(compare?.points.map((c) => [c.date, c.balance]))
@@ -110,7 +114,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
         ? {
             symbolSize: 46,
             itemStyle: { color: danger },
-            label: { formatter: '!', color: '#fff', fontWeight: 700, fontSize: 16 },
+            label: { formatter: '!', color: onDanger, fontWeight: 700, fontSize: 16 },
             data: [{ name: 'Дата нехватки', coord: [shortagePoint.date, shortagePoint.forecast] }],
           }
         : undefined,
@@ -160,10 +164,10 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
       tooltip: {
         trigger: 'axis',
         confine: true,
-        backgroundColor: '#fff',
+        backgroundColor: surface,
         borderColor: line,
         textStyle: { color: ink, fontSize: 12 },
-        extraCssText: 'box-shadow:0 8px 24px rgba(32,41,35,.12);',
+        extraCssText: 'box-shadow:0 8px 24px rgba(0,0,0,.18);',
         axisPointer: { type: 'line', lineStyle: { color: neutral } },
         formatter: (params: unknown) => {
           const idx = (params as Array<{ dataIndex: number }>)[0]?.dataIndex ?? 0
@@ -187,7 +191,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
       },
       series,
     }
-  }, [points, today, shortageDate, compare, forecastName])
+  }, [points, today, shortageDate, compare, forecastName, theme])
 
   return (
     <div role="img" aria-label="График прогноза остатка денежных средств" style={{ width: '100%', height }}>

@@ -57,10 +57,10 @@ export default function AssistantPage() {
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 flex flex-col gap-4" aria-live="polite">
           {messages.map((m) => (
             <div key={m.id} className={cn('flex gap-3 max-w-3xl', m.role === 'user' && 'self-end flex-row-reverse')}>
-              <span className={cn('grid place-items-center size-8 rounded-full shrink-0', m.role === 'user' ? 'bg-ink text-white' : 'bg-primary-soft text-primary')}>
+              <span className={cn('grid place-items-center size-8 rounded-full shrink-0', m.role === 'user' ? 'bg-ink text-surface' : 'bg-primary-soft text-primary')}>
                 {m.role === 'user' ? <User size={16} /> : <Bot size={16} />}
               </span>
-              <div className={cn('rounded-card px-4 py-2.5 text-[15px]', m.role === 'user' ? 'bg-primary text-white' : 'bg-app border border-line')}>
+              <div className={cn('rounded-card px-4 py-2.5 text-[15px]', m.role === 'user' ? 'bg-primary text-on-primary' : 'bg-app border border-line')}>
                 <p>{m.text}</p>
                 {m.basedOn && (
                   <p className="text-xs text-muted mt-1.5">Источник: {m.basedOn.join(', ')} (демо-данные)</p>

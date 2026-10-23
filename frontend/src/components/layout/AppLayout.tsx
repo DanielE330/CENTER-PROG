@@ -26,7 +26,7 @@ export function AppLayout() {
       {mobile && drawer && (
         <div className="fixed inset-0 z-50 flex">
           <Sidebar collapsed={false} mobile onToggle={() => {}} onNavigate={() => setDrawer(false)} />
-          <div className="flex-1 bg-ink/40" onClick={() => setDrawer(false)} />
+          <div className="flex-1 bg-overlay" onClick={() => setDrawer(false)} />
         </div>
       )}
 

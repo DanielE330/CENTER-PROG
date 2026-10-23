@@ -20,7 +20,7 @@ export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
       aria-label="Основная навигация"
     >
       <div className={cn('flex items-center gap-2.5 h-[var(--header-h)] border-b border-line shrink-0', compact ? 'justify-center' : 'px-5')}>
-        <span className="grid place-items-center size-9 rounded-[10px] bg-primary text-white shrink-0">
+        <span className="grid place-items-center size-9 rounded-[10px] bg-primary text-on-primary shrink-0">
           <Landmark size={18} />
         </span>
         {!compact && (
@@ -30,7 +30,7 @@ export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
           </div>
         )}
         {mobile && (
-          <button onClick={onNavigate} aria-label="Закрыть меню" className="p-1.5 rounded-md text-muted hover:bg-app cursor-pointer">
+          <button onClick={onNavigate} aria-label="Закрыть меню" className="p-1.5 rounded-md text-muted hover:bg-hover cursor-pointer">
             <X size={18} />
           </button>
         )}
@@ -48,7 +48,7 @@ export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
               cn(
                 'flex items-center gap-3 h-10 rounded-control text-sm font-medium transition-colors',
                 compact ? 'justify-center' : 'px-3',
-                isActive ? 'bg-primary-soft text-primary' : 'text-ink hover:bg-app',
+                isActive ? 'bg-primary-soft text-primary' : 'text-ink hover:bg-hover',
               )
             }
           >
@@ -67,7 +67,7 @@ export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
           <button
             onClick={onToggle}
             aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
-            className={cn('flex items-center gap-3 h-10 w-full rounded-control text-sm text-muted hover:bg-app cursor-pointer', compact ? 'justify-center' : 'px-3')}
+            className={cn('flex items-center gap-3 h-10 w-full rounded-control text-sm text-muted hover:bg-hover cursor-pointer', compact ? 'justify-center' : 'px-3')}
           >
             {collapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
             {!compact && <span>Свернуть</span>}

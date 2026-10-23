@@ -127,7 +127,7 @@ function Workspace({ f, obligations }: { f: ForecastResponse; obligations: Oblig
             onClick={() => setActiveId(s.id)}
             className={cn(
               'h-9 px-3.5 rounded-full border text-sm font-medium cursor-pointer',
-              s.id === activeId ? 'bg-primary-soft border-primary text-primary' : 'bg-surface border-line hover:bg-app',
+              s.id === activeId ? 'bg-primary-soft border-primary text-primary' : 'bg-surface border-line hover:bg-hover',
             )}
           >
             {s.name}
