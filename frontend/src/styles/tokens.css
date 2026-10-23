@@ -26,3 +26,23 @@
   --sidebar-w-collapsed: 72px;
   --header-h: 68px;
 }
+
+/* Scrollbars */
+:root {
+  --scrollbar-size: 8px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #c3cdc6;
+  --scrollbar-thumb-hover: #8fa196;
+  --scrollbar-radius: 999px;
+}
+
+/* Select / dropdown menus */
+:root {
+  --menu-bg: var(--c-surface);
+  --menu-border: var(--c-line);
+  --menu-radius: 10px;
+  --menu-shadow: var(--shadow-pop);
+  --menu-item-hover: var(--c-app);
+  --menu-item-selected: var(--c-primary-soft);
+  --z-menu: 70;
+}

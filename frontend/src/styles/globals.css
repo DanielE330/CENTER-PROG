@@ -85,3 +85,57 @@ h1, h2, h3, p { margin: 0; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes pulse-soft { 50% { opacity: 0.5; } }
 .skeleton { background: var(--c-line); border-radius: 8px; animation: pulse-soft 1.4s ease-in-out infinite; }
+
+/* ---------- Scrollbars (site-wide) ---------- */
+/* Chromium / Safari: sized, rounded thumb. Never hidden, so scrollable areas stay discoverable. */
+*::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+*::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: var(--scrollbar-radius);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* Firefox: standard properties (applied only there, since Chromium would then ignore the rules above). */
+@supports (-moz-appearance: none) {
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
+}
+
+/* ---------- Select / dropdown ---------- */
+.select-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  height: 38px; width: 100%; padding: 0 10px 0 12px; text-align: left;
+  background: var(--c-surface); border: var(--border); border-radius: var(--radius-control);
+  color: var(--c-ink); font: inherit; cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.select-trigger:hover:not(:disabled) { background: var(--c-app); }
+.select-trigger[aria-expanded='true'] { border-color: var(--c-primary); }
+.select-trigger:focus-visible { outline: 2px solid var(--c-primary); outline-offset: -1px; border-color: var(--c-primary); }
+.select-trigger:disabled { background: var(--c-app); color: var(--c-muted); cursor: not-allowed; opacity: 0.8; }
+.select-chevron { transition: transform 0.15s ease; }
+.select-chevron-open { transform: rotate(180deg); }
+
+.select-menu {
+  position: fixed; z-index: var(--z-menu); margin: 0; padding: 4px; list-style: none;
+  overflow-y: auto; overscroll-behavior: contain;
+  background: var(--menu-bg); border: 1px solid var(--menu-border); border-radius: var(--menu-radius);
+  box-shadow: var(--menu-shadow); outline: none;
+}
+.select-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 34px; padding: 6px 10px; border-radius: 7px; cursor: pointer;
+  color: var(--c-ink); font-size: 14px;
+}
+.select-option[data-active] { background: var(--menu-item-hover); }
+.select-option[data-selected] { background: var(--menu-item-selected); color: var(--c-primary); font-weight: 500; }
+.select-option[data-selected][data-active] { background: var(--menu-item-selected); outline: 1px solid var(--c-primary); outline-offset: -1px; }
+.select-option[aria-disabled='true'] { color: var(--c-muted); opacity: 0.55; cursor: not-allowed; }
+.select-empty { padding: 10px; color: var(--c-muted); font-size: 13px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .select-chevron, .select-trigger { transition: none; }
+}

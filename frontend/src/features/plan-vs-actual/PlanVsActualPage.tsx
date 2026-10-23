@@ -8,7 +8,7 @@ import { DataTable } from '../../components/shared/DataTable'
 import type { Column } from '../../components/shared/DataTable'
 import { EmptyState } from '../../components/shared/States'
 import { Badge, MockBadge } from '../../components/shared/StatusBadge'
-import { Select } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { usePlanActual } from '../../hooks/queries'
 import { formatCompact, formatCurrency, formatDate, formatShortDate, formatSignedCurrency } from '../../lib/formatters'
 import { cssVar } from '../../lib/utils'
@@ -50,7 +50,7 @@ export default function PlanVsActualPage() {
           <>
             <MockBadge />
             <div className="w-full sm:w-36">
-              <Select aria-label="Период" value={days} onChange={(e) => setDays(Number(e.target.value))} options={periods} />
+              <Select aria-label="Период" value={days} onChange={(v) => setDays(Number(v))} options={periods} />
             </div>
           </>
         }

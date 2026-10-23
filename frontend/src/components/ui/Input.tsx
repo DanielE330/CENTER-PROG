@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import type { InputHTMLAttributes, ReactNode } from 'react'
 import { cn } from '../../lib/utils'
 
 function Field({ id, label, hint, children }: { id: string; label?: string; hint?: ReactNode; children: ReactNode }) {
@@ -30,23 +30,3 @@ export function Input({ label, hint, className, ...rest }: InputProps) {
   )
 }
 
-interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
-  label?: string
-  hint?: ReactNode
-  options: Array<{ value: string | number; label: string }>
-}
-
-export function Select({ label, hint, options, className, ...rest }: SelectProps) {
-  const id = useId()
-  return (
-    <Field id={id} label={label} hint={hint}>
-      <select id={id} className={cn('control cursor-pointer', className)} {...rest}>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </Field>
-  )
-}

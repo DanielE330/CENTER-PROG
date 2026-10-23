@@ -6,7 +6,7 @@ import { DataTable } from '../../components/shared/DataTable'
 import type { Column } from '../../components/shared/DataTable'
 import { EmptyState } from '../../components/shared/States'
 import { MockBadge, ObligationStatusBadge } from '../../components/shared/StatusBadge'
-import { Select } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { useObligations } from '../../hooks/queries'
 import { formatCurrency, formatDate } from '../../lib/formatters'
 import type { Obligation } from '../../types'
@@ -78,13 +78,13 @@ function Body({ all, kind, setKind, status, setStatus }: { all: Obligation[]; ki
           <Select
             aria-label="Тип"
             value={kind}
-            onChange={(e) => setKind(e.target.value)}
+            onChange={(v) => setKind(v)}
             options={[{ value: 'all', label: 'Платежи и поступления' }, { value: 'payment', label: 'Только платежи' }, { value: 'receipt', label: 'Только поступления' }]}
           />
           <Select
             aria-label="Статус"
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(v) => setStatus(v)}
             options={[
               { value: 'all', label: 'Все статусы' },
               { value: 'planned', label: 'Запланирован' },

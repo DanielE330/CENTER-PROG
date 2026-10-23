@@ -6,7 +6,8 @@ import { DataTable } from '../../components/shared/DataTable'
 import type { Column } from '../../components/shared/DataTable'
 import { EmptyState } from '../../components/shared/States'
 import { MockBadge, TransactionStatusBadge } from '../../components/shared/StatusBadge'
-import { Input, Select } from '../../components/ui/Input'
+import { Input } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { useTransactions } from '../../hooks/queries'
 import { formatCurrency, formatDate } from '../../lib/formatters'
 import type { Transaction } from '../../types'
@@ -105,13 +106,13 @@ function TransactionsBody({ all, dir, setDir, category, setCategory, search, set
         <Select
           aria-label="Направление"
           value={dir}
-          onChange={(e) => setDir(e.target.value)}
+          onChange={(v) => setDir(v)}
           options={[{ value: 'all', label: 'Все направления' }, { value: 'in', label: 'Входящие' }, { value: 'out', label: 'Исходящие' }]}
         />
         <Select
           aria-label="Категория"
           value={category}
-          onChange={(e) => setCategory(e.target.value)}
+          onChange={(v) => setCategory(v)}
           options={[{ value: 'all', label: 'Все категории' }, ...categories.map((c) => ({ value: c, label: c }))]}
         />
       </div>

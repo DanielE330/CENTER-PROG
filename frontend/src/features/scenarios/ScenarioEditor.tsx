@@ -4,7 +4,8 @@ import { Plus, RotateCcw, Trash2 } from 'lucide-react'
 import type { Obligation } from '../../types'
 import type { ExtraItem, Override, Scenario } from './simulate'
 import { Button } from '../../components/ui/Button'
-import { Input, Select } from '../../components/ui/Input'
+import { Input } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { Card } from '../../components/shared/Page'
 import { formatCurrency, formatDate } from '../../lib/formatters'
 
@@ -102,7 +103,7 @@ export function ScenarioEditor({ scenario, items, today, onOverride, onAddExtra,
             label="Тип"
             disabled={locked}
             value={extra.kind}
-            onChange={(e) => setExtra({ ...extra, kind: e.target.value as ExtraItem['kind'] })}
+            onChange={(v) => setExtra({ ...extra, kind: v as ExtraItem['kind'] })}
             options={[{ value: 'receipt', label: 'Поступление' }, { value: 'payment', label: 'Платёж' }]}
           />
           <Input label="Название" disabled={locked} value={extra.name} onChange={(e) => setExtra({ ...extra, name: e.target.value })} placeholder="Например, предоплата клиента" />

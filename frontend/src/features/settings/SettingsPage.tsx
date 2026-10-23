@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Check } from 'lucide-react'
 import { PageContainer, PageHeader, Card } from '../../components/shared/Page'
 import { Button } from '../../components/ui/Button'
-import { Input, Select } from '../../components/ui/Input'
+import { Input } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { setDemoState, useDemoState } from '../../lib/demoState'
 import type { DemoState } from '../../types'
 import { ImportStatement } from './ImportStatement'
@@ -55,11 +56,11 @@ export default function SettingsPage() {
           <Card title="Организация и приложение" subtitle="Сохраняется только в этом браузере.">
             <div className="px-5 pb-5 flex flex-col gap-4">
               <Input label="Название организации" value={prefs.org} onChange={(e) => setPrefs({ ...prefs, org: e.target.value })} />
-              <Select label="Валюта" disabled hint="В прототипе поддерживаются только рубли." value="RUB" options={[{ value: 'RUB', label: 'Российский рубль (RUB)' }]} />
+              <Select label="Валюта" disabled onChange={() => {}} hint="В прототипе поддерживаются только рубли." value="RUB" options={[{ value: 'RUB', label: 'Российский рубль (RUB)' }]} />
               <Select
                 label="Горизонт прогноза по умолчанию"
                 value={prefs.horizon}
-                onChange={(e) => setPrefs({ ...prefs, horizon: e.target.value })}
+                onChange={(v) => setPrefs({ ...prefs, horizon: v })}
                 options={[{ value: '14', label: '14 дней' }, { value: '30', label: '30 дней' }]}
               />
               <label className="flex items-center gap-2 text-sm cursor-pointer">
@@ -82,7 +83,7 @@ export default function SettingsPage() {
               <Select
                 label="Состояние данных"
                 value={demo}
-                onChange={(e) => setDemoState(e.target.value as DemoState)}
+                onChange={(v) => setDemoState(v as DemoState)}
                 options={demoOptions}
                 hint="Применяется ко всем страницам. Для реального API не используется."
               />

@@ -10,7 +10,7 @@ import { QueryBoundary } from '../../components/shared/QueryBoundary'
 import { EmptyState } from '../../components/shared/States'
 import { Button } from '../../components/ui/Button'
 import { Modal } from '../../components/ui/Modal'
-import { Select } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { useForecast, useObligations } from '../../hooks/queries'
 import { formatCurrency, formatDate, formatDateTime } from '../../lib/formatters'
 import { ForecastChart } from '../forecast/ForecastChart'
@@ -42,7 +42,7 @@ export default function DashboardPage() {
         actions={
           <>
             <div className="w-full sm:w-36">
-              <Select aria-label="Период прогноза" value={days} onChange={(e) => setDays(Number(e.target.value))} options={periods} />
+              <Select aria-label="Период прогноза" value={days} onChange={(v) => setDays(Number(v))} options={periods} />
             </div>
             <Button variant="primary" onClick={() => setImportOpen(true)}>
               <FileUp size={16} /> Импортировать выписку

@@ -7,7 +7,7 @@ import { DataTable } from '../../components/shared/DataTable'
 import type { Column } from '../../components/shared/DataTable'
 import { EmptyState } from '../../components/shared/States'
 import { MockBadge } from '../../components/shared/StatusBadge'
-import { Select } from '../../components/ui/Input'
+import { Select } from '../../components/ui/Select'
 import { useForecast } from '../../hooks/queries'
 import { formatCompact, formatCurrency, formatDate, formatDateTime } from '../../lib/formatters'
 import type { ForecastPoint } from '../../types'
@@ -31,7 +31,7 @@ export default function ForecastPage() {
         description="Ежедневный прогноз остатка денежных средств и даты возможной нехватки."
         actions={
           <div className="w-full sm:w-36">
-            <Select aria-label="Горизонт прогноза" value={days} onChange={(e) => setDays(Number(e.target.value))} options={periods} />
+            <Select aria-label="Горизонт прогноза" value={days} onChange={(v) => setDays(Number(v))} options={periods} />
           </div>
         }
       />
