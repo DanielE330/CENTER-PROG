@@ -1,0 +1,282 @@
+{
+  "checked_at_utc": "2026-10-23T18:23:39.459065+00:00",
+  "tools": {
+    "git": {
+      "exit_code": 0,
+      "output": "git version 2.43.0"
+    },
+    "gh": {
+      "exit_code": 0,
+      "output": "gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)\nhttps://github.com/cli/cli/releases/tag/v2.45.0"
+    },
+    "curl": {
+      "exit_code": 0,
+      "output": "curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.10\nRelease-Date: 2023-12-06, security patched: 8.5.0-2ubuntu10.16\nProtocols: dict file ftp ftps gopher gophers http https imap imaps ldap ldaps mqtt pop3 pop3s rtmp rtsp scp sftp smb smbs smtp smtps telnet tftp\nFeatures: alt-svc AsynchDNS brotli GSS-API HSTS HTTP2 HTTPS-proxy IDN IPv6 Kerberos Largefile libz NTLM PSL SPNEGO SSL threadsafe TLS-SRP UnixSockets zstd"
+    },
+    "jq": {
+      "exit_code": 0,
+      "output": "jq-1.7"
+    },
+    "ripgrep": {
+      "exit_code": 0,
+      "output": "ripgrep 14.1.0\n\nfeatures:-simd-accel,+pcre2\nsimd(compile):+SSE2,-SSSE3,-AVX2\nsimd(runtime):+SSE2,+SSSE3,+AVX2\n\nPCRE2 10.42 is available (JIT is available)"
+    },
+    "fd": {
+      "exit_code": 0,
+      "output": "fdfind 9.0.0"
+    },
+    "tmux": {
+      "exit_code": 0,
+      "output": "tmux 3.4"
+    },
+    "gcc": {
+      "exit_code": 0,
+      "output": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+    },
+    "g++": {
+      "exit_code": 0,
+      "output": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+    },
+    "make": {
+      "exit_code": 0,
+      "output": "GNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law."
+    },
+    "pkg-config": {
+      "exit_code": 0,
+      "output": "1.8.1"
+    },
+    "pdftotext": {
+      "exit_code": 0,
+      "output": "pdftotext version 24.02.0\nCopyright 2005-2024 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC"
+    },
+    "rustup": {
+      "exit_code": 0,
+      "output": "rustup 1.29.2 (d8c92c676 2026-10-21)\ninfo: This is the version for the rustup toolchain manager, not the rustc compiler.\ninfo: the currently active `rustc` version is `rustc 1.99.1 (58cf8f9c3 2026-10-13)`"
+    },
+    "rustc": {
+      "exit_code": 0,
+      "output": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    },
+    "cargo": {
+      "exit_code": 0,
+      "output": "cargo 1.99.1 (5f94df478 2026-08-27)"
+    },
+    "rustfmt": {
+      "exit_code": 0,
+      "output": "rustfmt 1.10.0-stable (58cf8f9c35 2026-10-13)"
+    },
+    "clippy": {
+      "exit_code": 0,
+      "output": "clippy 0.1.99 (58cf8f9c35 2026-10-13)"
+    },
+    "nextest": {
+      "exit_code": 0,
+      "output": "cargo-nextest 0.9.149 (3fe4ef319 2026-10-20)\nrelease: 0.9.149\ncommit-hash: 3fe4ef31972f24e0c94cfe291718eab0fe678260\ncommit-date: 2026-10-20\nhost: x86_64-unknown-linux-gnu"
+    },
+    "cargo-audit": {
+      "exit_code": 0,
+      "output": "cargo-audit-audit 0.22.2"
+    },
+    "cargo-deny": {
+      "exit_code": 0,
+      "output": "cargo-deny 0.20.2"
+    },
+    "cargo-llvm-cov": {
+      "exit_code": 0,
+      "output": "cargo-llvm-cov 0.9.1"
+    },
+    "sqlx": {
+      "exit_code": 0,
+      "output": "sqlx-cli 0.9.0"
+    },
+    "uv": {
+      "exit_code": 0,
+      "output": "uv 0.13.5 (x86_64-unknown-linux-gnu)"
+    },
+    "python": {
+      "exit_code": 0,
+      "output": "Python 3.12.3"
+    },
+    "node": {
+      "exit_code": 0,
+      "output": "v22.23.3"
+    },
+    "pnpm": {
+      "exit_code": 0,
+      "output": "12.15.0"
+    },
+    "docker": {
+      "exit_code": 0,
+      "output": "Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2"
+    },
+    "compose": {
+      "exit_code": 0,
+      "output": "Docker Compose version 2.40.3+ds1-0ubuntu1~24.04.1"
+    },
+    "podman": {
+      "exit_code": 0,
+      "output": "podman version 4.9.3"
+    },
+    "ansible": {
+      "exit_code": 0,
+      "output": "ansible [core 2.21.5]\n  config file = None\n  configured module search path = ['/root/.ansible/plugins/modules', '/usr/share/ansible/plugins/modules']\n  ansible python module location = /root/.local/share/uv/tools/ansible-core/lib/python3.12/site-packages/ansible\n  ansible collection location = /root/.ansible/collections:/usr/share/ansible/collections\n  executable location = /root/.local/bin/ansible\n  python version = 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0] (/root/.local/share/uv/tools/ansible-core/bin/python)\n  jinja version = 3.1.6\n  pyyaml version = 6.0.3 (with libyaml v0.2.5)"
+    },
+    "ansible-lint": {
+      "exit_code": 0,
+      "output": "ansible-lint 26.10.1 using ansible-core:2.21.5 ansible-compat:26.10.0 ruamel-yaml:0.19.1"
+    },
+    "molecule": {
+      "exit_code": 0,
+      "output": "molecule 26.10.0 using python 3.12 \n    ansible:2.21.5\n    default:26.10.0 from molecule"
+    },
+    "psql": {
+      "exit_code": 0,
+      "output": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)"
+    },
+    "sops": {
+      "exit_code": 0,
+      "output": "sops 3.13.3 (latest)\n\n[warning] Note that in a future version, sops will no longer check whether the current version is the latest when asking for sops' version. If you want to explicitly check for the latest version, add the `--check-for-updates` option to `sops --version`. This will hide this deprecation warning and will always check, even if the default behavior changes in the future."
+    },
+    "age": {
+      "exit_code": 0,
+      "output": "1.1.1"
+    },
+    "gitleaks": {
+      "exit_code": 0,
+      "output": "8.30.1"
+    },
+    "trivy": {
+      "exit_code": 0,
+      "output": "Version: 0.76.1"
+    },
+    "semgrep": {
+      "exit_code": 0,
+      "output": "1.182.1"
+    },
+    "syft": {
+      "exit_code": 0,
+      "output": "Application:   syft\nVersion:       1.55.0\nBuildDate:     2026-10-19T18:54:46Z\nGitCommit:     f15c3343e29dfb20cf6d82c820e7090b49808c96\nGitDescription: v1.55.0\nPlatform:      linux/amd64\nGoVersion:     go1.26.8\nCompiler:      gc\nSchemaVersion: 16.1.11"
+    },
+    "cosign": {
+      "exit_code": 0,
+      "output": "______   ______        _______. __    _______ .__   __.\n /      | /  __  \\      /       ||  |  /  _____||  \\ |  |\n|  ,----'|  |  |  |    |   (----`|  | |  |  __  |   \\|  |\n|  |     |  |  |  |     \\   \\    |  | |  | |_ | |  . `  |\n|  `----.|  `--'  | .----)   |   |  | |  |__| | |  |\\   |\n \\______| \\______/  |_______/    |__|  \\______| |__| \\__|\ncosign: A tool for Container Signing, Verification and Storage in an OCI registry\n\nGitVersion:    v3.1.4\nGitCommit:     0e48502cf5ef34e2e60bbd3617aa19945712f705\nGitTreeState:  clean\nBuildDate:     2026-10-20T17:33:02Z\nGoVersion:     go1.27.3\nCompiler:      gc\nPlatform:      linux/amd64"
+    },
+    "actionlint": {
+      "exit_code": 0,
+      "output": "1.7.12\ninstalled by downloading from release page\nbuilt with go1.26.1 compiler for linux/amd64"
+    },
+    "hadolint": {
+      "exit_code": 0,
+      "output": "Haskell Dockerfile Linter 2.15.1"
+    },
+    "shellcheck": {
+      "exit_code": 0,
+      "output": "ShellCheck - shell script analysis tool\nversion: 0.9.0\nlicense: GNU General Public License, version 3\nwebsite: https://www.shellcheck.net"
+    },
+    "k6": {
+      "exit_code": 0,
+      "output": "k6 v2.3.0 (commit/e088784614, go1.26.8, linux/amd64)"
+    },
+    "claude": {
+      "exit_code": 0,
+      "output": "2.1.302 (Claude Code)"
+    }
+  },
+  "skill_count": 11,
+  "skills": [
+    "ansible",
+    "docker-expert",
+    "frontend-design",
+    "github-actions-templates",
+    "pytorch",
+    "rust-best-practices",
+    "security-requirement-extraction",
+    "semgrep",
+    "systematic-debugging",
+    "vercel-react-best-practices",
+    "webapp-testing"
+  ],
+  "binaries": [
+    {
+      "tool": "cargo-binstall",
+      "version": "v1.26.0",
+      "sha256": "e59aec44d811ab53b1bb4c5e0b57e433b017999c37e24ca577a3afbefd49dabd",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/cargo-binstall",
+      "status": "installed"
+    },
+    {
+      "tool": "gitleaks",
+      "version": "v8.30.1",
+      "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/gitleaks",
+      "status": "installed"
+    },
+    {
+      "tool": "trivy",
+      "version": "v0.76.1",
+      "sha256": "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/trivy",
+      "status": "installed"
+    },
+    {
+      "tool": "syft",
+      "version": "v1.55.0",
+      "sha256": "bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/syft",
+      "status": "installed"
+    },
+    {
+      "tool": "cosign",
+      "version": "v3.1.4",
+      "sha256": "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/cosign",
+      "status": "installed"
+    },
+    {
+      "tool": "actionlint",
+      "version": "v1.7.12",
+      "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/actionlint",
+      "status": "installed"
+    },
+    {
+      "tool": "hadolint",
+      "version": "v2.15.1",
+      "sha256": "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/hadolint",
+      "status": "installed"
+    },
+    {
+      "tool": "k6",
+      "version": "v2.3.0",
+      "sha256": "39c3117b6af817592dcd0ce4242105c0a7af10948c2a425306f0be8f7a8a8ab1",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/k6",
+      "status": "installed"
+    },
+    {
+      "tool": "sops",
+      "version": "v3.13.3",
+      "sha256": "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b",
+      "verification": "GitHub asset SHA256",
+      "path": "/usr/local/bin/sops",
+      "status": "installed"
+    }
+  ],
+  "zap_image": "ghcr.io/zaproxy/zaproxy@sha256:5ccfff9a411743ab2615136a2edd7416bec9ce41572fa94e935df38c14adb2b6",
+  "smoke": {
+    "rust_nextest_tests_passed": 2,
+    "rust_clippy": "passed",
+    "rust_llvm_cov": "passed on smoke crate only",
+    "torch_autograd": "passed, CPU",
+    "playwright_chromium": "passed",
+    "react_typecheck_and_build": "passed"
+  }
+}
