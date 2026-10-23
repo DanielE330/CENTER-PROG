@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Check, Globe } from 'lucide-react'
 import { PageContainer, PageHeader, Card } from '../../components/shared/Page'
 import { Button } from '../../components/ui/Button'
+import { Checkbox } from '../../components/ui/Checkbox'
 import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
 import { setDemoState, useDemoState } from '../../lib/demoState'
@@ -93,10 +94,7 @@ export default function SettingsPage() {
                 onChange={(v) => setPrefs({ ...prefs, horizon: v })}
                 options={[14, 30].map((d) => ({ value: String(d), label: t('common.daysCount', { count: d }) }))}
               />
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input type="checkbox" checked={prefs.notify} onChange={(e) => setPrefs({ ...prefs, notify: e.target.checked })} />
-                {t('settings.org.notify')}
-              </label>
+              <Checkbox checked={prefs.notify} onChange={(e) => setPrefs({ ...prefs, notify: e.target.checked })} label={t('settings.org.notify')} />
               <div className="flex items-center gap-3">
                 <Button variant="primary" onClick={save}>{t('common.save')}</Button>
                 {saved && (

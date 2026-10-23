@@ -4,6 +4,7 @@ import { CheckCircle2, FileUp, Loader2, XCircle } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ImportResult } from '../../types'
 import { Button } from '../../components/ui/Button'
+import { Checkbox } from '../../components/ui/Checkbox'
 import { formatDate, formatNumber } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
 import { MockBadge } from '../../components/shared/StatusBadge'
@@ -74,10 +75,7 @@ export function ImportStatement() {
         </dl>
       )}
 
-      <label className="flex items-center gap-2 text-[13px] text-muted cursor-pointer">
-        <input type="checkbox" checked={forceError} onChange={(e) => setForceError(e.target.checked)} />
-        {t('import.simulateError')}
-      </label>
+      <Checkbox className="text-[13px] text-muted" checked={forceError} onChange={(e) => setForceError(e.target.checked)} label={t('import.simulateError')} />
 
       {phase === 'loading' && (
         <p className="flex items-center gap-2 text-sm text-muted" role="status">

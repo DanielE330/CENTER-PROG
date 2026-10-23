@@ -85,3 +85,18 @@
 
   color-scheme: dark;
 }
+
+/* Checkbox */
+:root {
+  --checkbox-size: 18px;
+  --checkbox-radius: 5px;
+  --checkbox-bg: var(--c-input);
+  --checkbox-border: var(--c-line);
+  --checkbox-border-hover: var(--c-muted);
+  --checkbox-checked-bg: var(--c-primary);
+  --checkbox-check: #ffffff;
+  --checkbox-duration: 150ms;
+}
+:root[data-theme='dark'] {
+  --checkbox-check: #111813;
+}
