@@ -1,0 +1,44 @@
+# Gateway: единственная публичная точка входа. TLS, SPA, reverse proxy на api.
+# SITE_ADDRESS=:3000 (http, стенд) или example.com (автоматический TLS; тогда CADDY_AUTO_HTTPS=on и COOKIE_SECURE=true).
+{
+	admin off
+	auto_https {$CADDY_AUTO_HTTPS:off}
+}
+
+{$SITE_ADDRESS::3000} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+		Strict-Transport-Security "max-age=31536000" # действует только по HTTPS
+		-Server
+	}
+
+	# служебный контур наружу не отдаём
+	@internal path /internal/* /metrics /metrics/*
+	respond @internal 404
+
+	handle /api/* {
+		request_body {
+			max_size 26MB
+		}
+		reverse_proxy web-api:3000 {
+			transport http {
+				response_header_timeout 90s
+			}
+		}
+	}
+
+	handle /live {
+		reverse_proxy web-api:3000
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

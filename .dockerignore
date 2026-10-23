@@ -1,0 +1,12 @@
+target
+**/target
+node_modules
+**/node_modules
+data
+.git
+.venv
+**/.venv
+__pycache__
+**/__pycache__
+web/dist
+*.pdf

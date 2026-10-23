@@ -1,0 +1,77 @@
+x-hardening: &hardening
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+x-pyhealth: &pyhealth
+  interval: 10s
+  timeout: 3s
+  retries: 5
+  start_period: 5s
+
+services:
+  auth:
+    <<: *hardening
+    build: {context: ., dockerfile: docker/python.Dockerfile, target: auth}
+    environment:
+      AUTH_DB: /data/auth.db
+      DEMO_SEED: ${DEMO_SEED:-1}
+    volumes: [auth-data:/data]
+    networks: [internal]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8001/live', timeout=2)"]
+
+  parser:
+    <<: *hardening
+    build: {context: ., dockerfile: docker/python.Dockerfile, target: parser}
+    networks: [internal]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8002/live', timeout=2)"]
+
+  web-api:
+    <<: *hardening
+    build: {context: ., dockerfile: docker/api.Dockerfile}
+    # порты не публикуются: наружу смотрит только gateway; internal API :3100 доступен лишь внутри сети
+    environment:
+      PUBLIC_ADDR: 0.0.0.0:3000
+      INTERNAL_ADDR: 0.0.0.0:3100
+      AUTH_URL: http://auth:8001
+      PARSER_URL: http://parser:8002
+      DB_PATH: /data/core.db
+      WEB_DIR: /app/web/dist
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes: [api-data:/data]
+    networks: [internal, edge]
+    depends_on:
+      auth: {condition: service_healthy}
+      parser: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  gateway:
+    <<: *hardening
+    build: {context: ., dockerfile: docker/caddy.Dockerfile}
+    ports: ["${GATEWAY_PORT:-3000}:3000"]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:3000}
+      CADDY_AUTO_HTTPS: ${CADDY_AUTO_HTTPS:-off}
+    tmpfs: [/data, /config]
+    networks: [edge]
+    depends_on:
+      web-api: {condition: service_healthy}
+
+networks:
+  internal: {internal: true}   # auth, parser, api — без выхода наружу
+  edge: {}                     # gateway <-> api
+
+volumes:
+  auth-data:
+  api-data:
