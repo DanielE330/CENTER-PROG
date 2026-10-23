@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ArrowDownLeft, ArrowUpRight, CalendarClock } from 'lucide-react'
 import { PageContainer, PageHeader, Card } from '../../components/shared/Page'
 import { QueryBoundary } from '../../components/shared/QueryBoundary'
@@ -11,38 +12,15 @@ import { useObligations } from '../../hooks/queries'
 import { formatCurrency, formatDate } from '../../lib/formatters'
 import type { Obligation } from '../../types'
 
-const columns: Column<Obligation>[] = [
-  {
-    key: 'name',
-    header: 'Название',
-    sortValue: (o) => o.name,
-    render: (o) => (
-      <span className="inline-flex items-center gap-2 font-medium min-w-[200px]">
-        {o.kind === 'payment' ? <ArrowUpRight size={15} className="text-warning shrink-0" aria-label="Платёж" /> : <ArrowDownLeft size={15} className="text-primary shrink-0" aria-label="Поступление" />}
-        {o.name}
-      </span>
-    ),
-  },
-  { key: 'date', header: 'Плановая дата', sortValue: (o) => o.date, render: (o) => formatDate(o.date) },
-  { key: 'status', header: 'Статус', sortValue: (o) => o.status, render: (o) => <ObligationStatusBadge status={o.status} /> },
-  {
-    key: 'amount',
-    header: 'Ожидаемая сумма',
-    numeric: true,
-    sortValue: (o) => o.amount,
-    render: (o) => <span className={o.kind === 'receipt' ? 'text-primary font-semibold' : 'font-semibold'}>{o.kind === 'receipt' ? '+' : '−'}{formatCurrency(o.amount)}</span>,
-  },
-  { key: 'note', header: 'Источник / примечание', render: (o) => <span className="text-muted">{o.note ?? '—'}</span> },
-]
-
 export default function ObligationsPage() {
+  const { t } = useTranslation()
   const query = useObligations()
   const [kind, setKind] = useState('all')
   const [status, setStatus] = useState('all')
 
   return (
     <PageContainer>
-      <PageHeader title="Платежи и обязательства" description="Запланированные платежи и ожидаемые поступления." actions={<MockBadge />} />
+      <PageHeader title={t('obligations.title')} description={t('obligations.description')} actions={<MockBadge />} />
       <QueryBoundary query={query}>
         {(all) => <Body all={all} kind={kind} setKind={setKind} status={status} setStatus={setStatus} />}
       </QueryBoundary>
@@ -51,15 +29,37 @@ export default function ObligationsPage() {
 }
 
 function Body({ all, kind, setKind, status, setStatus }: { all: Obligation[]; kind: string; setKind: (v: string) => void; status: string; setStatus: (v: string) => void }) {
-  const rows = useMemo(
-    () => all.filter((o) => (kind === 'all' || o.kind === kind) && (status === 'all' || o.status === status)),
-    [all, kind, status],
-  )
+  const { t } = useTranslation()
+  const rows = all.filter((o) => (kind === 'all' || o.kind === kind) && (status === 'all' || o.status === status))
+
+  const columns: Column<Obligation>[] = [
+    {
+      key: 'name',
+      header: t('obligations.col.name'),
+      sortValue: (o) => t(o.nameKey),
+      render: (o) => (
+        <span className="inline-flex items-center gap-2 font-medium min-w-[200px]">
+          {o.kind === 'payment' ? <ArrowUpRight size={15} className="text-warning shrink-0" aria-label={t('obligations.payment')} /> : <ArrowDownLeft size={15} className="text-primary shrink-0" aria-label={t('obligations.receipt')} />}
+          {t(o.nameKey)}
+        </span>
+      ),
+    },
+    { key: 'date', header: t('obligations.col.date'), sortValue: (o) => o.date, render: (o) => formatDate(o.date) },
+    { key: 'status', header: t('obligations.col.status'), sortValue: (o) => o.status, render: (o) => <ObligationStatusBadge status={o.status} /> },
+    {
+      key: 'amount',
+      header: t('obligations.col.amount'),
+      numeric: true,
+      sortValue: (o) => o.amount,
+      render: (o) => <span className={o.kind === 'receipt' ? 'text-primary font-semibold' : 'font-semibold'}>{o.kind === 'receipt' ? '+' : '−'}{formatCurrency(o.amount)}</span>,
+    },
+    { key: 'note', header: t('obligations.col.note'), render: (o) => <span className="text-muted">{o.noteKey ? t(o.noteKey) : '—'}</span> },
+  ]
 
   if (all.length === 0) {
     return (
       <div className="card">
-        <EmptyState icon={<CalendarClock size={22} />} title="Нет запланированных позиций" description="Платежи и ожидаемые поступления появятся после загрузки данных." />
+        <EmptyState icon={<CalendarClock size={22} />} title={t('obligations.emptyTitle')} description={t('obligations.emptyText')} />
       </div>
     )
   }
@@ -70,32 +70,32 @@ function Body({ all, kind, setKind, status, setStatus }: { all: Obligation[]; ki
     <>
       {overdue > 0 && (
         <p className="rounded-card border border-danger/40 bg-danger-soft p-3 text-sm">
-          <b className="text-danger">Просрочено позиций: {overdue}.</b> Просроченные платежи и поступления не включаются в прогноз.
+          <b className="text-danger">{t('obligations.overdueCount', { count: overdue })}</b> {t('obligations.overdueNote')}
         </p>
       )}
       <Card>
         <div className="grid gap-3 p-4 sm:grid-cols-[200px_200px]">
           <Select
-            aria-label="Тип"
+            aria-label={t('obligations.typeAria')}
             value={kind}
-            onChange={(v) => setKind(v)}
-            options={[{ value: 'all', label: 'Платежи и поступления' }, { value: 'payment', label: 'Только платежи' }, { value: 'receipt', label: 'Только поступления' }]}
+            onChange={setKind}
+            options={[{ value: 'all', label: t('obligations.kindAll') }, { value: 'payment', label: t('obligations.kindPayments') }, { value: 'receipt', label: t('obligations.kindReceipts') }]}
           />
           <Select
-            aria-label="Статус"
+            aria-label={t('obligations.col.status')}
             value={status}
-            onChange={(v) => setStatus(v)}
+            onChange={setStatus}
             options={[
-              { value: 'all', label: 'Все статусы' },
-              { value: 'planned', label: 'Запланирован' },
-              { value: 'expected', label: 'Ожидается' },
-              { value: 'completed', label: 'Выполнен' },
-              { value: 'overdue', label: 'Просрочен' },
+              { value: 'all', label: t('obligations.statusAll') },
+              { value: 'planned', label: t('status.planned') },
+              { value: 'expected', label: t('status.expected') },
+              { value: 'completed', label: t('status.completed') },
+              { value: 'overdue', label: t('status.overdue') },
             ]}
           />
         </div>
         {rows.length === 0 ? (
-          <EmptyState title="Ничего не найдено" description="Измените фильтры." />
+          <EmptyState title={t('common.nothingFound')} description={t('common.changeFiltersShort')} />
         ) : (
           <DataTable
             columns={columns}

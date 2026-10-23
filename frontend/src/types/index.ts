@@ -1,5 +1,7 @@
 /** Types mirror the future Django API responses. Dates are ISO strings (YYYY-MM-DD). */
 
+import type { MsgParams } from '../i18n/helpers'
+
 export type DataSource = 'mock' | 'api'
 
 export interface ForecastPoint {
@@ -18,9 +20,9 @@ export interface ForecastPoint {
 export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown'
 
 export interface RiskFactor {
+  /** Selects the translated label and description (risk.factors.<id>). */
   id: string
-  label: string
-  description: string
+  params?: MsgParams
   /** Amount in RUB that relates to this factor, if known. */
   amount?: number
 }
@@ -37,6 +39,7 @@ export interface RiskAssessment {
 export interface DataQuality {
   /** 0..100 */
   completeness: number
+  /** Codes translated by the UI (quality.<code>). */
   warnings: string[]
 }
 
@@ -65,12 +68,14 @@ export type ObligationStatus = 'planned' | 'expected' | 'completed' | 'overdue'
 export interface Obligation {
   id: string
   kind: ObligationKind
-  name: string
+  /** Translation key of the item name (mock.names.*). */
+  nameKey: string
   date: string
   /** Always positive; direction is given by kind. */
   amount: number
   status: ObligationStatus
-  note?: string
+  /** Translation key of the note (mock.notes.*). */
+  noteKey?: string
 }
 
 export type TransactionStatus = 'completed' | 'pending'
@@ -78,11 +83,13 @@ export type TransactionStatus = 'completed' | 'pending'
 export interface Transaction {
   id: string
   date: string
-  counterparty: string
-  description: string
+  counterpartyKey: string
+  descriptionKey: string
+  descriptionParams?: MsgParams
   amount: number
   direction: 'in' | 'out'
-  category?: string
+  /** Translation key (categories.*). */
+  categoryKey?: string
   status?: TransactionStatus
 }
 
@@ -103,11 +110,19 @@ export interface PlanActualResponse {
   available: boolean
 }
 
+export interface AssistantReplyPart {
+  key: string
+  params?: MsgParams
+}
+
 export interface AssistantMessage {
   id: string
   role: 'user' | 'assistant'
-  text: string
-  /** Names of the data sets the answer was built from. */
+  /** Raw text typed by the user. */
+  text?: string
+  /** Assistant answers are keys + neutral params so they re-translate on language change. */
+  parts?: AssistantReplyPart[]
+  /** Translation keys of the data sets the answer was built from. */
   basedOn?: string[]
 }
 

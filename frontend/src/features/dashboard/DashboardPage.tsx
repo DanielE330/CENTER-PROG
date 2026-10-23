@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { AlertTriangle, ArrowDownToLine, ArrowUpFromLine, Clock, FileUp, ShieldAlert, TrendingDown, Wallet } from 'lucide-react'
 import { PageContainer, PageHeader, Card } from '../../components/shared/Page'
 import { StatCard } from '../../components/shared/StatCard'
@@ -19,12 +20,8 @@ import { ImportStatement } from '../settings/ImportStatement'
 import { ObligationList } from './ObligationList'
 import type { ForecastResponse } from '../../types'
 
-const periods = [
-  { value: 14, label: '14 дней' },
-  { value: 30, label: '30 дней' },
-]
-
 export default function DashboardPage() {
+  const { t } = useTranslation()
   const forecast = useForecast()
   const obligations = useObligations()
   const [days, setDays] = useState(30)
@@ -33,19 +30,19 @@ export default function DashboardPage() {
   return (
     <PageContainer>
       <PageHeader
-        title="Обзор"
+        title={t('dashboard.title')}
         description={
           forecast.data?.risk.shortageDate
-            ? `Прогноз на ${days} дней. Ожидаемая дата возможной нехватки — ${formatDate(forecast.data.risk.shortageDate)}.`
-            : 'Текущая ликвидность и прогноз движения денежных средств.'
+            ? t('dashboard.descShortage', { days, date: formatDate(forecast.data.risk.shortageDate) })
+            : t('dashboard.descDefault')
         }
         actions={
           <>
             <div className="w-full sm:w-36">
-              <Select aria-label="Период прогноза" value={days} onChange={(v) => setDays(Number(v))} options={periods} />
+              <Select aria-label={t('dashboard.periodAria')} value={days} onChange={(v) => setDays(Number(v))} options={[14, 30].map((d) => ({ value: d, label: t('common.daysCount', { count: d }) }))} />
             </div>
             <Button variant="primary" onClick={() => setImportOpen(true)}>
-              <FileUp size={16} /> Импортировать выписку
+              <FileUp size={16} /> {t('dashboard.import')}
             </Button>
           </>
         }
@@ -55,7 +52,7 @@ export default function DashboardPage() {
         {(f) => <DashboardBody f={f} days={days} obligations={obligations} />}
       </QueryBoundary>
 
-      <Modal open={importOpen} onClose={() => setImportOpen(false)} title="Импорт банковской выписки">
+      <Modal open={importOpen} onClose={() => setImportOpen(false)} title={t('import.modalTitle')}>
         <ImportStatement />
       </Modal>
     </PageContainer>
@@ -63,6 +60,7 @@ export default function DashboardPage() {
 }
 
 function DashboardBody({ f, days, obligations }: { f: ForecastResponse; days: number; obligations: ReturnType<typeof useObligations> }) {
+  const { t } = useTranslation()
   const { summary, risk, quality } = f
   const noData = f.points.length === 0
   const noBalance = summary.currentBalance == null
@@ -76,8 +74,8 @@ function DashboardBody({ f, days, obligations }: { f: ForecastResponse; days: nu
         <div className="flex items-start gap-2 rounded-card border border-warning/40 bg-warning-soft p-4 text-sm" role="alert">
           <AlertTriangle size={18} className="text-warning shrink-0 mt-0.5" />
           <div>
-            <p className="font-medium">Данные неполные — показатели могут быть недоступны</p>
-            <p className="text-muted">Отсутствующие значения не считаются нулём. Импортируйте выписку, чтобы построить прогноз.</p>
+            <p className="font-medium">{t('dashboard.incompleteTitle')}</p>
+            <p className="text-muted">{t('dashboard.incompleteText')}</p>
           </div>
         </div>
       )}
@@ -85,50 +83,50 @@ function DashboardBody({ f, days, obligations }: { f: ForecastResponse; days: nu
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={<Wallet size={16} />}
-          label="Текущий остаток"
-          value={noBalance ? 'Нет данных' : formatCurrency(summary.currentBalance)}
-          hint={noBalance ? 'Остаток неизвестен — не равен нулю' : `На ${formatDate(f.today)}`}
+          label={t('dashboard.kpi.balance')}
+          value={noBalance ? t('common.noData') : formatCurrency(summary.currentBalance)}
+          hint={noBalance ? t('dashboard.kpi.balanceUnknown') : t('dashboard.kpi.asOf', { date: formatDate(f.today) })}
         />
         <StatCard
           icon={<TrendingDown size={16} />}
-          label="Минимальный остаток"
-          value={summary.minBalance == null ? 'Нет данных' : formatCurrency(summary.minBalance)}
+          label={t('dashboard.kpi.minBalance')}
+          value={summary.minBalance == null ? t('common.noData') : formatCurrency(summary.minBalance)}
           tone={deficit ? 'danger' : 'default'}
           hint={
             summary.minBalanceDate
-              ? `${deficit ? 'Дефицит · ' : 'Прогноз · '}${formatDate(summary.minBalanceDate)}`
-              : 'Прогноз не построен'
+              ? t(deficit ? 'dashboard.kpi.minDeficit' : 'dashboard.kpi.minForecast', { date: formatDate(summary.minBalanceDate) })
+              : t('dashboard.kpi.forecastNotBuilt')
           }
         />
         <StatCard
           icon={<ArrowDownToLine size={16} />}
-          label="Ожидаемые поступления"
-          value={noData ? 'Нет данных' : formatCurrency(summary.expectedInflows)}
-          hint={noData ? undefined : `За ближайшие ${f.horizonDays} дней · ожидания, не факт`}
+          label={t('dashboard.kpi.inflows')}
+          value={noData ? t('common.noData') : formatCurrency(summary.expectedInflows)}
+          hint={noData ? undefined : t('dashboard.kpi.inflowsHint', { days: f.horizonDays })}
         />
         <StatCard
           icon={<ShieldAlert size={16} />}
-          label="Риск ликвидности"
-          value={risk.level === 'high' ? 'Высокий' : risk.level === 'medium' ? 'Средний' : risk.level === 'low' ? 'Низкий' : 'Не оценён'}
+          label={t('dashboard.kpi.risk')}
+          value={t(`dashboard.kpi.risk_${risk.level}`)}
           tone={risk.level === 'high' ? 'danger' : risk.level === 'medium' ? 'warning' : 'default'}
-          hint={risk.shortageDate ? `Нехватка ≈ ${formatDate(risk.shortageDate)}` : risk.level === 'unknown' ? 'Недостаточно данных' : 'Нехватки не ожидается'}
+          hint={risk.shortageDate ? t('dashboard.kpi.riskShortage', { date: formatDate(risk.shortageDate) }) : risk.level === 'unknown' ? t('dashboard.kpi.riskUnknown') : t('dashboard.kpi.riskNone')}
         />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex flex-col gap-5 min-w-0">
           <Card
-            title="Прогноз остатка денежных средств"
-            subtitle={`Факт за 14 дней и прогноз на ${days} дней`}
+            title={t('dashboard.chartTitle')}
+            subtitle={t('dashboard.chartSubtitle', { days })}
             action={<MockBadge />}
           >
             <div className="px-3 pb-4 sm:px-5">
               {noData ? (
-                <EmptyState title="Нет данных для графика" description="Импортируйте банковскую выписку, чтобы построить прогноз." />
+                <EmptyState title={t('dashboard.noChartTitle')} description={t('dashboard.noChartText')} />
               ) : (
                 <>
                   {summary.currentBalance == null && (
-                    <p className="text-[13px] text-warning mb-2">Прогноз не построен: неизвестен текущий остаток. Показан только факт.</p>
+                    <p className="text-[13px] text-warning mb-2">{t('dashboard.noBalanceChart')}</p>
                   )}
                   <ForecastChart points={chartPoints} today={f.today} shortageDate={risk.shortageDate} height={360} />
                 </>
@@ -137,12 +135,12 @@ function DashboardBody({ f, days, obligations }: { f: ForecastResponse; days: nu
           </Card>
 
           <div className="grid gap-5 lg:grid-cols-2">
-            <Card title="Ближайшие платежи" action={<Link to="/obligations" className="text-[13px] text-primary font-medium hover:underline">Все</Link>}>
+            <Card title={t('dashboard.upcomingPayments')} action={<Link to="/obligations" className="text-[13px] text-primary font-medium hover:underline">{t('common.all')}</Link>}>
               <QueryBoundary query={obligations} loadingHeight={160}>
                 {(list) => <ObligationList items={list} kind="payment" icon={<ArrowUpFromLine size={15} />} />}
               </QueryBoundary>
             </Card>
-            <Card title="Ожидаемые поступления" action={<Link to="/obligations" className="text-[13px] text-primary font-medium hover:underline">Все</Link>}>
+            <Card title={t('dashboard.expectedReceipts')} action={<Link to="/obligations" className="text-[13px] text-primary font-medium hover:underline">{t('common.all')}</Link>}>
               <QueryBoundary query={obligations} loadingHeight={160}>
                 {(list) => <ObligationList items={list} kind="receipt" icon={<ArrowDownToLine size={15} />} />}
               </QueryBoundary>
@@ -152,15 +150,15 @@ function DashboardBody({ f, days, obligations }: { f: ForecastResponse; days: nu
 
         <div className="flex flex-col gap-5 min-w-0">
           <RiskAlert risk={risk} />
-          <Card title="Состояние данных">
+          <Card title={t('dashboard.dataState')}>
             <div className="px-5 pb-5 flex flex-col gap-4">
               <DataQuality quality={quality} />
               <p className="flex items-center gap-1.5 text-[13px] text-muted">
                 <Clock size={14} />
-                Обновлено: {formatDateTime(f.generatedAt)}
+                {t('common.updated', { value: formatDateTime(f.generatedAt) })}
               </p>
               <p className="text-xs text-muted">
-                Все показатели — демонстрационные (mock). Горизонт прогноза: {f.horizonDays} дн. Суммы формирует имитация модели, а не реальный расчёт.
+                {t('dashboard.mockNote', { days: f.horizonDays })}
               </p>
             </div>
           </Card>

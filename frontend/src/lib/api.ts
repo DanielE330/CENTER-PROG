@@ -13,13 +13,14 @@ import type {
 import { buildAssistantReply, buildForecast, buildObligations, buildPlanActual, buildTransactions } from '../mocks/data'
 import { getDemoState } from './demoState'
 import { sleep } from './utils'
+import { AppError } from '../i18n/helpers'
 
 const BASE_URL = import.meta.env.VITE_API_URL as string | undefined
 const USE_MOCK = !BASE_URL
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, { headers: { 'Content-Type': 'application/json' }, ...init })
-  if (!res.ok) throw new Error(`Ошибка API: ${res.status}`)
+  if (!res.ok) throw new AppError('errors.api', { status: res.status })
   return res.json() as Promise<T>
 }
 
@@ -27,7 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function mock<T>(produce: () => T, latency = 450): Promise<T> {
   const demo = getDemoState()
   await sleep(demo === 'loading' ? 5000 : latency)
-  if (demo === 'error') throw new Error('Не удалось получить данные от сервера (демо-ошибка).')
+  if (demo === 'error') throw new AppError('errors.demoLoad')
   return produce()
 }
 
@@ -47,8 +48,8 @@ export const api = {
   askAssistant: async (question: string): Promise<AssistantMessage> => {
     if (!USE_MOCK) return request('/assistant/', { method: 'POST', body: JSON.stringify({ question }) })
     return mock(() => {
-      const { text, basedOn } = buildAssistantReply(question, buildForecast(getDemoState()), buildObligations())
-      return { id: crypto.randomUUID(), role: 'assistant' as const, text, basedOn }
+      const { parts, basedOn } = buildAssistantReply(question, buildForecast(getDemoState()), buildObligations())
+      return { id: crypto.randomUUID(), role: 'assistant' as const, parts, basedOn }
     }, 900)
   },
 
@@ -57,13 +58,7 @@ export const api = {
     await sleep(1400)
     const okExt = /\.(csv|txt|xlsx?|1c)$/i.test(file.name)
     if (forceError || !okExt || file.size > 10 * 1024 * 1024) {
-      throw new Error(
-        !okExt
-          ? 'Неподдерживаемый формат файла. Допустимы CSV, TXT, XLS, XLSX.'
-          : file.size > 10 * 1024 * 1024
-            ? 'Файл больше 10 МБ.'
-            : 'Не удалось распознать структуру файла (демо-ошибка).',
-      )
+      throw new AppError(!okExt ? 'errors.unsupportedFormat' : file.size > 10 * 1024 * 1024 ? 'errors.fileTooLarge' : 'errors.parseFailed')
     }
     return { fileName: file.name, operations: 128, periodFrom: '2026-09-23', periodTo: '2026-10-23', simulated: true }
   },

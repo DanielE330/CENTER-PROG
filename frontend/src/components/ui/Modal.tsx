@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 interface Props {
   open: boolean
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function Modal({ open, title, onClose, children }: Props) {
+  const { t } = useTranslation()
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -24,7 +26,7 @@ export function Modal({ open, title, onClose, children }: Props) {
       <div className="card relative w-full max-w-lg max-h-[90vh] overflow-auto p-6" style={{ boxShadow: 'var(--shadow-pop)' }}>
         <div className="flex items-start justify-between gap-4 mb-4">
           <h2 className="text-lg font-semibold">{title}</h2>
-          <button onClick={onClose} aria-label="Закрыть" className="p-1 rounded-md text-muted hover:bg-hover cursor-pointer">
+          <button onClick={onClose} aria-label={t('common.close')} className="p-1 rounded-md text-muted hover:bg-hover cursor-pointer">
             <X size={18} />
           </button>
         </div>

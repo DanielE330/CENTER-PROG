@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Plus, FlaskConical } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ForecastResponse, Obligation } from '../../types'
 import { PageContainer, PageHeader, Card } from '../../components/shared/Page'
 import { QueryBoundary } from '../../components/shared/QueryBoundary'
@@ -16,14 +17,15 @@ import { simulate } from './simulate'
 import type { ExtraItem, Override, Scenario } from './simulate'
 
 export default function ScenariosPage() {
+  const { t } = useTranslation()
   const forecast = useForecast()
   const obligations = useObligations()
 
   return (
     <PageContainer>
       <PageHeader
-        title="Сценарии"
-        description="Модель «Что если?»: измените даты и суммы платежей или добавьте поступление и сравните с базовым прогнозом."
+        title={t('scenarios.title')}
+        description={t('scenarios.description')}
       />
       <QueryBoundary query={forecast} loadingHeight={300}>
         {(f) => (
@@ -36,17 +38,17 @@ export default function ScenariosPage() {
   )
 }
 
-const BASE: Scenario = { id: 'base', name: 'Базовый прогноз', readOnly: true, overrides: {}, extras: [] }
+const BASE: Scenario = { id: 'base', nameKey: 'scenarios.base', readOnly: true, overrides: {}, extras: [] }
 
 function templates(items: Obligation[]): Scenario[] {
-  const find = (name: string) => items.find((o) => o.name.includes(name))
-  const supplier = find('ТехСнаб')
-  const client = find('Ростов-Строй')
+  const find = (nameKey: string) => items.find((o) => o.nameKey === nameKey)
+  const supplier = find('mock.names.techSnab')
+  const client = find('mock.names.rostovStroy')
   const out: Scenario[] = []
   if (supplier) {
     out.push({
       id: 'tpl-delay',
-      name: 'Отсрочка платежа ТехСнаб на 7 дней',
+      nameKey: 'scenarios.tplDelay',
       template: true,
       overrides: { [supplier.id]: { date: shift(supplier.date, 7) } },
       extras: [],
@@ -55,7 +57,7 @@ function templates(items: Obligation[]): Scenario[] {
   if (client) {
     out.push({
       id: 'tpl-early',
-      name: 'Ростов-Строй платит на 4 дня раньше',
+      nameKey: 'scenarios.tplEarly',
       template: true,
       overrides: { [client.id]: { date: shift(client.date, -4) } },
       extras: [],
@@ -72,6 +74,8 @@ function shift(iso: string, days: number) {
 }
 
 function Workspace({ f, obligations }: { f: ForecastResponse; obligations: Obligation[] }) {
+  const { t } = useTranslation()
+  const scenarioName = (s: Scenario) => s.name ?? t(s.nameKey ?? '')
   const items = useMemo(
     () => obligations.filter((o) => (o.status === 'planned' || o.status === 'expected') && o.date > f.today).sort((a, b) => a.date.localeCompare(b.date)),
     [obligations, f.today],
@@ -95,14 +99,14 @@ function Workspace({ f, obligations }: { f: ForecastResponse; obligations: Oblig
   if (opening == null || f.points.length === 0 || !result) {
     return (
       <div className="card">
-        <EmptyState icon={<FlaskConical size={22} />} title="Сценарии недоступны" description="Для моделирования нужен известный текущий остаток и данные о платежах. Импортируйте выписку." />
+        <EmptyState icon={<FlaskConical size={22} />} title={t('scenarios.unavailableTitle')} description={t('scenarios.unavailableText')} />
       </div>
     )
   }
 
   const addScenario = () => {
     const n = scenarios.filter((s) => !s.template && !s.readOnly).length + 1
-    const s: Scenario = { id: `custom-${Date.now()}`, name: `Мой сценарий ${n}`, overrides: {}, extras: [] }
+    const s: Scenario = { id: `custom-${Date.now()}`, name: t('scenarios.customName', { n }), overrides: {}, extras: [] }
     setScenarios([...scenarios, s])
     setActiveId(s.id)
   }
@@ -118,7 +122,7 @@ function Workspace({ f, obligations }: { f: ForecastResponse; obligations: Oblig
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Сценарии">
+      <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label={t('scenarios.title')}>
         {scenarios.map((s) => (
           <button
             key={s.id}
@@ -130,21 +134,20 @@ function Workspace({ f, obligations }: { f: ForecastResponse; obligations: Oblig
               s.id === activeId ? 'bg-primary-soft border-primary text-primary' : 'bg-surface border-line hover:bg-hover',
             )}
           >
-            {s.name}
+            {scenarioName(s)}
           </button>
         ))}
-        <Button onClick={addScenario} size="sm"><Plus size={14} /> Новый сценарий</Button>
+        <Button onClick={addScenario} size="sm"><Plus size={14} /> {t('scenarios.new')}</Button>
       </div>
 
       <div className="rounded-card border border-warning/40 bg-warning-soft p-3 text-[13px]">
-        <b className="text-warning">Демонстрационный расчёт в браузере.</b>{' '}
-        Остаток на день = текущий остаток + поступления − платежи до этой даты включительно. Просроченные и выполненные позиции не учитываются.
-        Результат — иллюстрация правил, а не прогноз модели. Шаблоны сценариев содержат только заранее заданные входные изменения; итоги считаются заново.
+        <b className="text-warning">{t('scenarios.demoTitle')}</b>{' '}
+        {t('scenarios.demoText')}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Compare
-          label="Минимальный остаток"
+          label={t('scenarios.cmp.minBalance')}
           base={formatCurrency(base.minBalance)}
           value={formatCurrency(scenario.minBalance)}
           delta={isBase ? null : scenario.minBalance - base.minBalance}
@@ -152,22 +155,22 @@ function Workspace({ f, obligations }: { f: ForecastResponse; obligations: Oblig
           note={formatDate(scenario.minDate)}
         />
         <Compare
-          label="Дата нехватки"
-          base={base.shortageDate ? formatDate(base.shortageDate) : 'нет'}
-          value={scenario.shortageDate ? formatDate(scenario.shortageDate) : 'нет'}
+          label={t('scenarios.cmp.shortageDate')}
+          base={base.shortageDate ? formatDate(base.shortageDate) : t('common.none')}
+          value={scenario.shortageDate ? formatDate(scenario.shortageDate) : t('common.none')}
           negative={scenario.shortageDate != null}
-          note={scenario.shortageDate ? 'Дефицит' : 'Нехватки не ожидается'}
+          note={scenario.shortageDate ? t('scenarios.cmp.deficitNote') : t('dashboard.kpi.riskNone')}
         />
         <Compare
-          label="Дефицит"
-          base={base.deficit != null ? formatCurrency(base.deficit) : 'нет'}
-          value={scenario.deficit != null ? formatCurrency(scenario.deficit) : 'нет'}
+          label={t('scenarios.cmp.deficit')}
+          base={base.deficit != null ? formatCurrency(base.deficit) : t('common.none')}
+          value={scenario.deficit != null ? formatCurrency(scenario.deficit) : t('common.none')}
           negative={scenario.deficit != null}
           delta={isBase || (base.deficit == null && scenario.deficit == null) ? null : (scenario.deficit ?? 0) - (base.deficit ?? 0)}
           invertDelta
         />
         <Compare
-          label="Остаток на конец периода"
+          label={t('scenarios.cmp.endBalance')}
           base={formatCurrency(base.points.at(-1)!.balance)}
           value={formatCurrency(scenario.points.at(-1)!.balance)}
           delta={isBase ? null : scenario.points.at(-1)!.balance - base.points.at(-1)!.balance}
@@ -176,17 +179,17 @@ function Workspace({ f, obligations }: { f: ForecastResponse; obligations: Oblig
       </div>
 
       <Card
-        title="Базовый прогноз и сценарий"
-        subtitle={isBase ? 'Выберите или создайте сценарий, чтобы увидеть отличия.' : `Сценарий: ${active.name}`}
-        action={<Badge tone="warning">Демо-расчёт</Badge>}
+        title={t('scenarios.chartTitle')}
+        subtitle={isBase ? t('scenarios.chartHintBase') : t('scenarios.chartHintActive', { name: scenarioName(active) })}
+        action={<Badge tone="warning">{t('common.demoCalc')}</Badge>}
       >
         <div className="px-3 pb-4 sm:px-5">
           <ForecastChart
             points={chartPoints}
             today={f.today}
             shortageDate={scenario.shortageDate}
-            forecastName={isBase ? 'Базовый прогноз' : 'Сценарий'}
-            compare={isBase ? undefined : { name: 'Базовый прогноз', points: base.points.map((p) => ({ date: p.date, balance: p.balance })) }}
+            forecastName={isBase ? t('scenarios.base') : t('scenarios.scenario')}
+            compare={isBase ? undefined : { name: t('scenarios.base'), points: base.points.map((p) => ({ date: p.date, balance: p.balance })) }}
             height={380}
           />
         </div>
@@ -223,15 +226,16 @@ interface CompareProps {
 }
 
 function Compare({ label, base, value, delta, invertDelta, negative, note }: CompareProps) {
+  const { t } = useTranslation()
   const good = delta != null && delta !== 0 && (invertDelta ? delta < 0 : delta > 0)
   return (
     <div className="card p-5 flex flex-col gap-1.5 min-w-0">
       <p className="text-[13px] text-muted">{label}</p>
       <p className={cn('tnum text-2xl font-semibold leading-tight', negative && 'text-danger')}>{value}</p>
-      <p className="text-[13px] text-muted">База: <span className="tnum">{base}</span></p>
+      <p className="text-[13px] text-muted">{t('scenarios.cmp.base')}: <span className="tnum">{base}</span></p>
       {delta != null && delta !== 0 && (
         <p className={cn('tnum text-[13px] font-medium', good ? 'text-primary' : 'text-danger')}>
-          {good ? 'Лучше' : 'Хуже'} базы: {formatSignedCurrency(delta)}
+          {t(good ? 'scenarios.cmp.better' : 'scenarios.cmp.worse', { delta: formatSignedCurrency(delta) })}
         </p>
       )}
       {note && <p className="text-xs text-muted">{note}</p>}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { Check, ChevronDown } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
@@ -41,7 +42,8 @@ const MAX_MENU = 280
  * so it is never clipped by cards, tables or `overflow: hidden` containers, and it flips
  * upward / shrinks to stay inside the viewport.
  */
-export function Select({ options, value, onChange, label, hint, disabled, placeholder = 'Выберите…', emptyText = 'Нет вариантов', className, ...rest }: Props) {
+export function Select({ options, value, onChange, label, hint, disabled, placeholder, emptyText, className, ...rest }: Props) {
+  const { t } = useTranslation()
   const uid = useId()
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLUListElement>(null)
@@ -185,7 +187,7 @@ export function Select({ options, value, onChange, label, hint, disabled, placeh
         onKeyDown={onTriggerKey}
         className="select-trigger"
       >
-        <span className={cn('truncate', !selected && 'text-muted')}>{selected?.label ?? placeholder}</span>
+        <span className={cn('truncate', !selected && 'text-muted')}>{selected?.label ?? placeholder ?? t('common.select.placeholder')}</span>
         <ChevronDown size={16} className={cn('shrink-0 text-muted select-chevron', open && 'select-chevron-open')} />
       </button>
       {hint && <p className="text-xs text-muted">{hint}</p>}
@@ -209,7 +211,7 @@ export function Select({ options, value, onChange, label, hint, disabled, placeh
               ...(pos.up ? { bottom: window.innerHeight - pos.top } : { top: pos.top }),
             }}
           >
-            {options.length === 0 && <li className="select-empty">{emptyText}</li>}
+            {options.length === 0 && <li className="select-empty">{emptyText ?? t('common.select.empty')}</li>}
             {options.map((o, i) => {
               const isSel = i === selectedIdx
               return (

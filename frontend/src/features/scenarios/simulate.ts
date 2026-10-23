@@ -22,7 +22,10 @@ export interface ExtraItem {
 
 export interface Scenario {
   id: string
-  name: string
+  /** User-entered name (custom scenarios). */
+  name?: string
+  /** Translation key (built-in scenarios). */
+  nameKey?: string
   description?: string
   /** Built-in template (inputs are predefined, results are still calculated live). */
   template?: boolean

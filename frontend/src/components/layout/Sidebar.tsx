@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { PanelLeftClose, PanelLeftOpen, Landmark, X } from 'lucide-react'
 import { navItems } from './nav'
 import { cn } from '../../lib/utils'
@@ -12,12 +13,13 @@ interface Props {
 }
 
 export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
+  const { t } = useTranslation()
   const compact = collapsed && !mobile
   return (
     <aside
       className="sidebar flex h-full flex-col bg-surface border-r border-line"
       style={{ width: compact ? 'var(--sidebar-w-collapsed)' : 'var(--sidebar-w)' }}
-      aria-label="Основная навигация"
+      aria-label={t('nav.main')}
     >
       <div className={cn('flex items-center gap-2.5 h-[var(--header-h)] border-b border-line shrink-0', compact ? 'justify-center' : 'px-5')}>
         <span className="grid place-items-center size-9 rounded-[10px] bg-primary text-on-primary shrink-0">
@@ -25,19 +27,21 @@ export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
         </span>
         {!compact && (
           <div className="leading-tight min-w-0 flex-1">
-            <p className="font-semibold truncate">Центр-инвест</p>
-            <p className="text-xs text-muted truncate">Ликвидность</p>
+            <p className="font-semibold truncate">{t('app.brand')}</p>
+            <p className="text-xs text-muted truncate">{t('app.tagline')}</p>
           </div>
         )}
         {mobile && (
-          <button onClick={onNavigate} aria-label="Закрыть меню" className="p-1.5 rounded-md text-muted hover:bg-hover cursor-pointer">
+          <button onClick={onNavigate} aria-label={t('nav.closeMenu')} className="p-1.5 rounded-md text-muted hover:bg-hover cursor-pointer">
             <X size={18} />
           </button>
         )}
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3 flex flex-col gap-1">
-        {navItems.map(({ to, label, icon: Icon }) => (
+        {navItems.map(({ to, labelKey, icon: Icon }) => {
+          const label = t(labelKey)
+          return (
           <NavLink
             key={to}
             to={to}
@@ -59,18 +63,19 @@ export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
               </>
             )}
           </NavLink>
-        ))}
+          )
+        })}
       </nav>
 
       {!mobile && (
         <div className="p-3 border-t border-line">
           <button
             onClick={onToggle}
-            aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            aria-label={collapsed ? t('nav.expandMenu') : t('nav.collapseMenu')}
             className={cn('flex items-center gap-3 h-10 w-full rounded-control text-sm text-muted hover:bg-hover cursor-pointer', compact ? 'justify-center' : 'px-3')}
           >
             {collapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
-            {!compact && <span>Свернуть</span>}
+            {!compact && <span>{t('nav.collapse')}</span>}
           </button>
         </div>
       )}

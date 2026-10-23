@@ -2,8 +2,9 @@ import { useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import type { ForecastPoint } from '../../types'
-import { formatCompact, formatCurrency, formatDate, formatShortDate } from '../../lib/formatters'
+import { formatAxisNumber, formatCompact, formatCurrency, formatDate, formatShortDate } from '../../lib/formatters'
 import { cssVar } from '../../lib/utils'
+import { useTranslation } from 'react-i18next'
 import { useTheme } from '../../lib/theme'
 
 export interface CompareSeries {
@@ -22,8 +23,11 @@ interface Props {
   height?: number
 }
 
-export function ForecastChart({ points, today, shortageDate, compare, forecastName = 'Прогноз', height = 380 }: Props) {
+export function ForecastChart({ points, today, shortageDate, compare, forecastName: forecastNameProp, height = 380 }: Props) {
+  const { t, i18n } = useTranslation()
+  const lang = i18n.language
   const theme = useTheme()
+  const forecastName = forecastNameProp ?? t('chart.forecast')
   const option = useMemo<EChartsOption>(() => {
     const primary = cssVar('--c-primary', '#176B45')
     const danger = cssVar('--c-danger', '#DC5252')
@@ -63,7 +67,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
           data: points.map((p) => (p.lower != null ? p.lower : null)),
         },
         {
-          name: 'Диапазон неопределённости', type: 'line', stack: 'band', symbol: 'none', silent: true,
+          name: t('chart.band'), type: 'line', stack: 'band', symbol: 'none', silent: true,
           lineStyle: { opacity: 0 }, areaStyle: { color: primary, opacity: 0.1 },
           data: points.map((p) => (p.lower != null && p.upper != null ? p.upper - p.lower : null)),
         },
@@ -71,7 +75,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
     }
 
     series.push({
-      name: 'Факт',
+      name: t('chart.actual'),
       type: 'line',
       symbol: 'none',
       lineStyle: { color: neutral, width: 2 },
@@ -101,9 +105,9 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
         symbol: 'none',
         silent: true,
         data: [
-          { yAxis: 0, lineStyle: { color: ink, type: 'dashed', width: 1 }, label: { formatter: '0 ₽', color: ink, position: 'insideEndTop' } },
+          { yAxis: 0, lineStyle: { color: ink, type: 'dashed', width: 1 }, label: { formatter: formatCurrency(0), color: ink, position: 'insideEndTop' } },
           ...(dates.includes(today)
-            ? [{ xAxis: today, lineStyle: { color: muted, type: 'solid' as const, width: 1 }, label: { formatter: 'Сегодня', color: muted, position: 'insideEndTop' as const } }]
+            ? [{ xAxis: today, lineStyle: { color: muted, type: 'solid' as const, width: 1 }, label: { formatter: t('chart.today'), color: muted, position: 'insideEndTop' as const } }]
             : []),
         ],
       },
@@ -115,7 +119,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
             symbolSize: 46,
             itemStyle: { color: danger },
             label: { formatter: '!', color: onDanger, fontWeight: 700, fontSize: 16 },
-            data: [{ name: 'Дата нехватки', coord: [shortagePoint.date, shortagePoint.forecast] }],
+            data: [{ name: t('chart.shortageDate'), coord: [shortagePoint.date, shortagePoint.forecast] }],
           }
         : undefined,
     })
@@ -124,7 +128,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
     if (deficitAreas.length) {
       const neg = (i: number) => points[i]?.forecast != null && (points[i].forecast as number) < 0
       series.push({
-        name: 'Дефицит',
+        name: t('chart.deficit'),
         type: 'line',
         symbol: 'none',
         silent: true,
@@ -142,10 +146,10 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
       legend: {
         top: 0, left: 0, icon: 'roundRect', itemWidth: 14, itemHeight: 3, textStyle: { color: muted, fontSize: 12 },
         data: [
-          'Факт', forecastName,
-          ...(deficitAreas.length ? ['Дефицит'] : []),
+          t('chart.actual'), forecastName,
+          ...(deficitAreas.length ? [t('chart.deficit')] : []),
           ...(compare ? [compare.name] : []),
-          ...(hasBand ? ['Диапазон неопределённости'] : []),
+          ...(hasBand ? [t('chart.band')] : []),
         ],
       },
       xAxis: {
@@ -158,7 +162,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
       },
       yAxis: {
         type: 'value',
-        axisLabel: { color: muted, fontSize: 12, formatter: (v: number) => `${v / 1_000_000} млн` },
+        axisLabel: { color: muted, fontSize: 12, formatter: (v: number) => formatAxisNumber(v) },
         splitLine: { lineStyle: { color: line } },
       },
       tooltip: {
@@ -179,22 +183,22 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
           const row = (k: string, v: string, color?: string) =>
             `<div style="display:flex;justify-content:space-between;gap:20px"><span style="color:${muted}">${k}</span><b style="font-variant-numeric:tabular-nums;${color ? `color:${color}` : ''}">${v}</b></div>`
           return [
-            `<div style="min-width:210px"><div style="font-weight:600;margin-bottom:4px">${formatDate(p.date)} · ${isActual ? 'факт' : 'прогноз'}</div>`,
-            row(isActual ? 'Остаток (факт)' : `Остаток (${forecastName.toLowerCase()})`, bal != null ? formatCurrency(bal) : 'нет данных', bal != null && bal < 0 ? danger : undefined),
-            cmp !== undefined ? row(compare!.name, cmp != null ? formatCurrency(cmp) : 'нет данных') : '',
-            p.lower != null && p.upper != null && !isActual ? row('Диапазон', `${formatCompact(p.lower)} … ${formatCompact(p.upper)}`) : '',
-            row('Поступления', formatCurrency(p.inflow), primary),
-            row('Платежи', formatCurrency(p.outflow), warning),
+            `<div style="min-width:210px"><div style="font-weight:600;margin-bottom:4px">${formatDate(p.date)} · ${isActual ? t('chart.tooltip.actual') : t('chart.tooltip.forecast')}</div>`,
+            row(isActual ? t('chart.tooltip.balanceActual') : t('chart.tooltip.balanceOf', { name: forecastName.toLowerCase() }), bal != null ? formatCurrency(bal) : t('common.noData'), bal != null && bal < 0 ? danger : undefined),
+            cmp !== undefined ? row(compare!.name, cmp != null ? formatCurrency(cmp) : t('common.noData')) : '',
+            p.lower != null && p.upper != null && !isActual ? row(t('chart.tooltip.range'), `${formatCompact(p.lower)} … ${formatCompact(p.upper)}`) : '',
+            row(t('chart.tooltip.inflow'), formatCurrency(p.inflow), primary),
+            row(t('chart.tooltip.outflow'), formatCurrency(p.outflow), warning),
             '</div>',
           ].join('')
         },
       },
       series,
     }
-  }, [points, today, shortageDate, compare, forecastName, theme])
+  }, [points, today, shortageDate, compare, forecastName, theme, lang, t])
 
   return (
-    <div role="img" aria-label="График прогноза остатка денежных средств" style={{ width: '100%', height }}>
+    <div role="img" aria-label={t('chart.aria')} style={{ width: '100%', height }}>
       <ReactECharts option={option} notMerge style={{ width: '100%', height: '100%' }} />
     </div>
   )

@@ -1,0 +1,471 @@
+{
+  "app": {
+    "title": "Center-Invest — Liquidity Management",
+    "brand": "Center-Invest",
+    "tagline": "Liquidity",
+    "org": "Southern Agroholding LLC",
+    "workspace": "Workspace · Demo",
+    "userRole": "Finance specialist",
+    "userDept": "Treasury",
+    "initials": "FS"
+  },
+  "nav": {
+    "main": "Main navigation",
+    "dashboard": "Overview",
+    "forecast": "Forecast",
+    "transactions": "Transactions",
+    "obligations": "Payments & obligations",
+    "scenarios": "Scenarios",
+    "planVsActual": "Plan vs. actual",
+    "assistant": "AI assistant",
+    "settings": "Settings",
+    "collapse": "Collapse",
+    "collapseMenu": "Collapse menu",
+    "expandMenu": "Expand menu",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu"
+  },
+  "header": {
+    "notifications": "Notifications",
+    "shortageTitle": "Possible cash shortage",
+    "shortageText": "Expected date: {{date}}. Open the forecast.",
+    "noNotifications": "No new notifications."
+  },
+  "theme": {
+    "toDark": "Switch to dark theme",
+    "toLight": "Switch to light theme"
+  },
+  "demo": {
+    "banner": "Demo data-state mode is on: “{{state}}”. Change it in Settings.",
+    "states": {
+      "normal": "normal data",
+      "loading": "slow loading",
+      "error": "error",
+      "empty": "no data",
+      "incomplete": "incomplete data"
+    }
+  },
+  "common": {
+    "all": "All",
+    "close": "Close",
+    "retry": "Retry",
+    "save": "Save",
+    "saved": "Saved",
+    "delete": "Delete",
+    "search": "Search",
+    "loading": "Loading data…",
+    "noData": "No data",
+    "noDataLower": "no data",
+    "none": "none",
+    "noRecords": "No records",
+    "nothingFound": "Nothing found",
+    "changeFilters": "Change the filters or the search query.",
+    "changeFiltersShort": "Change the filters.",
+    "demoData": "Demo data",
+    "demoCalc": "Demo calculation",
+    "updated": "Updated: {{value}}",
+    "daysCount_one": "{{count}} day",
+    "daysCount_other": "{{count}} days",
+    "select": {
+      "placeholder": "Select…",
+      "empty": "No options"
+    }
+  },
+  "status": {
+    "planned": "Planned",
+    "expected": "Expected",
+    "completed": "Completed",
+    "overdue": "Overdue",
+    "overdueLower": "overdue",
+    "txCompleted": "Posted",
+    "txPending": "Pending"
+  },
+  "categories": {
+    "revenue": "Revenue",
+    "purchases": "Purchases",
+    "utilities": "Utilities",
+    "taxes": "Taxes",
+    "leasing": "Leasing",
+    "logistics": "Logistics"
+  },
+  "errors": {
+    "loadTitle": "Could not load data",
+    "loadDefault": "An error occurred while contacting the server.",
+    "demoLoad": "Could not get data from the server (demo error).",
+    "api": "API error: {{status}}",
+    "unknown": "Unknown error",
+    "unsupportedFormat": "Unsupported file format. Allowed: CSV, TXT, XLS, XLSX.",
+    "fileTooLarge": "The file is larger than 10 MB.",
+    "parseFailed": "Could not recognise the file structure (demo error)."
+  },
+  "quality": {
+    "completeness": "Data completeness",
+    "reserveStatement": "The reserve account statement for the last 2 days has not been uploaded (demo).",
+    "noData": "No data has been loaded yet. Import a statement.",
+    "noBalance": "The balance of the main settlement account is unknown — the forecast has not been built.",
+    "partialStatement": "The statement is incomplete: the last 5 days are missing.",
+    "unconfirmedReceipts": "Some expected receipts have not been confirmed by counterparties."
+  },
+  "risk": {
+    "title": "Cash shortage risk",
+    "titleUnknown": "Not enough data to assess the risk",
+    "titleLow": "No cash shortage is expected within the forecast horizon",
+    "unknownText": "The forecast has not been built: balance data is missing. Upload a statement — results are never filled in automatically.",
+    "shortageDate": "Expected shortage date",
+    "deficit": "Estimated deficit",
+    "probability": "Probability (model estimate)",
+    "probabilityNone": "not calculated",
+    "estimateNote": "An estimate, not a guarantee",
+    "factorsTitle": "Main risk factors",
+    "createScenario": "Create scenario",
+    "detailedForecast": "Detailed forecast",
+    "badge": {
+      "low": "Low risk",
+      "medium": "Medium risk",
+      "high": "High risk",
+      "unknown": "Risk not assessed"
+    },
+    "factors": {
+      "payments": {
+        "label": "Payment concentration",
+        "description": "Large payments are scheduled before {{untilShortDate}}: {{namesKeys}}."
+      },
+      "lateReceipt": {
+        "label": "Receipt after the deficit date",
+        "description": "{{nameKey}} is expected on {{onShortDate}}, after the first shortage date. A delay would deepen the deficit."
+      },
+      "overdue": {
+        "label": "Overdue receipts",
+        "description": "{{namesKeys}}: payment is overdue and not included in the forecast."
+      }
+    }
+  },
+  "chart": {
+    "aria": "Cash balance forecast chart",
+    "actual": "Actual",
+    "forecast": "Forecast",
+    "deficit": "Deficit",
+    "band": "Uncertainty range",
+    "today": "Today",
+    "shortageDate": "Shortage date",
+    "tooltip": {
+      "actual": "actual",
+      "forecast": "forecast",
+      "balanceActual": "Balance (actual)",
+      "balanceOf": "Balance ({{name}})",
+      "range": "Range",
+      "inflow": "Receipts",
+      "outflow": "Payments"
+    }
+  },
+  "dashboard": {
+    "title": "Overview",
+    "descShortage": "{{days}}-day forecast. Expected date of a possible shortage: {{date}}.",
+    "descDefault": "Current liquidity and cash-flow forecast.",
+    "periodAria": "Forecast period",
+    "import": "Import statement",
+    "incompleteTitle": "Data is incomplete — some indicators may be unavailable",
+    "incompleteText": "Missing values are not treated as zero. Import a statement to build the forecast.",
+    "kpi": {
+      "balance": "Current balance",
+      "balanceUnknown": "Balance unknown — not the same as zero",
+      "asOf": "As of {{date}}",
+      "minBalance": "Minimum balance",
+      "minDeficit": "Deficit · {{date}}",
+      "minForecast": "Forecast · {{date}}",
+      "forecastNotBuilt": "Forecast not built",
+      "inflows": "Expected receipts",
+      "inflowsHint": "Next {{days}} days · expectations, not actuals",
+      "risk": "Liquidity risk",
+      "risk_high": "High",
+      "risk_medium": "Medium",
+      "risk_low": "Low",
+      "risk_unknown": "Not assessed",
+      "riskShortage": "Shortage ≈ {{date}}",
+      "riskUnknown": "Not enough data",
+      "riskNone": "No shortage expected"
+    },
+    "chartTitle": "Cash balance forecast",
+    "chartSubtitle": "14 days of actuals and a {{days}}-day forecast",
+    "noChartTitle": "No data for the chart",
+    "noChartText": "Import a bank statement to build the forecast.",
+    "noBalanceChart": "The forecast has not been built: the current balance is unknown. Only actuals are shown.",
+    "upcomingPayments": "Upcoming payments",
+    "expectedReceipts": "Expected receipts",
+    "noUpcoming": "No upcoming items found.",
+    "dataState": "Data status",
+    "mockNote": "All figures are demonstration (mock) data. Forecast horizon: {{days}} days. Amounts come from a simulated model, not a real calculation."
+  },
+  "forecast": {
+    "title": "Forecast",
+    "description": "Daily cash balance forecast and the date of a possible shortage.",
+    "horizonAria": "Forecast horizon",
+    "unavailableTitle": "Forecast unavailable",
+    "unavailableText": "There is no data to build a forecast. Import a statement in Settings.",
+    "cardTitle": "Balance forecast",
+    "caption": "The grey line is confirmed actuals, the green line is the forecast, the red zone is a possible deficit.",
+    "captionBand": "The translucent band is the uncertainty range supplied by the model.",
+    "tableTitle": "Daily forecast",
+    "tableSubtitle": "Deficit days are marked with an icon and red colour",
+    "col": {
+      "date": "Date",
+      "inflow": "Receipts",
+      "outflow": "Payments",
+      "balance": "Forecast balance",
+      "range": "Range (estimate)"
+    }
+  },
+  "transactions": {
+    "title": "Transactions",
+    "description": "History of receipts and withdrawals across accounts.",
+    "searchPlaceholder": "Search by counterparty or description",
+    "allDirections": "All directions",
+    "allCategories": "All categories",
+    "incoming": "Incoming",
+    "outgoing": "Outgoing",
+    "incomingPlural": "Incoming",
+    "outgoingPlural": "Outgoing",
+    "emptyTitle": "No transactions yet",
+    "emptyText": "Import a bank statement to see the transaction history.",
+    "shown": "Showing {{shown}} of {{total}}. All amounts in roubles.",
+    "col": {
+      "date": "Date",
+      "counterparty": "Counterparty / description",
+      "direction": "Direction",
+      "category": "Category",
+      "status": "Status",
+      "amount": "Amount"
+    }
+  },
+  "obligations": {
+    "title": "Payments & obligations",
+    "description": "Scheduled payments and expected receipts.",
+    "payment": "Payment",
+    "receipt": "Receipt",
+    "paymentLower": "payment",
+    "receiptLower": "receipt",
+    "typeAria": "Type",
+    "kindAll": "Payments and receipts",
+    "kindPayments": "Payments only",
+    "kindReceipts": "Receipts only",
+    "statusAll": "All statuses",
+    "emptyTitle": "No scheduled items",
+    "emptyText": "Payments and expected receipts will appear once data is loaded.",
+    "overdueCount": "Overdue items: {{count}}.",
+    "overdueNote": "Overdue payments and receipts are not included in the forecast.",
+    "col": {
+      "name": "Name",
+      "date": "Planned date",
+      "status": "Status",
+      "amount": "Expected amount",
+      "note": "Source / note"
+    }
+  },
+  "scenarios": {
+    "title": "Scenarios",
+    "description": "“What if?” model: change payment dates and amounts or add a receipt, and compare with the baseline forecast.",
+    "base": "Baseline forecast",
+    "scenario": "Scenario",
+    "tplDelay": "Postpone the TechSnab payment by 7 days",
+    "tplEarly": "Rostov-Stroy pays 4 days earlier",
+    "customName": "My scenario {{n}}",
+    "new": "New scenario",
+    "unavailableTitle": "Scenarios unavailable",
+    "unavailableText": "Modelling needs a known current balance and payment data. Import a statement.",
+    "demoTitle": "Demo calculation in the browser.",
+    "demoText": "Daily balance = current balance + receipts − payments up to and including that date. Overdue and completed items are excluded. The result illustrates the rules; it is not a model forecast. Scenario templates only contain predefined input changes; the results are recalculated each time.",
+    "chartTitle": "Baseline forecast and scenario",
+    "chartHintBase": "Select or create a scenario to see the differences.",
+    "chartHintActive": "Scenario: {{name}}",
+    "cmp": {
+      "minBalance": "Minimum balance",
+      "shortageDate": "Shortage date",
+      "deficit": "Deficit",
+      "deficitNote": "Deficit",
+      "endBalance": "End-of-period balance",
+      "base": "Baseline",
+      "better": "Better than baseline: {{delta}}",
+      "worse": "Worse than baseline: {{delta}}"
+    },
+    "editor": {
+      "title": "Editable payments and receipts",
+      "locked": "The baseline forecast cannot be edited — create or select a scenario.",
+      "hint": "Change an item’s date or amount — the result is recalculated.",
+      "item": "Item",
+      "date": "Date",
+      "amount": "Amount, ₽",
+      "reset": "Reset",
+      "planned": "planned {{date}}",
+      "changed": "changed",
+      "addTitle": "Add an expected operation",
+      "addHint": "For example, an expected receipt from a new contract.",
+      "type": "Type",
+      "name": "Name",
+      "namePlaceholder": "For example, customer prepayment",
+      "add": "Add"
+    }
+  },
+  "planVsActual": {
+    "title": "Plan vs. actual",
+    "description": "Comparison of forecast and actual receipts, payments and balance.",
+    "periodAria": "Period",
+    "noActualTitle": "No actual data",
+    "noActualText": "To compare plan and actual, import a bank statement for the selected period.",
+    "plan": "Plan",
+    "actual": "Actual",
+    "receipts": "Receipts",
+    "payments": "Payments",
+    "endBalance": "End-of-period balance",
+    "balanceTitle": "Balance: forecast vs. actual",
+    "forecastPlan": "Forecast (plan)",
+    "chartAria": "Balance chart: forecast vs. actual",
+    "detailTitle": "Daily breakdown",
+    "detailSubtitle": "Planned values are for demonstration.",
+    "noVariance": "No variance",
+    "within": "within 5%",
+    "worse": "worse than plan",
+    "better": "better than plan",
+    "col": {
+      "date": "Date",
+      "plannedIn": "Receipts: plan",
+      "plannedOut": "Payments: plan",
+      "variance": "Variance"
+    }
+  },
+  "assistant": {
+    "title": "AI assistant",
+    "description": "Helps you understand the forecast, the causes of shortages and scenarios.",
+    "demoReplies": "Demo replies",
+    "welcome": "Hello! I explain the data available in the app: balance forecast, shortage risk, payments and receipts. I do not invent figures. For now I answer from canned templates — no AI service is connected.",
+    "error": "Could not get a reply: {{reason}}",
+    "thinking": "The assistant is analysing the data…",
+    "inputAria": "Question for the assistant",
+    "inputPlaceholder": "Ask a question about the forecast…",
+    "send": "Send",
+    "sourceLabel": "Source: {{sources}} (demo data)",
+    "suggestions": {
+      "cause": "Why might a cash shortage occur?",
+      "balance": "What is the current balance and minimum forecast?",
+      "scenario": "How can I model a scenario with a postponed payment?",
+      "review": "Which payments or receipts should I check?"
+    },
+    "sources": {
+      "forecast": "Balance forecast",
+      "factors": "Risk factors",
+      "obligations": "Payments & obligations",
+      "quality": "Data quality"
+    },
+    "replies": {
+      "noData": "There is not enough data to answer: the forecast has not been built or balances are missing. Import a statement in Settings — then I can explain the forecast.",
+      "scenario": "To model a scenario, open Scenarios. For example, you could shift: {{shiftItems}}. The result is recalculated in the browser using simple, transparent rules and is a demonstration.",
+      "review": "Worth checking: {{overdueItems}}.",
+      "reviewNone": "Worth checking: there are no overdue items.",
+      "hintsDisclaimer": "These are hints based on the app’s data, not financial advice.",
+      "balance": "According to the app’s data, the current balance is {{currentAmount}}. The minimum forecast balance is {{minAmount}} on {{minShortDate}}.",
+      "noShortage": "No cash shortage was found within the forecast horizon. The minimum balance is {{minAmount}}.",
+      "shortage": "The forecast shows a possible shortage on {{shortageShortDate}} — an estimated deficit of {{deficitAmount}}.",
+      "shortageProb": "The forecast shows a possible shortage on {{shortageShortDate}} — an estimated deficit of {{deficitAmount}}; the model’s probability estimate is {{probabilityPercent}} (an estimate, not a guarantee).",
+      "factorsList": "Main factors: {{factorsKeys}}. See the Forecast page for details."
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "Application and organisation preferences, statement import.",
+    "language": {
+      "title": "Language",
+      "subtitle": "Interface language. Saved in this browser."
+    },
+    "org": {
+      "title": "Organisation and application",
+      "subtitle": "Saved in this browser only.",
+      "name": "Organisation name",
+      "currency": "Currency",
+      "currencyHint": "Only roubles are supported in the prototype.",
+      "rub": "Russian rouble (RUB)",
+      "horizon": "Default forecast horizon",
+      "notify": "Notify me about shortage risk"
+    },
+    "demo": {
+      "title": "Data-state demonstration",
+      "subtitle": "Prototype only: forces interface states to be shown.",
+      "label": "Data state",
+      "hint": "Applies to all pages. Not used with a real API.",
+      "options": {
+        "normal": "Normal data",
+        "loading": "Slow loading",
+        "error": "Loading error",
+        "empty": "No data",
+        "incomplete": "Incomplete data"
+      }
+    }
+  },
+  "import": {
+    "title": "Bank statement import",
+    "modalTitle": "Bank statement import",
+    "subtitle": "Interface simulation — nothing is uploaded to a server.",
+    "simulation": "Simulation",
+    "noServer": "No server is connected: the file is not uploaded or processed.",
+    "dataUsedTitle": "What data will be used",
+    "dataUsedText": "Date, amount, direction (incoming / outgoing), counterparty and payment purpose — to build the balance history and match planned payments with actuals.",
+    "fileAria": "Statement file",
+    "choose": "Choose a statement file",
+    "chooseAnother": "Choose another file",
+    "formats": "CSV, TXT, XLS, XLSX · up to 10 MB",
+    "file": "File",
+    "size": "Size",
+    "sizeKb": "{{value}} KB",
+    "simulateError": "Simulate a recognition error",
+    "processing": "Processing the file (simulation)…",
+    "success_one": "Simulation complete: “recognised” {{count}} operation for the period {{from}} — {{to}}. Real data has not been changed.",
+    "success_other": "Simulation complete: “recognised” {{count}} operations for the period {{from}} — {{to}}. Real data has not been changed.",
+    "run": "Import (simulation)"
+  },
+  "mock": {
+    "names": {
+      "rent": "Office & warehouse rent",
+      "payroll": "Payroll",
+      "vat": "Quarterly VAT",
+      "utilities": "Utilities",
+      "agroYug": "Supplier Agro-Yug",
+      "loan": "Loan repayment",
+      "techSnab": "Supplier TechSnab",
+      "profitTax": "Corporate income tax",
+      "advance": "Employee advance",
+      "leasingPayment": "Leasing payment",
+      "insurance": "Insurance contributions",
+      "contractor": "Contractor payment",
+      "dontorg": "Dontorg LLC",
+      "yugAgro": "YugAgro JSC",
+      "vasiliev": "Sole proprietor Vasiliev",
+      "rostovStroy": "Rostov-Stroy LLC",
+      "kubanFood": "Kuban-Food LLC",
+      "agroPartner": "Agro-Partner JSC",
+      "yugEnergo": "YugEnergo LLC",
+      "donpak": "Supplier Donpak",
+      "taxService": "Federal Tax Service",
+      "leasingYug": "Leasing-Yug",
+      "logisticPro": "LogisticPro LLC"
+    },
+    "notes": {
+      "leaseContract": "Lease agreement No. 14",
+      "payrollCalendar": "Payroll calendar",
+      "taxCalendar": "Tax calendar",
+      "invoiceAY": "Invoice AY-2217",
+      "loanSchedule": "Repayment schedule",
+      "invoiceTS": "Invoice TS-0931",
+      "act58": "Act No. 58",
+      "invoice1204": "Payment for invoice No. 1204",
+      "supplyContract": "Payment under the supply contract",
+      "postponedBefore": "The payment date has been postponed before",
+      "invoice1231": "Payment for invoice No. 1231",
+      "overdueReceipt": "Payment not received, excluded from the forecast",
+      "overduePayment": "Not paid, excluded from the forecast"
+    },
+    "tx": {
+      "invoice": "Payment for invoice No. {{n}}",
+      "contract": "Payment under contract No. {{n}}",
+      "pendingIn": "Incoming payment pending",
+      "pendingOut": "Outgoing payment pending"
+    }
+  }
+}
