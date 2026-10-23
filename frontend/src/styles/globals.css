@@ -79,11 +79,8 @@ h1, h2, h3, p { margin: 0; }
 }
 
 /* Sidebar transitions kept minimal */
-.sidebar { transition: width 0.15s ease; }
+.sidebar { transition: width var(--motion-standard) var(--ease); }
 
-@media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; animation: none !important; }
-}
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.9s linear infinite; }
@@ -114,13 +111,13 @@ h1, h2, h3, p { margin: 0; }
   height: 38px; width: 100%; padding: 0 10px 0 12px; text-align: left;
   background: var(--c-surface); border: var(--border); border-radius: var(--radius-control);
   color: var(--c-ink); font: inherit; cursor: pointer;
-  transition: border-color 0.12s ease, background-color 0.12s ease;
+  transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease);
 }
 .select-trigger:hover:not(:disabled) { background: var(--c-hover); }
 .select-trigger[aria-expanded='true'] { border-color: var(--c-primary); }
 .select-trigger:focus-visible { outline: 2px solid var(--c-primary); outline-offset: -1px; border-color: var(--c-primary); }
 .select-trigger:disabled { background: var(--c-app); color: var(--c-muted); cursor: not-allowed; opacity: 0.8; }
-.select-chevron { transition: transform 0.15s ease; }
+.select-chevron { transition: transform var(--motion-fast) var(--ease); }
 .select-chevron-open { transform: rotate(180deg); }
 
 .select-menu {
@@ -144,10 +141,6 @@ h1, h2, h3, p { margin: 0; }
   .select-chevron, .select-trigger { transition: none; }
 }
 
-/* Short cross-fade only while the theme is being switched */
-.theme-transition, .theme-transition *, .theme-transition *::before, .theme-transition *::after {
-  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, fill 0.2s ease !important;
-}
 
 /* ---------- Checkbox (native input, restyled) ---------- */
 input[type='checkbox'] {
@@ -199,4 +192,82 @@ input[type='checkbox']:disabled:not(:checked):not(:indeterminate) { background: 
 
 @media (prefers-reduced-motion: reduce) {
   input[type='checkbox'], input[type='checkbox']::before { transition: none; }
+}
+
+/* ================= Motion ================= */
+
+/* Buttons & clickable controls: colour feedback + a small press effect. */
+button,
+.pressable {
+  transition:
+    background-color var(--motion-fast) var(--ease),
+    border-color var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease),
+    box-shadow var(--motion-fast) var(--ease),
+    opacity var(--motion-fast) var(--ease),
+    transform var(--motion-fast) var(--ease);
+}
+button:not(:disabled):not(.select-trigger):active,
+.pressable:active {
+  transform: scale(0.98);
+}
+button:disabled { cursor: not-allowed; }
+/* Sidebar items are links: press feedback without moving the whole row much. */
+.pressable svg { transition: color var(--motion-fast) var(--ease); }
+
+/* Entrance: opacity + small vertical offset, played once on mount. */
+@keyframes enter {
+  from { opacity: 0; transform: translateY(8px); }
+}
+.enter {
+  animation: enter var(--motion-entrance) var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+@keyframes fade-in { from { opacity: 0; } }
+.page-enter { animation: fade-in var(--motion-standard) var(--ease) both; }
+
+/* Overlays */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(var(--pop-from, -4px)); }
+}
+.pop-in { animation: pop-in var(--motion-fast) var(--ease) both; }
+.select-menu { animation: pop-in var(--motion-fast) var(--ease) both; }
+.select-menu[data-up] { --pop-from: 4px; }
+@keyframes dialog-in {
+  from { opacity: 0; transform: scale(0.97); }
+}
+.dialog-in { animation: dialog-in var(--motion-standard) var(--ease) both; }
+.backdrop-in { animation: fade-in var(--motion-standard) var(--ease) both; }
+
+/* Theme toggle icons: stacked, cross-rotate */
+.theme-icon {
+  position: absolute;
+  transition: transform 300ms var(--ease), opacity 300ms var(--ease);
+}
+.theme-icon[data-active='false'] { opacity: 0; transform: rotate(-90deg) scale(0.5); }
+.theme-icon[data-active='true'] { opacity: 1; transform: rotate(0) scale(1); }
+
+/* Smooth theme change: only paint properties, only while switching (class set by setTheme). */
+@media (prefers-reduced-motion: no-preference) {
+  .theme-transition,
+  .theme-transition *,
+  .theme-transition *::before,
+  .theme-transition *::after {
+    transition-property: background-color, border-color, color, fill, stroke, box-shadow !important;
+    transition-duration: var(--motion-theme) !important;
+    transition-timing-function: var(--ease) !important;
+  }
+}
+
+/* Reduced motion: no entrance, rotation, scale or sliding. Colour changes and focus stay (instant). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .enter, .page-enter, .pop-in, .select-menu, .dialog-in, .backdrop-in { animation: none !important; }
+  button:active, .pressable:active { transform: none !important; }
+  .theme-icon[data-active='false'] { transform: none; }
 }

@@ -204,6 +204,7 @@ export function Select({ options, value, onChange, label, hint, disabled, placeh
             aria-activedescendant={active >= 0 ? `${uid}-opt-${active}` : undefined}
             onKeyDown={onMenuKey}
             className="select-menu"
+            data-up={pos.up || undefined}
             style={{
               left: pos.left,
               width: pos.width,

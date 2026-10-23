@@ -29,7 +29,8 @@ export function setTheme(next: Theme) {
     /* storage unavailable: theme still applies for this session */
   }
   listeners.forEach((l) => l())
-  window.setTimeout(() => root.classList.remove('theme-transition'), 250)
+  // Slightly longer than --motion-theme so the transition can finish before the class is removed.
+  window.setTimeout(() => root.classList.remove('theme-transition'), 320)
 }
 
 export function useTheme(): Theme {

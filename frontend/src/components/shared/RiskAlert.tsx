@@ -25,7 +25,7 @@ export function RiskAlert({ risk, showLinks = true }: { risk: RiskAssessment; sh
   if (risk.level === 'low') title = t('risk.titleLow')
 
   return (
-    <section className={cn('rounded-card border p-5 flex flex-col gap-4', s.box)} aria-label={t('risk.title')}>
+    <section className={cn('enter rounded-card border p-5 flex flex-col gap-4', s.box)} aria-label={t('risk.title')}>
       <div className="flex items-start gap-3">
         <Icon size={22} className={cn('shrink-0 mt-0.5', s.icon)} />
         <div className="min-w-0 flex-1">

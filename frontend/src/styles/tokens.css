@@ -100,3 +100,12 @@
 :root[data-theme='dark'] {
   --checkbox-check: #111813;
 }
+
+/* Motion */
+:root {
+  --motion-fast: 150ms;
+  --motion-standard: 200ms;
+  --motion-theme: 250ms;
+  --motion-entrance: 300ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}

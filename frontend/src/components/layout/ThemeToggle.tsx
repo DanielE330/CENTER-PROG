@@ -14,9 +14,10 @@ export function ThemeToggle() {
         onClick={() => setTheme(next)}
         aria-label={label}
         aria-pressed={theme === 'dark'}
-        className="grid place-items-center size-10 rounded-control hover:bg-hover text-muted cursor-pointer"
+        className="relative grid place-items-center size-10 rounded-control hover:bg-hover text-muted cursor-pointer"
       >
-        {theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}
+        <Moon size={19} className="theme-icon" data-active={theme === 'light'} aria-hidden />
+        <Sun size={19} className="theme-icon" data-active={theme === 'dark'} aria-hidden />
       </button>
     </Tooltip>
   )

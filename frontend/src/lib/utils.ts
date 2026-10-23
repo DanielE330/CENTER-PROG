@@ -9,4 +9,8 @@ export function cssVar(name: string, fallback: string): string {
   return v || fallback
 }
 
+export function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))

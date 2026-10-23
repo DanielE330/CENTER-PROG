@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
@@ -12,6 +12,7 @@ export function AppLayout() {
   const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null)
   const [drawer, setDrawer] = useState(false)
   const demo = useDemoState()
+  const { pathname } = useLocation()
   const { t } = useTranslation()
 
   const collapsed = userCollapsed ?? tablet
@@ -33,12 +34,15 @@ export function AppLayout() {
       <div className="flex-1 min-w-0 flex flex-col h-full">
         <Header onMenu={() => setDrawer(true)} />
         {demo !== 'normal' && (
-          <div className="bg-warning-soft text-warning text-[13px] px-4 sm:px-8 py-1.5 font-medium">
+          <div className="pop-in bg-warning-soft text-warning text-[13px] px-4 sm:px-8 py-1.5 font-medium">
             {t('demo.banner', { state: t(`demo.states.${demo}`) })}
           </div>
         )}
         <main className="flex-1 overflow-y-auto overflow-x-hidden">
-          <Outlet />
+          {/* Re-keyed per route so the short fade replays on navigation; app state outside the page is untouched. */}
+          <div key={pathname} className="page-enter">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

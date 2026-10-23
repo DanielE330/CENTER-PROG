@@ -71,7 +71,7 @@ function DashboardBody({ f, days, obligations }: { f: ForecastResponse; days: nu
   return (
     <>
       {quality.completeness < 80 && !noData && (
-        <div className="flex items-start gap-2 rounded-card border border-warning/40 bg-warning-soft p-4 text-sm" role="alert">
+        <div className="enter flex items-start gap-2 rounded-card border border-warning/40 bg-warning-soft p-4 text-sm" role="alert">
           <AlertTriangle size={18} className="text-warning shrink-0 mt-0.5" />
           <div>
             <p className="font-medium">{t('dashboard.incompleteTitle')}</p>
@@ -82,12 +82,14 @@ function DashboardBody({ f, days, obligations }: { f: ForecastResponse; days: nu
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
+          index={0}
           icon={<Wallet size={16} />}
           label={t('dashboard.kpi.balance')}
           value={noBalance ? t('common.noData') : formatCurrency(summary.currentBalance)}
           hint={noBalance ? t('dashboard.kpi.balanceUnknown') : t('dashboard.kpi.asOf', { date: formatDate(f.today) })}
         />
         <StatCard
+          index={1}
           icon={<TrendingDown size={16} />}
           label={t('dashboard.kpi.minBalance')}
           value={summary.minBalance == null ? t('common.noData') : formatCurrency(summary.minBalance)}
@@ -99,12 +101,14 @@ function DashboardBody({ f, days, obligations }: { f: ForecastResponse; days: nu
           }
         />
         <StatCard
+          index={2}
           icon={<ArrowDownToLine size={16} />}
           label={t('dashboard.kpi.inflows')}
           value={noData ? t('common.noData') : formatCurrency(summary.expectedInflows)}
           hint={noData ? undefined : t('dashboard.kpi.inflowsHint', { days: f.horizonDays })}
         />
         <StatCard
+          index={3}
           icon={<ShieldAlert size={16} />}
           label={t('dashboard.kpi.risk')}
           value={t(`dashboard.kpi.risk_${risk.level}`)}

@@ -12,7 +12,7 @@ import { Badge, MockBadge } from '../../components/shared/StatusBadge'
 import { Select } from '../../components/ui/Select'
 import { usePlanActual } from '../../hooks/queries'
 import { formatAxisNumber, formatCurrency, formatDate, formatShortDate, formatSignedCurrency } from '../../lib/formatters'
-import { cssVar } from '../../lib/utils'
+import { cssVar, prefersReducedMotion } from '../../lib/utils'
 import { useTheme } from '../../lib/theme'
 import type { PlanActualRow } from '../../types'
 
@@ -143,21 +143,24 @@ function BalanceChart({ rows }: { rows: PlanActualRow[] }) {
     const surface = cssVar('--c-surface', '#FFFFFF')
     const ink = cssVar('--c-ink', '#202923')
     return {
-      animation: false,
+      animation: !prefersReducedMotion(),
+      animationDuration: 600,
+      animationDurationUpdate: 450,
+      animationEasing: 'cubicOut',
       grid: { left: 8, right: 16, top: 36, bottom: 8, containLabel: true },
       legend: { top: 0, left: 0, icon: 'roundRect', itemWidth: 14, itemHeight: 3, textStyle: { color: muted, fontSize: 12 } },
       xAxis: { type: 'category', data: rows.map((r) => r.date), boundaryGap: false, axisTick: { show: false }, axisLine: { lineStyle: { color: line } }, axisLabel: { color: muted, fontSize: 12, hideOverlap: true, formatter: (v: string) => formatShortDate(v) } },
       yAxis: { type: 'value', scale: true, axisLabel: { color: muted, fontSize: 12, formatter: (v: number) => formatAxisNumber(v) }, splitLine: { lineStyle: { color: line } } },
       tooltip: { trigger: 'axis', confine: true, backgroundColor: surface, borderColor: line, textStyle: { color: ink }, valueFormatter: (v) => formatCurrency(v as number) },
       series: [
-        { name: t('planVsActual.forecastPlan'), type: 'line', symbol: 'none', lineStyle: { color: primary, width: 2.5, type: 'dashed' }, itemStyle: { color: primary }, data: rows.map((r) => r.plannedBalance) },
-        { name: t('planVsActual.actual'), type: 'line', symbol: 'none', lineStyle: { color: neutral, width: 2.5 }, itemStyle: { color: neutral }, data: rows.map((r) => r.actualBalance) },
+        { id: 'plan', name: t('planVsActual.forecastPlan'), type: 'line', symbol: 'none', lineStyle: { color: primary, width: 2.5, type: 'dashed' }, itemStyle: { color: primary }, data: rows.map((r) => r.plannedBalance) },
+        { id: 'actual', name: t('planVsActual.actual'), type: 'line', symbol: 'none', lineStyle: { color: neutral, width: 2.5 }, itemStyle: { color: neutral }, data: rows.map((r) => r.actualBalance) },
       ],
     }
   }, [rows, theme, lang, t])
   return (
     <div role="img" aria-label={t('planVsActual.chartAria')} style={{ height: 320 }}>
-      <ReactECharts option={option} notMerge style={{ height: '100%', width: '100%' }} />
+      <ReactECharts option={option} style={{ height: '100%', width: '100%' }} />
     </div>
   )
 }

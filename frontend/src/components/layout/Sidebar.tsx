@@ -50,7 +50,7 @@ export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
             aria-label={label}
             className={({ isActive }) =>
               cn(
-                'flex items-center gap-3 h-10 rounded-control text-sm font-medium transition-colors',
+                'pressable flex items-center gap-3 h-10 rounded-control text-sm font-medium',
                 compact ? 'justify-center' : 'px-3',
                 isActive ? 'bg-primary-soft text-primary' : 'text-ink hover:bg-hover',
               )

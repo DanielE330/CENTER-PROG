@@ -10,10 +10,10 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants: Record<Variant, string> = {
-  primary: 'bg-primary text-on-primary hover:bg-primary-hover border-transparent',
-  secondary: 'bg-surface text-ink border-line hover:bg-hover',
-  ghost: 'bg-transparent text-ink border-transparent hover:bg-hover',
-  danger: 'bg-surface text-danger border-line hover:bg-danger-soft',
+  primary: 'bg-primary text-on-primary enabled:hover:bg-primary-hover border-transparent',
+  secondary: 'bg-surface text-ink border-line enabled:hover:bg-hover',
+  ghost: 'bg-transparent text-ink border-transparent enabled:hover:bg-hover',
+  danger: 'bg-surface text-danger border-line enabled:hover:bg-danger-soft',
 }
 
 export function Button({ variant = 'secondary', size = 'md', className, type = 'button', ...rest }: Props) {
@@ -22,7 +22,7 @@ export function Button({ variant = 'secondary', size = 'md', className, type = '
       type={type}
       className={cn(
         'inline-flex items-center justify-center gap-2 border font-medium whitespace-nowrap cursor-pointer',
-        'rounded-control transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+        'rounded-control disabled:opacity-50 disabled:cursor-not-allowed',
         size === 'md' ? 'h-10 px-4 text-sm' : 'h-8 px-3 text-[13px]',
         variants[variant],
         className,

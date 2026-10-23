@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import type { ForecastPoint } from '../../types'
 import { formatAxisNumber, formatCompact, formatCurrency, formatDate, formatShortDate } from '../../lib/formatters'
-import { cssVar } from '../../lib/utils'
+import { cssVar, prefersReducedMotion } from '../../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from '../../lib/theme'
 
@@ -39,6 +39,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
     const surface = cssVar('--c-surface', '#FFFFFF')
     const onDanger = cssVar('--c-on-primary', '#FFFFFF')
 
+    const animate = !prefersReducedMotion() && points.length <= 400
     const dates = points.map((p) => p.date)
     const compareByDate = new Map(compare?.points.map((c) => [c.date, c.balance]))
     const hasBand = points.some((p) => p.lower != null && p.upper != null)
@@ -59,22 +60,23 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
 
     const series: NonNullable<EChartsOption['series']> = []
 
-    if (hasBand) {
-      series.push(
-        {
-          name: 'band-base', type: 'line', stack: 'band', symbol: 'none', silent: true,
-          lineStyle: { opacity: 0 }, tooltip: { show: false },
-          data: points.map((p) => (p.lower != null ? p.lower : null)),
-        },
-        {
-          name: t('chart.band'), type: 'line', stack: 'band', symbol: 'none', silent: true,
-          lineStyle: { opacity: 0 }, areaStyle: { color: primary, opacity: 0.1 },
-          data: points.map((p) => (p.lower != null && p.upper != null ? p.upper - p.lower : null)),
-        },
-      )
-    }
+    // Every series is always present (empty when unused) and has a stable id: with merge updates
+    // ECharts then morphs old data into new data, and nothing stale is left behind.
+    series.push(
+      {
+        id: 'band-base', name: 'band-base', type: 'line', stack: 'band', symbol: 'none', silent: true,
+        lineStyle: { opacity: 0 }, tooltip: { show: false },
+        data: hasBand ? points.map((p) => (p.lower != null ? p.lower : null)) : [],
+      },
+      {
+        id: 'band', name: t('chart.band'), type: 'line', stack: 'band', symbol: 'none', silent: true,
+        lineStyle: { opacity: 0 }, areaStyle: { color: primary, opacity: 0.1 },
+        data: hasBand ? points.map((p) => (p.lower != null && p.upper != null ? p.upper - p.lower : null)) : [],
+      },
+    )
 
     series.push({
+      id: 'actual',
       name: t('chart.actual'),
       type: 'line',
       symbol: 'none',
@@ -83,18 +85,18 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
       data: points.map((p) => p.actual),
     })
 
-    if (compare) {
-      series.push({
-        name: compare.name,
-        type: 'line',
-        symbol: 'none',
-        lineStyle: { color: muted, width: 2, type: 'dashed' },
-        itemStyle: { color: muted },
-        data: points.map((p) => compareByDate.get(p.date) ?? null),
-      })
-    }
+    series.push({
+      id: 'compare',
+      name: compare?.name ?? 'compare',
+      type: 'line',
+      symbol: 'none',
+      lineStyle: { color: muted, width: 2, type: 'dashed' },
+      itemStyle: { color: muted },
+      data: compare ? points.map((p) => compareByDate.get(p.date) ?? null) : [],
+    })
 
     series.push({
+      id: 'forecast',
       name: forecastName,
       type: 'line',
       symbol: 'none',
@@ -111,36 +113,36 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
             : []),
         ],
       },
-      markArea: deficitAreas.length
-        ? { silent: true, itemStyle: { color: danger, opacity: 0.12 }, data: deficitAreas }
-        : undefined,
-      markPoint: shortagePoint?.forecast != null
-        ? {
-            symbolSize: 46,
-            itemStyle: { color: danger },
-            label: { formatter: '!', color: onDanger, fontWeight: 700, fontSize: 16 },
-            data: [{ name: t('chart.shortageDate'), coord: [shortagePoint.date, shortagePoint.forecast] }],
-          }
-        : undefined,
+      markArea: { silent: true, itemStyle: { color: danger, opacity: 0.12 }, data: deficitAreas },
+      markPoint: {
+        symbolSize: 46,
+        itemStyle: { color: danger },
+        label: { formatter: '!', color: onDanger, fontWeight: 700, fontSize: 16 },
+        data: shortagePoint?.forecast != null ? [{ name: t('chart.shortageDate'), coord: [shortagePoint.date, shortagePoint.forecast] }] : [],
+      },
     })
 
     // Negative stretches are redrawn in red (plus neighbouring points so the segment connects).
-    if (deficitAreas.length) {
-      const neg = (i: number) => points[i]?.forecast != null && (points[i].forecast as number) < 0
-      series.push({
-        name: t('chart.deficit'),
-        type: 'line',
-        symbol: 'none',
-        silent: true,
-        z: 5,
-        lineStyle: { color: danger, width: 2.5 },
-        itemStyle: { color: danger },
-        data: points.map((p, i) => (neg(i) || neg(i - 1) || neg(i + 1) ? p.forecast : null)),
-      })
-    }
+    const neg = (i: number) => points[i]?.forecast != null && (points[i].forecast as number) < 0
+    series.push({
+      id: 'deficit',
+      name: t('chart.deficit'),
+      type: 'line',
+      symbol: 'none',
+      silent: true,
+      z: 5,
+      lineStyle: { color: danger, width: 2.5 },
+      itemStyle: { color: danger },
+      data: deficitAreas.length ? points.map((p, i) => (neg(i) || neg(i - 1) || neg(i + 1) ? p.forecast : null)) : [],
+    })
 
     return {
-      animation: false,
+      // Moderate, easing-based motion; skipped for reduced-motion users and very long series.
+      animation: animate,
+      animationDuration: 600,
+      animationDurationUpdate: 450,
+      animationEasing: 'cubicOut',
+      animationEasingUpdate: 'cubicOut',
       color: [primary],
       grid: { left: 8, right: 16, top: 36, bottom: 8, containLabel: true },
       legend: {
@@ -199,7 +201,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
 
   return (
     <div role="img" aria-label={t('chart.aria')} style={{ width: '100%', height }}>
-      <ReactECharts option={option} notMerge style={{ width: '100%', height: '100%' }} />
+      <ReactECharts option={option} style={{ width: '100%', height: '100%' }} />
     </div>
   )
 }

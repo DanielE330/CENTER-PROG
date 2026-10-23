@@ -47,7 +47,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
             {risk?.shortageDate && <span className="absolute top-2 right-2.5 size-2 rounded-full bg-danger" />}
           </button>
           {open && (
-            <div className="card absolute right-0 top-12 w-80 max-w-[calc(100vw-2rem)] p-3 z-40" style={{ boxShadow: 'var(--shadow-pop)' }}>
+            <div className="card pop-in absolute right-0 top-12 w-80 max-w-[calc(100vw-2rem)] p-3 z-40" style={{ boxShadow: 'var(--shadow-pop)' }}>
               <p className="text-sm font-semibold px-2 pb-2">{t('header.notifications')}</p>
               {risk?.shortageDate ? (
                 <Link to="/forecast" onClick={() => setOpen(false)} className="block rounded-control p-2 hover:bg-hover">

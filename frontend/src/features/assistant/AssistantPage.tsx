@@ -83,7 +83,7 @@ export default function AssistantPage() {
                   key={k}
                   onClick={() => send(text)}
                   disabled={ask.isPending}
-                  className="rounded-full border border-line bg-surface px-3 py-1.5 text-[13px] hover:bg-primary-soft hover:border-primary cursor-pointer disabled:opacity-50"
+                  className="rounded-full border border-line bg-surface px-3 py-1.5 text-[13px] enabled:hover:bg-primary-soft enabled:hover:border-primary cursor-pointer disabled:opacity-50"
                 >
                   {text}
                 </button>
