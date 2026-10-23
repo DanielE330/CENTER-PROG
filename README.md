@@ -16,7 +16,7 @@
     docker/            Dockerfiles, Caddyfile
     docker-compose.yml, Makefile
     scripts/           dev.sh (run without Docker), gen_statement.py (demo data)
-    docs/              architecture.md, design.md, task/ (case brief PDF), forecast_evaluation.md
+    docs/              knowledge-base.md (start here), architecture.md, design.md, task/ (case brief PDF), forecast_evaluation.md
     data/              git-ignored: dataset (data/dataset/ from data/raw/*.zip), local run state (data/run/)
 
 ## Run without Docker
