@@ -29,6 +29,11 @@ if [ -z "${DEMO_CUTOFF:-}" ]; then
   DEMO_CUTOFF=$(grep -E '^DEMO_CUTOFF=' infra/.env 2>/dev/null | cut -d= -f2 | sed 's/[[:space:]#].*//' || true)
 fi
 export DEMO_CUTOFF=${DEMO_CUTOFF:-2026-07-12}
+# пароль демо-аккаунтов: seed_demo.sh и контейнеры должны видеть одно значение (по умолчанию demo12345)
+if [ -z "${DEMO_PASSWORD:-}" ]; then
+  DEMO_PASSWORD=$(grep -E '^DEMO_PASSWORD=' infra/.env 2>/dev/null | cut -d= -f2- | sed 's/[[:space:]]#.*//;s/[[:space:]]*$//' || true)
+fi
+export DEMO_PASSWORD=${DEMO_PASSWORD:-demo12345}
 
 case "${1:-up}" in
   up)
@@ -47,7 +52,9 @@ case "${1:-up}" in
     fi
     echo
     echo "Готово: http://localhost:$P"
-    if [ "${DEMO:-1}" != "0" ]; then echo "Демо-вход: demo@example.com / demo12345"; fi
+    if [ "${DEMO:-1}" != "0" ]; then
+      echo "Демо-вход: на странице входа блок «Тестовый вход» (Директор / Редактор / Наблюдатель), либо demo@example.com / $DEMO_PASSWORD"
+    fi
     echo "Письма (Mailpit): http://localhost:8025"
     ;;
   stop)   need_docker; $C down ;;

@@ -978,11 +978,41 @@ def logout(t: TokenIn):
         conn.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(t.token),))
 
 
+def demo_emails() -> set[str]:
+    """Белый список демо-аккаунтов (те же переменные и умолчания, что у быстрого входа в api)."""
+    env = os.environ.get
+    return {
+        (env("DEMO_DIRECTOR_EMAIL") or "demo@example.com").strip().lower(),
+        (env("DEMO_EDITOR_EMAIL") or "demo-editor@example.com").strip().lower(),
+        (env("DEMO_VIEWER_EMAIL") or "demo-viewer@example.com").strip().lower(),
+    }
+
+
+class DemoTrustIn(BaseModel):
+    email: str
+
+
+@app.post("/internal/v1/demo/trust")
+def demo_trust(b: DemoTrustIn):
+    """Демо-сотрудники входят кнопкой «Тестовый вход», поэтому им не нужен экран «Смените пароль» и подтверждение почты:
+    снимаем эти флаги. Работает только при DEMO_LOGIN=1, только для почт из белого списка и только для пароля,
+    заданного директором (сгенерированный пароль обязан быть сменён). Вызывает лишь api; наружу /internal/* не публикуется."""
+    email = b.email.strip().lower()
+    if os.environ.get("DEMO_LOGIN") != "1" or email not in demo_emails():
+        raise HTTPException(404, {"code": "demo_disabled"})
+    with db() as conn:
+        cur = conn.execute(
+            "UPDATE users SET must_change_password=0, email_verified=1 WHERE email=? AND password_generated=0",
+            (email,),
+        )
+    return {"ok": True, "updated": cur.rowcount}
+
+
 @app.on_event("startup")
 def seed_demo():
     if os.environ.get("DEMO_SEED") == "1":
         try:
-            register(Credentials(email="demo@example.com", password="demo12345"))
+            register(Credentials(email="demo@example.com", password=os.environ.get("DEMO_PASSWORD") or "demo12345"))
         except HTTPException:
             pass
         with db() as conn:

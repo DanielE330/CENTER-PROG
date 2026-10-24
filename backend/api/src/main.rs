@@ -4,6 +4,7 @@
 mod admin;
 mod advisor;
 mod demo;
+mod demo_login;
 mod http;
 mod legacy;
 mod mail;
@@ -68,6 +69,8 @@ async fn main() {
     let api = tenant_routes()
         // панель оператора платформы: отдельная cookie op_session, префикс /api/admin/v1 (admin.rs)
         .merge(admin::routes())
+        // быстрый вход в демо-аккаунты (кнопки на странице входа), только при DEMO_LOGIN=1: demo_login.rs
+        .merge(demo_login::routes(Arc::new(demo_login::DemoLogin::from_env())))
         .layer(middleware::from_fn(security_layer))
         .with_state(state.clone());
 

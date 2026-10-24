@@ -6,7 +6,7 @@
     git clone https://github.com/DanielE330/CI-hack.git && cd CI-hack
     ./run.sh            # сборка, запуск всех сервисов и загрузка демо-данных (первая сборка 15–25 мин, дальше быстро)
 
-Откройте http://localhost:3000, демо-вход `demo@example.com` / `demo12345`.
+Откройте http://localhost:3000, демо-вход `demo@example.com` / `demo12345` или кнопки «Тестовый вход» (Директор / Редактор / Наблюдатель) под формой входа.
 Письма (подтверждение почты, восстановление пароля, приглашения, алерты о разрывах, сводка) по умолчанию ловит Mailpit: http://localhost:8025. Реальный SMTP задаётся `SMTP_*` в `infra/.env`, подробности в `docs/notify.md`.
 `./run.sh stop` — остановить, `./run.sh reset` — удалить данные, `./run.sh logs`, `./run.sh status`.
 Первый оператор платформы задаётся `OPERATOR_EMAIL`/`OPERATOR_PASSWORD` в `infra/.env` (или командой `python -m backoffice.create_operator`), вход на `/operator`.
@@ -46,6 +46,13 @@
     make -C infra down
 
 Откройте http://localhost:3000. Демо-вход: `demo@example.com` / `demo12345` (создаётся при `DEMO_SEED=1`, это значение по умолчанию; для отключения задайте `DEMO_SEED=0`). У демо-пользователя выписка загружена до 2026-07-12; кнопка «Прошла неделя» на «Обзоре» подаёт следующую неделю через обычный импорт и пересчитывает прогноз (`DEMO_FEED_ENABLED`, `DEMO_CUTOFF`, см. `docs/microservices.md`).
+
+### Тестовый вход (кнопки для жюри)
+На странице входа под формой есть блок «Тестовый вход»: три кнопки (Директор, Редактор, Наблюдатель) входят в демо-компанию одним нажатием, без ввода пароля; у каждой подсказка, что может эта роль (подробно в `docs/roles.md`). Аккаунты: `demo@example.com` (director), `demo-editor@example.com` (editor), `demo-viewer@example.com` (viewer); пароль у всех `demo12345` (`DEMO_PASSWORD` в `infra/.env`). Сотрудников создаёт `infra/scripts/seed_demo.sh` (его запускает `./run.sh`; повторный запуск безопасен), экран «Смените пароль» им не показывается.
+- Включение: `DEMO_LOGIN=1`; если переменная пуста, она равна `DEMO_SEED` (по умолчанию 1). Выключение: `DEMO_LOGIN=0` в `infra/.env` и `./run.sh` (кнопок нет, `POST /api/v1/auth/demo/login` отвечает 404 `demo_disabled`).
+- Пароль подставляет сервер и в ответах и логах не появляется; войти можно только в три демо-почты. Если включена 2FA (`AUTH_REQUIRE_2FA=1`), после кнопки всё равно запрашивается код.
+- Контракт: `GET /api/v1/auth/demo` -> `{enabled, accounts:[{id, role, email}]}`; `POST /api/v1/auth/demo/login {account: director|editor|viewer}` -> как `POST /auth/login` (cookie `session`). Лимит 30 запросов в минуту на IP, 429 `demo_rate_limited`.
+- Публичный сервер с настоящими данными: поставьте `DEMO_LOGIN=0` и `DEMO_SEED=0`, иначе любой посетитель войдёт в демо-компанию без пароля.
 
 Порты: наружу публикуется только `3000` шлюза. Остальные сервисы и внутренний API `3100` доступны только внутри сети compose. При работе по обычному HTTP оставьте `COOKIE_SECURE=false` (значение по умолчанию).
 Данные хранятся в томах `auth-data`, `ecp-data`, `ledger-data`, `forecast-data`, `backoffice-data`, `notifier-data`, `notify-data`. Образы Docker: `infra/docker/rust.Dockerfile` (цели ledger, forecast, planfact, api) и `infra/docker/python.Dockerfile` (auth, parser, gov, ecp, onec, edo, bank, integrator, notifier, demo_feed, llm_gateway, advisor, backoffice, notify).

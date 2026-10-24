@@ -25,6 +25,9 @@ services:
     environment:
       AUTH_DB: /data/auth.db
       DEMO_SEED: ${DEMO_SEED:-1}
+      # тестовый вход (кнопки на странице входа): auth снимает у демо-сотрудников обязательную смену пароля и создаёт директора с этим паролем
+      DEMO_LOGIN: ${DEMO_LOGIN:-${DEMO_SEED:-1}}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo12345}
       # ключ шифрования секретов TOTP (пусто — файл mfa.key в томе); AUTH_REQUIRE_2FA=1 — 2FA для всех, кто входит по паролю
       AUTH_MFA_KEY: ${AUTH_MFA_KEY:-}
       AUTH_REQUIRE_2FA: ${AUTH_REQUIRE_2FA:-0}
@@ -247,7 +250,12 @@ services:
       SMTP_SECURITY: ${SMTP_SECURITY:-}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      MAIL_FROM: ${MAIL_FROM:-}
+      MAIL_FROM: ${MAIL_FROM:-}        # пусто — адрес SMTP_USER (провайдеры принимают только свой адрес отправителя)
+      SMTP_HELO: ${SMTP_HELO:-}        # имя в EHLO; пусто — хост из PUBLIC_URL или домен отправителя
+      SMTP_TLS_VERIFY: ${SMTP_TLS_VERIFY:-1}   # 0 — не проверять сертификат (только для своего сервера с самоподписанным)
+      SMTP_CA_FILE: ${SMTP_CA_FILE:-}  # путь к корневому сертификату внутри контейнера (смонтируйте файл через override)
+      SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-15}
+      SMTP_MAX_PER_MINUTE: ${SMTP_MAX_PER_MINUTE:-30}   # лимит скорости; 0 — без лимита
       # прежние переменные notifier (.env из ura): понимаются, если новых нет
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_SSL: ${SMTP_SSL:-}
@@ -339,6 +347,9 @@ services:
       BACKOFFICE_URL: http://backoffice:8013
       NOTIFY_URL: http://notify:8014
       DEMO_FEED_ENABLED: ${DEMO_FEED_ENABLED:-${DEMO_SEED:-1}}  # демо «Прошла неделя» только для demo@example.com
+      # кнопки «Тестовый вход» (Директор / Редактор / Наблюдатель) на странице входа; на публичном стенде с настоящими данными: DEMO_LOGIN=0
+      DEMO_LOGIN: ${DEMO_LOGIN:-${DEMO_SEED:-1}}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo12345}
       WEB_DIR: /app/frontend/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     networks: [internal, edge]

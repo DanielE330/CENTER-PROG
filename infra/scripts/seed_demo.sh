@@ -4,11 +4,15 @@
 # Демо «Прошла неделя»: демо-пользователь получает выписку только ДО даты отсечки DEMO_CUTOFF (по умолчанию 2026-07-12),
 # остальное отдаёт сервис demo_feed по кнопке в интерфейсе. DEMO_CUTOFF=none — загрузить выписку целиком.
 # Берёт data/dataset/statements/, а если его нет — демо-выписку data/demo/statements/ из репозитория (там только C001). Демо-вход: demo@example.com / demo12345 (DEMO_SEED=1).
+# Затем директор заводит демо-сотрудников demo-editor@example.com (editor) и demo-viewer@example.com (viewer) с тем же паролем
+# (публичный POST /api/v1/members, повторный запуск безопасен: 409 — не ошибка). Для кнопок «Тестовый вход» (DEMO_LOGIN=1) они входят
+# один раз через POST /auth/demo/login: сервер снимает у них обязательную смену пароля. Пароль демо-аккаунтов: DEMO_PASSWORD (по умолчанию demo12345).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 BASE=${1:-http://localhost:3000}; shift || true
 COMPANIES=${*:-C001}
 CUTOFF=${DEMO_CUTOFF:-2026-07-12}
+PASS=${DEMO_PASSWORD:-demo12345}
 JAR=$(mktemp); TMP=$(mktemp -d); trap 'rm -rf "$JAR" "$TMP"' EXIT
 # строки выписки с operation_date <= дата отсечки; заголовок и формат файла не меняются
 cut_statement() {
@@ -24,8 +28,9 @@ with open(src, encoding="utf-8-sig", newline="") as f, open(dst, "w", encoding="
 print(f"{n} операций до {cutoff}", file=sys.stderr)
 PY
 }
+json_obj() { python3 -c 'import json,sys; print(json.dumps(dict(a.split("=", 1) for a in sys.argv[1:])))' "$@"; }
 ME=$(curl -fsS -c "$JAR" -X POST "$BASE/api/v1/auth/login" -H 'content-type: application/json' \
-  -d '{"email":"demo@example.com","password":"demo12345"}')
+  -d "$(json_obj email=demo@example.com "password=$PASS")")
 CID=$(printf '%s' "$ME" | python3 -c 'import json,sys; print(json.load(sys.stdin)["company_id"])')
 jq_id() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("import_id",""))'; }
 for C in $COMPANIES; do
@@ -41,3 +46,20 @@ for C in $COMPANIES; do
 done
 curl -fsS -b "$JAR" -X POST "$BASE/api/v1/companies/$CID/forecasts" -H 'content-type: application/json' \
   -d '{"horizon_days":30}' >/dev/null && echo "прогноз построен для демо-пользователя"
+
+# демо-сотрудники для проверки ролей: аналитик и наблюдатель (пароль задаёт директор, смена пароля не навязывается)
+add_member() {
+  local code
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -b "$JAR" -X POST "$BASE/api/v1/members" -H 'content-type: application/json' \
+    -d "$(json_obj "email=$1" "role=$2" "password=$PASS")")
+  case "$code" in
+    201) echo "сотрудник $1 ($2) создан" ;;
+    409) echo "сотрудник $1 уже есть" ;;
+    *) echo "сотрудник $1: не создан (HTTP $code)"; return 0 ;;
+  esac
+  # кнопка «Тестовый вход» снимает у демо-сотрудника обязательную смену пароля; если DEMO_LOGIN=0, вызов вернёт 404, это нормально
+  curl -sS -o /dev/null -X POST "$BASE/api/v1/auth/demo/login" -H 'content-type: application/json' \
+    -d "{\"account\":\"$3\"}" || true
+}
+add_member demo-editor@example.com editor editor
+add_member demo-viewer@example.com viewer viewer
