@@ -276,6 +276,7 @@ mod tests {
             notifier: up("notifier"),
             backoffice: up("backoffice"),
             notify: up("notify"),
+            fns: up("fns"),
             demo: Arc::new(crate::demo::Demo { enabled: false, email: "demo@example.com".into(), external_company: "C001".into(), feed: up("demo_feed") }),
             cfg: Arc::new(crate::Config { cookie_secure: false }),
         };

@@ -10,4 +10,4 @@ pub mod types;
 pub use client::{Ctx, Reply, Upstream};
 pub use error::{ApiError, R, err, error_response, internal};
 pub use money::{money, stringify_money};
-pub use types::{Event, HistoryRow, Snapshot, Tx};
+pub use types::{CounterpartyRisk, Event, HistoryRow, Snapshot, Tx};

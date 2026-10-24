@@ -42,7 +42,7 @@ async fn compute(snap: Snapshot, horizon: usize, scenario: Scenario) -> R<model:
         let balances = model::daily_balances(&hist);
         // внутренние переводы не являются выручкой или расходом бизнеса
         let txs: Vec<Tx> = hist.into_iter().map(|h| h.0).filter(|t| t.category != "transfers").collect();
-        model::forecast(&txs, &balances, &snap.events, &scenario, &Params { horizon, today: Some(chrono::Local::now().date_naive()), ..Default::default() })
+        model::forecast_with_risk(&txs, &balances, &snap.events, &scenario, &Params { horizon, today: Some(chrono::Local::now().date_naive()), ..Default::default() }, &snap.counterparty_risks)
     })
     .await
     .map_err(internal)?

@@ -2,6 +2,7 @@
 //! ожидаемые события, ревизия данных и аудит. Внутренний HTTP API (без cookie-сессий).
 
 mod admin;
+mod counterparties;
 mod db;
 mod members;
 mod routes;
@@ -58,5 +59,8 @@ pub fn build(st: AppState) -> Router {
         .route(&format!("{co}/expected-events/bulk"), post(bulk_events))
         .route(&format!("{co}/expected-events/{{eid}}"), axum::routing::delete(delete_event))
         .route(&format!("{co}/audit"), post(audit_event).get(list_audit))
+        // флаги контрагентов по ИНН (проверка ФНС) и топ контрагентов по обороту
+        .route(&format!("{co}/counterparty-risk"), get(counterparties::list_risk).put(counterparties::put_risk))
+        .route(&format!("{co}/counterparties/top"), get(counterparties::top))
         .with_state(st)
 }

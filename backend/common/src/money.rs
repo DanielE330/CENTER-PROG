@@ -4,7 +4,7 @@ use serde_json::Value;
 const MONEY_KEYS: &[&str] = &[
     "opening_balance", "p10", "p50", "p90", "amount", "median_path_deficit", "max_deficit_p90",
     "deficit_given_break_median", "amount_kop", "balance_kop", "mae_model", "mae_last_value", "mae_drift",
-    "plan_in", "plan_out", "fact_in", "fact_out", "plan", "fact", "diff", "predicted", "actual",
+    "tax_debt_kop", "plan_in", "plan_out", "fact_in", "fact_out", "plan", "fact", "diff", "predicted", "actual",
 ];
 
 /// Суммы в JSON — десятичные строки (JS не теряет точность).

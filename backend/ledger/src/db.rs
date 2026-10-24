@@ -41,7 +41,12 @@ pub fn open(path: &str) -> Db {
         CREATE INDEX IF NOT EXISTS audit_company ON audit_events(company_id, id);
         CREATE TABLE IF NOT EXISTS tenant_rules(
             company_id TEXT NOT NULL REFERENCES companies(id), key TEXT NOT NULL, subcategory TEXT NOT NULL,
-            created_at TEXT NOT NULL, PRIMARY KEY(company_id, key));",
+            created_at TEXT NOT NULL, PRIMARY KEY(company_id, key));
+        CREATE TABLE IF NOT EXISTS counterparty_risk(
+            company_id TEXT NOT NULL REFERENCES companies(id), inn TEXT NOT NULL,
+            risk_level TEXT NOT NULL, status TEXT NOT NULL, tax_debt_kop INTEGER NOT NULL DEFAULT 0,
+            bankruptcy_flag INTEGER NOT NULL DEFAULT 0, checked_at TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(company_id, inn));",
     )
     .expect("migrate");
     // реквизиты компании (из сертификата ЭЦП) добавлены позже

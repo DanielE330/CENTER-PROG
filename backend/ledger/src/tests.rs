@@ -999,3 +999,170 @@ fn members_table_with_three_roles_is_rebuilt_to_allow_admin() {
     assert_eq!(db.lock().unwrap().query_row("SELECT role FROM company_members WHERE user_id='e1'", [], |r| r.get::<_, String>(0)).unwrap(), "admin");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ---------- флаги контрагентов (ФНС) ----------
+fn tx_inn(row: i64, amount: i64, cp: &str, inn: &str, cat: &str) -> Value {
+    let mut t = tx(row, "2026-03-02", amount, cp, &format!("Платёж {row}"), cat);
+    t["inn"] = json!(inn);
+    t
+}
+
+fn risk_item(inn: &str, level: &str, status: &str, debt: i64) -> Value {
+    json!({"inn": inn, "risk_level": level, "status": status, "tax_debt_kop": debt, "bankruptcy_flag": false, "checked_at": "2026-10-20T10:00:00Z", "source": "fns_sim"})
+}
+
+#[tokio::test]
+async fn counterparty_risk_is_stored_idempotently_and_bumps_revision_only_on_significant_change() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    let other = company(&e.app, "u2").await;
+    let uri = format!("/internal/v1/companies/{cid}/counterparty-risk");
+    let (s, v) = call(&e.app, "GET", &uri, None).await;
+    assert_eq!((s, v["items"].as_array().unwrap().len()), (StatusCode::OK, 0));
+    let r0 = revision(&e.app, &cid).await;
+
+    // нейтральная запись (низкий риск, действует) прогноз не меняет: ревизия прежняя
+    let (s, v) = call(&e.app, "PUT", &uri, Some(json!({"items": [risk_item("7701234567", "low", "active", 0)]}))).await;
+    assert_eq!((s, v["upserted"].as_i64(), v["changed"].as_i64()), (StatusCode::OK, Some(1), Some(0)), "{v}");
+    assert_eq!(revision(&e.app, &cid).await, r0);
+
+    // значимая запись двигает ревизию, повтор — нет
+    let body = json!({"items": [risk_item("7701234567", "high", "active", 1_250_000), risk_item("500100732259", "medium", "liquidating", 0)]});
+    let (_, v) = call(&e.app, "PUT", &uri, Some(body.clone())).await;
+    assert_eq!((v["upserted"].as_i64(), v["changed"].as_i64()), (Some(2), Some(2)));
+    assert_eq!(revision(&e.app, &cid).await, r0 + 1);
+    let (_, v) = call(&e.app, "PUT", &uri, Some(body)).await;
+    assert_eq!((v["upserted"].as_i64(), v["changed"].as_i64()), (Some(2), Some(0)));
+    assert_eq!(revision(&e.app, &cid).await, r0 + 1, "повторная проверка с теми же флагами не меняет ревизию");
+
+    let (_, v) = call(&e.app, "GET", &uri, None).await;
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    let hi = items.iter().find(|i| i["inn"] == "7701234567").unwrap();
+    assert_eq!((hi["risk_level"].as_str(), hi["tax_debt_kop"].as_i64(), hi["source"].as_str(), hi["checked_at"].as_str()), (Some("high"), Some(1_250_000), Some("fns_sim"), Some("2026-10-20T10:00:00Z")));
+    let (_, v) = call(&e.app, "GET", &format!("{uri}?inn=500100732259"), None).await;
+    assert_eq!(v["items"].as_array().unwrap().len(), 1);
+
+    // флаги изолированы по компаниям
+    let (_, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{other}/counterparty-risk"), None).await;
+    assert!(v["items"].as_array().unwrap().is_empty());
+
+    // снятие риска — тоже значимое изменение
+    let (_, v) = call(&e.app, "PUT", &uri, Some(json!({"items": [risk_item("7701234567", "low", "active", 0)]}))).await;
+    assert_eq!(v["changed"], 1);
+    assert_eq!(revision(&e.app, &cid).await, r0 + 2);
+}
+
+#[tokio::test]
+async fn counterparty_risk_validation_is_atomic() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    let uri = format!("/internal/v1/companies/{cid}/counterparty-risk");
+    let mut bad_debt = risk_item("7701234567", "high", "active", 1);
+    bad_debt["tax_debt_kop"] = json!(-5);
+    for (item, code) in [
+        (risk_item("123", "high", "active", 0), "invalid_inn"),
+        (risk_item("77012345ab", "high", "active", 0), "invalid_inn"),
+        (risk_item("7701234567", "scary", "active", 0), "invalid_risk_level"),
+        (bad_debt, "invalid_debt"),
+    ] {
+        let (s, v) = call(&e.app, "PUT", &uri, Some(json!({"items": [risk_item("7701234568", "high", "active", 0), item]}))).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some(code)));
+    }
+    let (_, v) = call(&e.app, "GET", &uri, None).await;
+    assert!(v["items"].as_array().unwrap().is_empty(), "ошибка откатывает всю пачку");
+    let (s, _) = call(&e.app, "PUT", "/internal/v1/companies/no-such/counterparty-risk", Some(json!({"items": []}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn snapshot_carries_counterparty_risk_with_names_only_when_present() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    import_confirmed(&e.app, &cid, "a.csv", vec![tx_inn(1, 5_000_000, "ООО Заказчик", "7701234567", "revenue"), tx_inn(2, -100_000, "Банк", "7702000000", "bank_fees")]).await;
+    let snap = format!("/internal/v1/companies/{cid}/snapshot");
+    let (_, v) = call(&e.app, "GET", &snap, None).await;
+    assert!(v.get("counterparty_risks").is_none(), "без флагов поле не выводится — формат снимка прежний");
+    call(&e.app, "PUT", &format!("/internal/v1/companies/{cid}/counterparty-risk"), Some(json!({"items": [risk_item("7701234567", "high", "liquidating", 900)]}))).await;
+    let (_, v) = call(&e.app, "GET", &snap, None).await;
+    let r = &v["counterparty_risks"][0];
+    assert_eq!((r["inn"].as_str(), r["names"][0].as_str(), r["risk_level"].as_str(), r["status"].as_str(), r["tax_debt_kop"].as_i64()), (Some("7701234567"), Some("ООО Заказчик"), Some("high"), Some("liquidating"), Some(900)));
+}
+
+#[tokio::test]
+async fn top_counterparties_are_ranked_by_turnover_skip_noise_and_carry_flags() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    let rows = vec![
+        tx_inn(1, 9_000_000, "ООО Большой клиент", "7701234567", "revenue"),
+        tx_inn(2, 3_000_000, "ООО Большой клиент", "7701234567", "revenue"),
+        tx_inn(3, 4_000_000, "ООО Малый клиент", "7709999999", "revenue"),
+        tx_inn(4, -2_000_000, "ООО Поставщик", "7708888888", "suppliers"),
+        tx_inn(5, -9_999_999, "ФНС", "7727406020", "taxes"),
+        tx_inn(6, -8_000_000, "Иванов И.И.", "500100732259", "payroll"),
+        tx_inn(7, 700_000, "Без ИНН", "", "revenue"),
+        tx_inn(8, 500_000, "Кривой ИНН", "12ab", "revenue"),
+    ];
+    import_confirmed(&e.app, &cid, "a.csv", rows).await;
+    call(&e.app, "PUT", &format!("/internal/v1/companies/{cid}/counterparty-risk"), Some(json!({"items": [risk_item("7701234567", "high", "active", 500)]}))).await;
+    let (s, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/counterparties/top?limit=20"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let names: Vec<_> = v["items"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["ООО Большой клиент", "ООО Малый клиент", "ООО Поставщик"], "налоги, зарплата, пустой и неверный ИНН не проверяются");
+    let first = &v["items"][0];
+    assert_eq!((first["turnover_kop"].as_i64(), first["income_kop"].as_i64(), first["tx_count"].as_i64()), (Some(12_000_000), Some(12_000_000), Some(2)));
+    assert_eq!(first["risk"]["risk_level"], "high");
+    assert!(v["items"][1]["risk"].is_null());
+    // доля поступлений: 12 из 16 млн
+    assert!((first["income_share"].as_f64().unwrap() - 0.75).abs() < 1e-9, "{first}");
+    let (_, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/counterparties/top?limit=1&direction=out"), None).await;
+    assert_eq!(v["items"].as_array().unwrap().len(), 1);
+    assert_eq!(v["items"][0]["name"], "ООО Поставщик");
+    let (s, _) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/counterparties/top?direction=sideways"), None).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, _) = call(&e.app, "GET", "/internal/v1/companies/no-such/counterparties/top", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn migration_creates_counterparty_risk_table_in_an_old_database() {
+    let dir = std::env::temp_dir().join(format!("ledger-mig-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("old.db");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch("CREATE TABLE companies(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, data_revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);").unwrap();
+    }
+    for _ in 0..2 {
+        let db = db::open(path.to_str().unwrap());
+        let c = db.lock().unwrap();
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('counterparty_risk') WHERE name IN ('company_id','inn','risk_level','status','tax_debt_kop','bankruptcy_flag','checked_at','source')", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 8);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn company_requisites_can_be_edited_validated_and_cleared() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    let uri = format!("/internal/v1/companies/{cid}");
+    let (s, v) = call(&e.app, "PATCH", &uri, Some(json!({"inn": " 0098524470 "}))).await;
+    assert_eq!((s, v["inn"].as_str(), v["company_name"].as_str().is_some()), (StatusCode::OK, Some("0098524470"), true), "{v}");
+    let (_, v) = call(&e.app, "GET", &uri, None).await;
+    assert_eq!(v["inn"], "0098524470");
+    // название и ОГРН отдельно; прежние реквизиты не затираются
+    let (_, v) = call(&e.app, "PATCH", &uri, Some(json!({"name": "Новая", "ogrn": "1027700132195"}))).await;
+    assert_eq!((v["company_name"].as_str(), v["inn"].as_str(), v["ogrn"].as_str()), (Some("Новая"), Some("0098524470"), Some("1027700132195")));
+    for (body, code) in [(json!({"inn": "123"}), "invalid_inn"), (json!({"inn": "77012345ab"}), "invalid_inn"), (json!({"ogrn": "1"}), "invalid_ogrn"), (json!({"name": "я"}), "invalid_company_name"), (json!({}), "empty_patch")] {
+        let (s, v) = call(&e.app, "PATCH", &uri, Some(body)).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some(code)));
+    }
+    // пустая строка очищает ИНН
+    let (_, v) = call(&e.app, "PATCH", &uri, Some(json!({"inn": ""}))).await;
+    assert_eq!(v["inn"], "");
+    let (_, v) = call(&e.app, "GET", &uri, None).await;
+    assert_eq!((v["inn"].as_str(), v["company_name"].as_str()), (Some(""), Some("Новая")));
+}
