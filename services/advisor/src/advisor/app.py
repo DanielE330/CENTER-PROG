@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 
 import httpx
-from advisor import proxy, runtime
+from advisor import grounded, proxy, runtime
 from ci_common.auth import User, Verifier
 from ci_common.config import Config
 from ci_common.tls import MtlsClient
@@ -21,6 +21,7 @@ class State:
     verifier: Verifier
     runtime: runtime.AgentRuntime
     fallback: runtime.AgentRuntime
+    grounded: runtime.AgentRuntime
     lock: asyncio.Lock
 
 
@@ -40,6 +41,7 @@ async def lifespan(_: FastAPI):
     )
     S.runtime = runtime.make_runtime()
     S.fallback = runtime.BuiltinRuntime()
+    S.grounded = grounded.GroundedRuntime()
     S.lock = asyncio.Lock()
     log.info("agent runtime: %s", S.runtime.name)
     yield
@@ -91,9 +93,10 @@ async def chat(body: ChatIn, user: User = Depends(current_user)) -> dict:
         proxy.activate(proxy.Context(tenant_id=user.tenant_id, user_token=user.token))
         try:
             primary = S.runtime
-            if primary is not S.fallback and not await uses_cloud_model(llm):
-                # Hermes needs a cloud model (64K+ context); the local model runs in the built-in loop.
-                primary = S.fallback
+            if not await uses_cloud_model(llm):
+                # Hermes needs a cloud model (64K+ context). The small local model gets the facts
+                # fetched for it and its answer is checked against them (grounded mode).
+                primary = S.grounded
             try:
                 turn = await primary.run(body.message, history, llm, mcp)
                 if not turn.answer.strip():
