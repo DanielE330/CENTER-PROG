@@ -12,9 +12,10 @@ const CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED = 2;
 const CADESCOM_CADES_BES = 1;
 const CADESCOM_BASE64_TO_BINARY = 1;
 
-let loading: Promise<any> | null = null;
+let loading: Promise<void> | null = null;
 
-export function loadPlugin(): Promise<any> {
+// window.cadesplugin сам является thenable: его нельзя передавать в resolve() (промис «раскроется» в undefined)
+export function loadPlugin(): Promise<void> {
   if (loading) return loading;
   loading = new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -24,7 +25,7 @@ export function loadPlugin(): Promise<any> {
       const cp = window.cadesplugin;
       if (!cp) { loading = null; return reject(new Error("Плагин КриптоПро не инициализировался")); }
       const timer = setTimeout(() => { loading = null; reject(new Error("Плагин КриптоПро не отвечает: установите расширение для браузера и КриптоПро CSP")); }, 8000);
-      Promise.resolve(cp).then(() => { clearTimeout(timer); resolve(cp); }, (e: unknown) => { clearTimeout(timer); loading = null; reject(new Error(String(e))); });
+      Promise.resolve(cp).then(() => { clearTimeout(timer); resolve(); }, (e: unknown) => { clearTimeout(timer); loading = null; reject(new Error(String(e))); });
     };
     document.head.appendChild(s);
   });
@@ -34,7 +35,8 @@ export function loadPlugin(): Promise<any> {
 const cn = (dn: string) => /(?:^|,\s*)CN=([^,]+)/.exec(dn)?.[1] ?? dn;
 
 export async function listCertificates(): Promise<CertInfo[]> {
-  const cp = await loadPlugin();
+  await loadPlugin();
+  const cp = window.cadesplugin;
   const store = await cp.CreateObjectAsync("CAdESCOM.Store");
   await store.Open(CAPICOM_CURRENT_USER_STORE, CAPICOM_MY_STORE, CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);
   try {
@@ -56,7 +58,8 @@ export async function listCertificates(): Promise<CertInfo[]> {
 
 /** Откреплённая подпись CAdES-BES (base64, DER) для текста challenge. */
 export async function signDetached(thumbprint: string, text: string): Promise<string> {
-  const cp = await loadPlugin();
+  await loadPlugin();
+  const cp = window.cadesplugin;
   const store = await cp.CreateObjectAsync("CAdESCOM.Store");
   await store.Open(CAPICOM_CURRENT_USER_STORE, CAPICOM_MY_STORE, CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);
   try {

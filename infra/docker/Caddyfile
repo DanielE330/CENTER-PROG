@@ -12,7 +12,7 @@
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy no-referrer
-		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self' chrome-extension:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
 		Strict-Transport-Security "max-age=31536000" # действует только по HTTPS
 		-Server
 	}
