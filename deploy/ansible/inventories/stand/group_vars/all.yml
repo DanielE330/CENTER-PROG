@@ -9,7 +9,6 @@ ci1_channel: stable
 ci1_registry: ghcr.io/swimshadow
 ci1_public_url: https://ci1.local:8443
 ci1_lan_cidr: 192.168.0.0/16
-ci1_gpu: true
 ci1_backup_keep_days: 7
 # age recipient (public key) for encrypted backups; the private key never lives on the stand.
 ci1_backup_age_recipient: ""

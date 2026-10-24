@@ -47,6 +47,8 @@ struct Inner {
     pool: PgPool,
     providers: HashMap<&'static str, Provider>,
     clients: Clients,
+    /// mTLS client for internal calls (tenancy settings).
+    internal: MtlsClient,
     tenancy_url: String,
     tokens: Arc<ServiceTokenSource>,
     policies: RwLock<HashMap<Uuid, (Instant, Value)>>,
@@ -60,16 +62,6 @@ fn optional_secret(name: &str) -> Option<String> {
 fn build_providers() -> HashMap<&'static str, Provider> {
     let mut map = HashMap::new();
     let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_owned());
-    map.insert(
-        "local",
-        Provider::OpenAiCompatible {
-            name: "local",
-            base_url: env("LLM_LOCAL_URL", "https://llm-local:8443/v1"),
-            api_key: None,
-            model: env("LLM_LOCAL_MODEL", "local"),
-            external: false,
-        },
-    );
     if let Some(key) = optional_secret("openai_api_key") {
         map.insert(
             "openai",
@@ -78,7 +70,6 @@ fn build_providers() -> HashMap<&'static str, Provider> {
                 base_url: "https://api.openai.com/v1".into(),
                 api_key: Some(key),
                 model: env("OPENAI_MODEL", "gpt-5-mini"),
-                external: true,
             },
         );
     }
@@ -90,7 +81,6 @@ fn build_providers() -> HashMap<&'static str, Provider> {
                 base_url: "https://openrouter.ai/api/v1".into(),
                 api_key: Some(key),
                 model: env("OPENROUTER_MODEL", "anthropic/claude-sonnet-5.5"),
-                external: true,
             },
         );
     }
@@ -102,7 +92,6 @@ fn build_providers() -> HashMap<&'static str, Provider> {
                 base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
                 api_key: Some(key),
                 model: env("GEMINI_MODEL", "gemini-2.5-flash"),
-                external: true,
             },
         );
     }
@@ -132,10 +121,7 @@ async fn main() -> Result<()> {
     )
     .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
-    let internal = MtlsClient::with_timeout(
-        ci_core::tls::CertPaths::in_dir(&config.cert_dir),
-        Duration::from_secs(180),
-    )?;
+    let internal = MtlsClient::new(ci_core::tls::CertPaths::in_dir(&config.cert_dir))?;
     let kc = std::env::var("KEYCLOAK_INTERNAL_URL")?;
     let providers = build_providers();
     tracing::info!(providers = ?providers.keys().collect::<Vec<_>>(), "providers configured");
@@ -147,8 +133,8 @@ async fn main() -> Result<()> {
                 .use_rustls_tls()
                 .timeout(Duration::from_secs(120))
                 .build()?,
-            internal: internal.clone(),
         },
+        internal: internal.clone(),
         tenancy_url: std::env::var("TENANCY_URL").unwrap_or_else(|_| "https://tenancy:8443".into()),
         tokens: ServiceTokenSource::new(
             &format!("{kc}/realms/ci1/protocol/openid-connect/token"),
@@ -180,7 +166,6 @@ async fn policy(s: &Inner, tenant: Uuid) -> ApiResult<Value> {
     }
     let token = s.tokens.token().await.map_err(ApiError::Upstream)?;
     let settings: Value = s
-        .clients
         .internal
         .get()
         .get(format!("{}/internal/v1/tenants/{tenant}/settings", s.tenancy_url))
@@ -198,9 +183,10 @@ async fn policy(s: &Inner, tenant: Uuid) -> ApiResult<Value> {
     Ok(p)
 }
 
-/// Provider order for a request: the tenant's choice (if allowed), then local, then template.
+/// Provider order for a request: the tenant's cloud provider (if the owner allowed sending
+/// masked data and the key is configured), then the template.
 fn plan<'a>(s: &'a Inner, policy: &Value) -> Vec<&'a Provider> {
-    let wanted = policy["provider"].as_str().unwrap_or("local");
+    let wanted = policy["provider"].as_str().unwrap_or("template");
     let external_allowed = policy["external_allowed"].as_bool().unwrap_or(false);
     let mut order = Vec::new();
     if let Some(p) = s.providers.get(wanted)
@@ -208,18 +194,16 @@ fn plan<'a>(s: &'a Inner, policy: &Value) -> Vec<&'a Provider> {
     {
         order.push(p);
     }
-    for name in ["local", "template"] {
-        if let Some(p) = s.providers.get(name)
-            && !order.iter().any(|o| o.name() == p.name())
-        {
-            order.push(p);
-        }
+    if let Some(p) = s.providers.get("template")
+        && !order.iter().any(|o| o.name() == p.name())
+    {
+        order.push(p);
     }
     order
 }
 
 /// Which provider a request of this tenant would use first. The advisor picks its agent
-/// runtime by it: cloud models get Hermes, the local model and the template the built-in loop.
+/// runtime by it: a cloud model gets Hermes, without one the advisor answers by template.
 async fn route(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let s = &state.inner;
     let tenant = headers
@@ -308,13 +292,8 @@ async fn chat(State(state): State<AppState>, headers: HeaderMap, Json(request): 
     let mut last_err = None;
     for provider in plan(s, &policy) {
         let mut masker = Masker::default();
-        // External providers always get masked data; the local model too unless the owner turned it off.
-        let masked = provider.is_external() || policy["masking"].as_bool().unwrap_or(true);
-        let body = if masked {
-            mask_request(&request, &mut masker)
-        } else {
-            request.clone()
-        };
+        // Every request is masked: all models are external.
+        let body = mask_request(&request, &mut masker);
         match provider.complete(&s.clients, &body).await {
             Ok(mut resp) => {
                 if let Some(text) = resp["choices"][0]["message"]["content"].as_str() {

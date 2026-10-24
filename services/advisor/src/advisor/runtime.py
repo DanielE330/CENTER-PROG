@@ -100,9 +100,8 @@ class BuiltinRuntime:
         async with httpx.AsyncClient(timeout=120, transport=self._transport) as http:
             mcp = McpClient(mcp_url, http)
             tools = await mcp.tools()
-            # The built-in loop serves the local model; /no_think switches Qwen3 to direct answers.
             messages = [
-                {"role": "system", "content": SYSTEM_PROMPT + "\n/no_think"},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 *history[-10:],
                 {"role": "user", "content": message},
             ]

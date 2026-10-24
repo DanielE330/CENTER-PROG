@@ -173,12 +173,12 @@ async fn put_settings(
         return Err(ApiError::BadRequest("limits must be non-negative".into()));
     }
     if let Some(policy) = &update.llm_policy {
-        if !["local", "anthropic", "openai", "gemini", "openrouter", "template"].contains(&policy.provider.as_str()) {
+        if !["anthropic", "openai", "gemini", "openrouter", "template"].contains(&policy.provider.as_str()) {
             return Err(ApiError::BadRequest("unknown LLM provider".into()));
         }
-        // Masking can be relaxed only for the local model: data then never leaves the contour.
-        if !policy.masking && policy.provider != "local" {
-            return Err(ApiError::BadRequest("external providers always get masked data".into()));
+        // All models are cloud ones, so masking cannot be turned off.
+        if !policy.masking {
+            return Err(ApiError::BadRequest("cloud providers always get masked data".into()));
         }
     }
     let mut tx = db::tenant_tx(&state.pool, user.tenant_id).await?;

@@ -22,7 +22,6 @@ Volume=ci1-certs-llm-gateway.volume:/certs:ro
 Network=ci1-app.network
 Network=ci1-data.network
 Network=ci1-egress.network
-Network=ci1-llm.network
 Environment=SERVICE_NAME=llm-gateway
 Environment=LISTEN_ADDR=0.0.0.0:8443
 Environment=CERT_DIR=/certs
@@ -34,7 +33,6 @@ Environment=KEYCLOAK_INTERNAL_URL=https://keycloak:8443/auth
 Environment=NATS_URL=tls://nats:4222
 Environment=RUST_LOG=info
 Environment=DATABASE_URL=postgres://llm-gateway@postgres:5432/ci1
-Environment=LLM_LOCAL_URL=https://llm-local:8443/v1
 Secret=openai_api_key,type=mount,uid=65532,mode=0400
 Secret=anthropic_api_key,type=mount,uid=65532,mode=0400
 Secret=gemini_api_key,type=mount,uid=65532,mode=0400

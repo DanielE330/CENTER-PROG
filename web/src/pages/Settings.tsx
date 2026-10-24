@@ -5,8 +5,7 @@ import { api, type Me, type Settings } from "../api";
 import { money, TAX_REGIMES } from "../format";
 
 const PROVIDERS: Record<string, string> = {
-  local: "Локальная модель (данные не покидают контур)",
-  template: "Без модели (объяснения по шаблону)",
+  template: "Не подключён (ответы по шаблону)",
   anthropic: "Claude",
   openai: "ChatGPT",
   gemini: "Gemini",
@@ -17,7 +16,7 @@ export function SettingsPage({ me }: { me: Me }) {
   const qc = useQueryClient();
   const s = useQuery({ queryKey: ["settings"], queryFn: () => api.get<Settings>("/api/v1/settings") });
   const [limits, setLimits] = useState({ overdraft: "", min: "" });
-  const [policy, setPolicy] = useState({ provider: "local", external_allowed: false, masking: true });
+  const [policy, setPolicy] = useState({ provider: "template", external_allowed: false, masking: true });
   useEffect(() => {
     if (s.data) {
       setLimits({ overdraft: String(s.data.overdraft_limit_kop / 100), min: String(s.data.min_balance_kop / 100) });
@@ -35,7 +34,7 @@ export function SettingsPage({ me }: { me: Me }) {
   const owner = me.roles.includes("owner");
   const d = s.data;
   if (!d) return <div className="card">Загрузка…</div>;
-  const external = policy.provider !== "local" && policy.provider !== "template";
+  const external = policy.provider !== "template";
 
   return (
     <div className="stack">
@@ -101,8 +100,8 @@ export function SettingsPage({ me }: { me: Me }) {
           {owner && <button onClick={() => save.mutate({ llm_policy: { ...policy, masking: true } })}>Сохранить</button>}
         </div>
         <div className="muted">
-          Внешним провайдерам уходят только замаскированные данные: названия контрагентов заменяются на «Контрагент A», ИНН, счета и телефоны вырезаются.
-          Если провайдер недоступен, ответит локальная модель, затем шаблон.
+          Консультант работает на облачной модели. Ей уходят только замаскированные данные: названия контрагентов заменяются на «Контрагент A», ИНН,
+          счета и телефоны вырезаются. Пока провайдер не подключён или недоступен, консультант отвечает по шаблону из прогноза.
         </div>
         {save.isError && <div className="error">{String(save.error)}</div>}
       </div>

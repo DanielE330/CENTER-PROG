@@ -15,12 +15,14 @@ interface Reply {
   tools_used: string[];
   proposals: string[];
   runtime: string;
+  notice: "" | "not_connected" | "unavailable";
 }
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   meta?: string;
+  notice?: Reply["notice"];
 }
 
 const SUGGESTIONS = ["Почему может не хватить денег и что делать?", "Что будет, если крупный клиент заплатит на 3 недели позже?", "Какие расходы сильнее всего давят на остаток?"];
@@ -34,7 +36,7 @@ export function Advisor({ me }: { me: Me }) {
     mutationFn: (message: string) =>
       api.post<Reply>("/api/v1/advisor/chat", { message, history: messages.map(({ role, content }) => ({ role, content })) }),
     onSuccess: (r) => {
-      setMessages((m) => [...m, { role: "assistant", content: r.answer, meta: `${r.runtime}${r.tools_used.length ? ` · инструменты: ${r.tools_used.join(", ")}` : ""}` }]);
+      setMessages((m) => [...m, { role: "assistant", content: r.answer, notice: r.notice, meta: `${r.runtime}${r.tools_used.length ? ` · инструменты: ${r.tools_used.join(", ")}` : ""}` }]);
       qc.invalidateQueries({ queryKey: ["proposals"] });
     },
   });
@@ -48,6 +50,7 @@ export function Advisor({ me }: { me: Me }) {
     setText("");
     ask.mutate(message);
   };
+  const owner = me.roles.includes("owner");
   const canWrite = me.roles.some((r) => r === "owner" || r === "accountant");
   const pending = (proposals.data ?? []).filter((p) => p.status === "pending");
 
@@ -67,6 +70,12 @@ export function Advisor({ me }: { me: Me }) {
           )}
           {messages.map((m, i) => (
             <div key={i} className={`msg ${m.role}`}>
+              {m.notice && (
+                <div className="warn-note small">
+                  {m.notice === "unavailable" ? "ИИ-провайдер сейчас недоступен, ниже ответ по шаблону из прогноза." : "Это ответ по шаблону. Для персональных советов подключите ИИ-провайдера"}
+                  {m.notice === "not_connected" && (owner ? <> в <a href="#settings">настройках</a>.</> : ": это может сделать владелец.")}
+                </div>
+              )}
               <div className="bubble">{m.content}</div>
               {m.meta && <div className="muted small">{m.meta}</div>}
             </div>

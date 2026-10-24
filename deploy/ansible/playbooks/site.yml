@@ -7,8 +7,6 @@
     - role: base
     - role: hardening
     - role: podman
-    - role: nvidia
-      when: ci1_gpu | bool
     - role: secrets
     - role: app
     - role: deploy_agent
