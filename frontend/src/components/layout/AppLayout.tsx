@@ -1,0 +1,50 @@
+import { useState } from 'react'
+import { Outlet, useLocation } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
+import { Sidebar } from './Sidebar'
+import { Header } from './Header'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
+import { useDemoState } from '../../lib/demoState'
+
+export function AppLayout() {
+  const tablet = useMediaQuery('(max-width: 1279px)')
+  const mobile = useMediaQuery('(max-width: 767px)')
+  const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null)
+  const [drawer, setDrawer] = useState(false)
+  const demo = useDemoState()
+  const { pathname } = useLocation()
+  const { t } = useTranslation()
+
+  const collapsed = userCollapsed ?? tablet
+
+  return (
+    <div className="flex h-full">
+      {!mobile && (
+        <div className="shrink-0 h-full">
+          <Sidebar collapsed={collapsed} onToggle={() => setUserCollapsed(!collapsed)} />
+        </div>
+      )}
+      {mobile && drawer && (
+        <div className="fixed inset-0 z-50 flex">
+          <Sidebar collapsed={false} mobile onToggle={() => {}} onNavigate={() => setDrawer(false)} />
+          <div className="flex-1 bg-overlay" onClick={() => setDrawer(false)} />
+        </div>
+      )}
+
+      <div className="flex-1 min-w-0 flex flex-col h-full">
+        <Header onMenu={() => setDrawer(true)} />
+        {demo !== 'normal' && (
+          <div className="pop-in bg-warning-soft text-warning text-[13px] px-4 sm:px-8 py-1.5 font-medium">
+            {t('demo.banner', { state: t(`demo.states.${demo}`) })}
+          </div>
+        )}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden">
+          {/* Re-keyed per route so the short fade replays on navigation; app state outside the page is untouched. */}
+          <div key={pathname} className="page-enter">
+            <Outlet />
+          </div>
+        </main>
+      </div>
+    </div>
+  )
+}

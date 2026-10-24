@@ -1,0 +1,111 @@
+/* Design tokens — Fintech Minimal */
+:root {
+  --c-primary: #176b45;
+  --c-primary-hover: #125a39;
+  --c-primary-soft: #e5f4ea;
+  --c-app: #f7f9f7;
+  --c-surface: #ffffff;
+  --c-line: #e2e8e3;
+  --c-ink: #202923;
+  --c-muted: #66716a;
+  --c-warning: #d97706;
+  --c-warning-soft: #fef3e2;
+  --c-danger: #dc5252;
+  --c-danger-soft: #fdecec;
+  --c-neutral-series: #9aa59e;
+
+  --radius-card: 14px;
+  --radius-control: 9px;
+  --border: 1px solid var(--c-line);
+  --shadow-card: 0 1px 2px rgba(32, 41, 35, 0.04);
+  --shadow-pop: 0 8px 24px rgba(32, 41, 35, 0.12);
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+
+  --sidebar-w: 240px;
+  --sidebar-w-collapsed: 72px;
+  --header-h: 68px;
+}
+
+/* Scrollbars */
+:root {
+  --scrollbar-size: 8px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #c3cdc6;
+  --scrollbar-thumb-hover: #8fa196;
+  --scrollbar-radius: 999px;
+}
+
+/* Select / dropdown menus */
+:root {
+  --menu-bg: var(--c-surface);
+  --menu-border: var(--c-line);
+  --menu-radius: 10px;
+  --menu-shadow: var(--shadow-pop);
+  --menu-item-hover: var(--c-hover);
+  --menu-item-selected: var(--c-primary-soft);
+  --z-menu: 70;
+}
+
+/* Tokens that differ per theme but are shared by both */
+:root {
+  --c-input: #ffffff;
+  --c-hover: #f1f5f2;
+  --c-on-primary: #ffffff;
+  --c-overlay: rgba(32, 41, 35, 0.4);
+  color-scheme: light;
+}
+
+/* ---------- Dark theme ---------- */
+:root[data-theme='dark'] {
+  --c-primary: #43b581;
+  --c-primary-hover: #5cc795;
+  --c-primary-soft: #203d2d;
+  --c-app: #111813;
+  --c-surface: #19221c;
+  --c-hover: #222d25;
+  --c-input: #151d17;
+  --c-line: #2c3930;
+  --c-ink: #e8efea;
+  --c-muted: #a7b5aa;
+  --c-warning: #f0ac4d;
+  --c-warning-soft: #3a2e17;
+  --c-danger: #f07171;
+  --c-danger-soft: #3c2325;
+  --c-neutral-series: #7f9186;
+  --c-on-primary: #0c1a11;
+  --c-overlay: rgba(0, 0, 0, 0.6);
+
+  --shadow-card: none;
+  --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.5);
+
+  --scrollbar-thumb: #3a4a3f;
+  --scrollbar-thumb-hover: #5b7164;
+  --menu-item-hover: var(--c-hover);
+
+  color-scheme: dark;
+}
+
+/* Checkbox */
+:root {
+  --checkbox-size: 18px;
+  --checkbox-radius: 5px;
+  --checkbox-bg: var(--c-input);
+  --checkbox-border: var(--c-line);
+  --checkbox-border-hover: var(--c-muted);
+  --checkbox-checked-bg: var(--c-primary);
+  --checkbox-check: #ffffff;
+  --checkbox-duration: 150ms;
+}
+:root[data-theme='dark'] {
+  --checkbox-check: #111813;
+}
+
+/* Motion */
+:root {
+  --motion-fast: 150ms;
+  --motion-standard: 200ms;
+  --motion-theme: 250ms;
+  --motion-entrance: 300ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}

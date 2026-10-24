@@ -1,0 +1,273 @@
+@import 'tailwindcss';
+@import './tokens.css';
+
+@theme inline {
+  --color-primary: var(--c-primary);
+  --color-primary-hover: var(--c-primary-hover);
+  --color-primary-soft: var(--c-primary-soft);
+  --color-app: var(--c-app);
+  --color-surface: var(--c-surface);
+  --color-line: var(--c-line);
+  --color-ink: var(--c-ink);
+  --color-muted: var(--c-muted);
+  --color-warning: var(--c-warning);
+  --color-warning-soft: var(--c-warning-soft);
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-hover: var(--c-hover);
+  --color-overlay: var(--c-overlay);
+  --color-on-primary: var(--c-on-primary);
+  --color-input: var(--c-input);
+  --font-sans: var(--font-sans);
+  --radius-card: var(--radius-card);
+  --radius-control: var(--radius-control);
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--c-app);
+  color: var(--c-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+h1, h2, h3, p { margin: 0; }
+
+:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}
+
+.tnum { font-variant-numeric: tabular-nums; }
+
+@layer components {
+.card {
+  background: var(--c-surface);
+  border: var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.control {
+  height: 38px;
+  padding: 0 12px;
+  background: var(--c-input);
+  border: var(--border);
+  border-radius: var(--radius-control);
+  color: var(--c-ink);
+  font: inherit;
+  width: 100%;
+}
+.control:focus { outline: 2px solid var(--c-primary); outline-offset: -1px; border-color: var(--c-primary); }
+
+/* Data table */
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table th {
+  text-align: left; font-weight: 500; font-size: 12px; color: var(--c-muted);
+  padding: 10px 16px; border-bottom: var(--border); white-space: nowrap; background: var(--c-surface);
+}
+.data-table td { padding: 12px 16px; border-bottom: 1px solid var(--c-line); vertical-align: middle; }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table tbody tr:hover td { background: var(--c-hover); }
+.data-table .num { text-align: right; }
+
+}
+
+/* Sidebar transitions kept minimal */
+.sidebar { transition: width var(--motion-standard) var(--ease); }
+
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes pulse-soft { 50% { opacity: 0.5; } }
+.skeleton { background: var(--c-line); border-radius: 8px; animation: pulse-soft 1.4s ease-in-out infinite; }
+
+/* ---------- Scrollbars (site-wide) ---------- */
+/* Chromium / Safari: sized, rounded thumb. Never hidden, so scrollable areas stay discoverable. */
+*::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+*::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: var(--scrollbar-radius);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* Firefox: standard properties (applied only there, since Chromium would then ignore the rules above). */
+@supports (-moz-appearance: none) {
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
+}
+
+/* ---------- Select / dropdown ---------- */
+.select-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  height: 38px; width: 100%; padding: 0 10px 0 12px; text-align: left;
+  background: var(--c-surface); border: var(--border); border-radius: var(--radius-control);
+  color: var(--c-ink); font: inherit; cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease);
+}
+.select-trigger:hover:not(:disabled) { background: var(--c-hover); }
+.select-trigger[aria-expanded='true'] { border-color: var(--c-primary); }
+.select-trigger:focus-visible { outline: 2px solid var(--c-primary); outline-offset: -1px; border-color: var(--c-primary); }
+.select-trigger:disabled { background: var(--c-app); color: var(--c-muted); cursor: not-allowed; opacity: 0.8; }
+.select-chevron { transition: transform var(--motion-fast) var(--ease); }
+.select-chevron-open { transform: rotate(180deg); }
+
+.select-menu {
+  position: fixed; z-index: var(--z-menu); margin: 0; padding: 4px; list-style: none;
+  overflow-y: auto; overscroll-behavior: contain;
+  background: var(--menu-bg); border: 1px solid var(--menu-border); border-radius: var(--menu-radius);
+  box-shadow: var(--menu-shadow); outline: none;
+}
+.select-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 34px; padding: 6px 10px; border-radius: 7px; cursor: pointer;
+  color: var(--c-ink); font-size: 14px;
+}
+.select-option[data-active] { background: var(--menu-item-hover); }
+.select-option[data-selected] { background: var(--menu-item-selected); color: var(--c-primary); font-weight: 500; }
+.select-option[data-selected][data-active] { background: var(--menu-item-selected); outline: 1px solid var(--c-primary); outline-offset: -1px; }
+.select-option[aria-disabled='true'] { color: var(--c-muted); opacity: 0.55; cursor: not-allowed; }
+.select-empty { padding: 10px; color: var(--c-muted); font-size: 13px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .select-chevron, .select-trigger { transition: none; }
+}
+
+
+/* ---------- Checkbox (native input, restyled) ---------- */
+input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: var(--checkbox-size);
+  height: var(--checkbox-size);
+  margin: 0;
+  background: var(--checkbox-bg);
+  border: 1.5px solid var(--checkbox-border);
+  border-radius: var(--checkbox-radius);
+  cursor: pointer;
+  transition: background-color var(--checkbox-duration) ease, border-color var(--checkbox-duration) ease, transform 90ms ease;
+}
+input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: var(--checkbox-check);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity var(--checkbox-duration) ease, transform var(--checkbox-duration) ease;
+  -webkit-mask: var(--check-mask) center / 12px 12px no-repeat;
+  mask: var(--check-mask) center / 12px 12px no-repeat;
+  --check-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.5l2.5 2.5 4.5-5.5'/%3E%3C/svg%3E");
+}
+input[type='checkbox']:indeterminate::before {
+  --check-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M3 6h6'/%3E%3C/svg%3E");
+}
+input[type='checkbox']:checked,
+input[type='checkbox']:indeterminate {
+  background: var(--checkbox-checked-bg);
+  border-color: var(--checkbox-checked-bg);
+}
+input[type='checkbox']:checked::before,
+input[type='checkbox']:indeterminate::before {
+  opacity: 1;
+  transform: scale(1);
+}
+input[type='checkbox']:hover:not(:disabled):not(:checked):not(:indeterminate) { border-color: var(--checkbox-border-hover); }
+input[type='checkbox']:hover:not(:disabled):checked,
+input[type='checkbox']:hover:not(:disabled):indeterminate { background: var(--c-primary-hover); border-color: var(--c-primary-hover); }
+input[type='checkbox']:active:not(:disabled) { transform: scale(0.92); }
+input[type='checkbox']:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 2px; }
+input[type='checkbox']:disabled { cursor: not-allowed; opacity: 0.5; }
+input[type='checkbox']:disabled:not(:checked):not(:indeterminate) { background: var(--c-app); }
+
+@media (prefers-reduced-motion: reduce) {
+  input[type='checkbox'], input[type='checkbox']::before { transition: none; }
+}
+
+/* ================= Motion ================= */
+
+/* Buttons & clickable controls: colour feedback + a small press effect. */
+button,
+.pressable {
+  transition:
+    background-color var(--motion-fast) var(--ease),
+    border-color var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease),
+    box-shadow var(--motion-fast) var(--ease),
+    opacity var(--motion-fast) var(--ease),
+    transform var(--motion-fast) var(--ease);
+}
+button:not(:disabled):not(.select-trigger):active,
+.pressable:active {
+  transform: scale(0.98);
+}
+button:disabled { cursor: not-allowed; }
+/* Sidebar items are links: press feedback without moving the whole row much. */
+.pressable svg { transition: color var(--motion-fast) var(--ease); }
+
+/* Entrance: opacity + small vertical offset, played once on mount. */
+@keyframes enter {
+  from { opacity: 0; transform: translateY(8px); }
+}
+.enter {
+  animation: enter var(--motion-entrance) var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+@keyframes fade-in { from { opacity: 0; } }
+.page-enter { animation: fade-in var(--motion-standard) var(--ease) both; }
+
+/* Overlays */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(var(--pop-from, -4px)); }
+}
+.pop-in { animation: pop-in var(--motion-fast) var(--ease) both; }
+.select-menu { animation: pop-in var(--motion-fast) var(--ease) both; }
+.select-menu[data-up] { --pop-from: 4px; }
+@keyframes dialog-in {
+  from { opacity: 0; transform: scale(0.97); }
+}
+.dialog-in { animation: dialog-in var(--motion-standard) var(--ease) both; }
+.backdrop-in { animation: fade-in var(--motion-standard) var(--ease) both; }
+
+/* Theme toggle icons: stacked, cross-rotate */
+.theme-icon {
+  position: absolute;
+  transition: transform 300ms var(--ease), opacity 300ms var(--ease);
+}
+.theme-icon[data-active='false'] { opacity: 0; transform: rotate(-90deg) scale(0.5); }
+.theme-icon[data-active='true'] { opacity: 1; transform: rotate(0) scale(1); }
+
+/* Smooth theme change: only paint properties, only while switching (class set by setTheme). */
+@media (prefers-reduced-motion: no-preference) {
+  .theme-transition,
+  .theme-transition *,
+  .theme-transition *::before,
+  .theme-transition *::after {
+    transition-property: background-color, border-color, color, fill, stroke, box-shadow !important;
+    transition-duration: var(--motion-theme) !important;
+    transition-timing-function: var(--ease) !important;
+  }
+}
+
+/* Reduced motion: no entrance, rotation, scale or sliding. Colour changes and focus stay (instant). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .enter, .page-enter, .pop-in, .select-menu, .dialog-in, .backdrop-in { animation: none !important; }
+  button:active, .pressable:active { transform: none !important; }
+  .theme-icon[data-active='false'] { transform: none; }
+}
