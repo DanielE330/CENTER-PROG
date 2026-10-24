@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Build context: repo root. Targets (по образу на сервис): ledger, forecast, planfact, api.
 FROM rust:1-bookworm AS build
 WORKDIR /src
@@ -8,8 +7,7 @@ COPY backend/api ./api
 COPY backend/ledger ./ledger
 COPY backend/forecast ./forecast
 COPY backend/planfact ./planfact
-RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/src/target \
-    cargo build --release --locked --workspace --bins \
+RUN cargo build --release --locked --workspace --bins \
     && mkdir /out && cp target/release/api target/release/ledger target/release/forecast target/release/planfact /out/
 
 FROM debian:bookworm-slim AS runtime
