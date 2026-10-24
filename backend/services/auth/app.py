@@ -16,7 +16,6 @@ from contextlib import contextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from . import ecp
 
 DB_PATH = os.environ.get("AUTH_DB", "../data/auth.db")
 SESSION_TTL = 7 * 24 * 3600
@@ -42,13 +41,10 @@ def db():
                 "CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL,"
                 " expires_at REAL NOT NULL)"
             )
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS ecp_challenges(nonce_hash TEXT PRIMARY KEY, expires_at REAL NOT NULL)"
-            )
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS ecp_identities(fingerprint TEXT PRIMARY KEY, user_id TEXT NOT NULL,"
-                " subject TEXT NOT NULL, issuer TEXT NOT NULL, serial TEXT NOT NULL, created_at REAL NOT NULL)"
-            )
+            # миграция существующей БД: внешний идентификатор (например, отпечаток сертификата ЭЦП)
+            if "external_id" not in [r[1] for r in conn.execute("PRAGMA table_info(users)")]:
+                conn.execute("ALTER TABLE users ADD COLUMN external_id TEXT")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_external_id ON users(external_id)")
             yield conn
             conn.commit()
         finally:
@@ -72,9 +68,13 @@ class TokenIn(BaseModel):
     token: str
 
 
-class EcpLoginIn(BaseModel):
-    challenge: str
-    signature: str  # base64 откреплённой подписи CAdES (DER)
+class ExternalUserIn(BaseModel):
+    external_id: str
+    display_name: str = ""
+
+
+class IssueIn(BaseModel):
+    user_id: str
 
 
 app = FastAPI(title="auth-service", docs_url=None, redoc_url=None)
@@ -97,7 +97,7 @@ def register(c: Credentials):
     with db() as conn:
         try:
             conn.execute(
-                "INSERT INTO users VALUES(?,?,?,?,?)",
+                "INSERT INTO users(id,email,salt,pwd_hash,created_at) VALUES(?,?,?,?,?)",
                 (uid, email, salt, hash_password(c.password, salt), time.time()),
             )
         except sqlite3.IntegrityError:
@@ -128,63 +128,38 @@ def login(c: Credentials):
     return {"token": token, "user_id": row[0], "email": email, "ttl": SESSION_TTL}
 
 
-ECP_STATUS = {
-    "bad_signature": 422, "no_certificate": 422, "certificate_expired": 401,
-    "signature_invalid": 401, "invalid_challenge": 401, "verifier_unavailable": 503,
-}
-
-
-@app.post("/internal/v1/ecp/challenge")
-def ecp_challenge():
-    nonce = secrets.token_urlsafe(32)
+@app.post("/internal/v1/users/external")
+def users_external(u: ExternalUserIn):
+    """Идемпотентно по external_id: создаёт пользователя без возможности входа по паролю."""
+    ext = u.external_id.strip()
+    if not (1 <= len(ext) <= 256):
+        raise HTTPException(422, {"code": "invalid_external_id"})
     with db() as conn:
-        conn.execute("DELETE FROM ecp_challenges WHERE expires_at < ?", (time.time(),))
-        if conn.execute("SELECT COUNT(*) FROM ecp_challenges").fetchone()[0] > 10000:
-            raise HTTPException(429, {"code": "too_many_attempts"})
-        conn.execute("INSERT INTO ecp_challenges VALUES(?,?)", (token_hash(nonce), time.time() + ecp.CHALLENGE_TTL))
-    return {"challenge": ecp.challenge_text(nonce), "ttl": ecp.CHALLENGE_TTL}
+        row = conn.execute("SELECT id, email FROM users WHERE external_id=?", (ext,)).fetchone()
+        if row:
+            return {"user_id": row[0], "email": row[1], "created": False}
+        uid = secrets.token_hex(16)
+        email = f"ecp-{hashlib.sha256(ext.encode()).hexdigest()[:16]}@ecp.invalid"
+        salt = secrets.token_bytes(16)
+        # случайный пароль нигде не раскрывается, поэтому войти по паролю нельзя
+        conn.execute(
+            "INSERT INTO users(id,email,salt,pwd_hash,created_at,external_id) VALUES(?,?,?,?,?,?)",
+            (uid, email, salt, hash_password(secrets.token_urlsafe(32), salt), time.time(), ext),
+        )
+    return {"user_id": uid, "email": email, "created": True}
 
 
-@app.post("/internal/v1/ecp/login")
-def ecp_login(c: EcpLoginIn):
-    try:
-        if not c.challenge.startswith(ecp.PREFIX):
-            raise ecp.EcpError("invalid_challenge")
-        nonce = c.challenge[len(ecp.PREFIX):]
-        with db() as conn:  # одноразовость: challenge гасится до проверки подписи
-            cur = conn.execute(
-                "DELETE FROM ecp_challenges WHERE nonce_hash=? AND expires_at >= ?", (token_hash(nonce), time.time())
-            )
-            if cur.rowcount != 1:
-                raise ecp.EcpError("invalid_challenge")
-        sig = ecp.decode_signature(c.signature)
-        signer = ecp.parse_signer(sig)
-        ecp.verify_detached(c.challenge.encode(), sig)
-    except ecp.EcpError as e:
-        raise HTTPException(ECP_STATUS.get(e.code, 401), {"code": e.code})
+@app.post("/internal/v1/sessions/issue")
+def sessions_issue(u: IssueIn):
+    """Выдаёт сессию уже аутентифицированному вызывающим сервисом пользователю."""
     with db() as conn:
-        row = conn.execute("SELECT user_id FROM ecp_identities WHERE fingerprint=?", (signer.fingerprint,)).fetchone()
-        new = row is None
-        if new:  # первый вход этим сертификатом: создаём учётную запись без пароля
-            uid = secrets.token_hex(16)
-            salt = secrets.token_bytes(16)
-            conn.execute(
-                "INSERT INTO users VALUES(?,?,?,?,?)",
-                (uid, f"ecp-{signer.fingerprint[:16]}@ecp.invalid", salt,
-                 hash_password(secrets.token_urlsafe(32), salt), time.time()),
-            )
-            conn.execute(
-                "INSERT INTO ecp_identities VALUES(?,?,?,?,?,?)",
-                (signer.fingerprint, uid, signer.subject, signer.issuer, signer.serial, time.time()),
-            )
-        else:
-            uid = row[0]
-        email = conn.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()[0]
+        row = conn.execute("SELECT id, email FROM users WHERE id=?", (u.user_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, {"code": "user_not_found"})
         token = secrets.token_urlsafe(32)
         conn.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
-        conn.execute("INSERT INTO sessions VALUES(?,?,?)", (token_hash(token), uid, time.time() + SESSION_TTL))
-    return {"token": token, "user_id": uid, "email": email, "ttl": SESSION_TTL,
-            "display_name": signer.display_name, "new": new}
+        conn.execute("INSERT INTO sessions VALUES(?,?,?)", (token_hash(token), row[0], time.time() + SESSION_TTL))
+    return {"token": token, "ttl": SESSION_TTL, "user_id": row[0], "email": row[1]}
 
 
 @app.post("/internal/v1/session")

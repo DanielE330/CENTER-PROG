@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import shutil
 import subprocess
 
@@ -6,7 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import auth.app as auth_app
-import auth.ecp as ecp
+import ecp.app as ecp_app
+import ecp.cades as ecp
 
 P = "/internal/v1"
 pytestmark = pytest.mark.skipif(shutil.which("openssl") is None, reason="нужен openssl для тестового CMS")
@@ -15,9 +17,14 @@ pytestmark = pytest.mark.skipif(shutil.which("openssl") is None, reason="нуж�
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_app, "DB_PATH", str(tmp_path / "auth.db"))
+    monkeypatch.setattr(ecp_app, "DB_PATH", str(tmp_path / "ecp.db"))
+    auth = TestClient(auth_app.app)  # auth вызывается по HTTP; в тесте подменяем транспорт на TestClient
+    monkeypatch.setattr(ecp_app, "auth_client", lambda: contextlib.nullcontext(auth))
     # криптографическая проверка подписи делегирована cryptcp (КриптоПро CSP); здесь проверяем остальное
     monkeypatch.setattr(ecp, "verify_detached", lambda msg, sig: None)
-    return TestClient(auth_app.app)
+    c = TestClient(ecp_app.app)
+    c.authsvc = auth
+    return c
 
 
 def make_cms(tmp_path, message: str, cn="Ivan", days=30) -> str:
@@ -41,7 +48,7 @@ def test_ecp_login_creates_account_and_session(client, tmp_path):
     assert r.status_code == 200, r.text
     v = r.json()
     assert v["new"] is True and v["display_name"] == "Romashka" and v["email"].endswith("@ecp.invalid")
-    s = client.post(f"{P}/session", json={"token": v["token"]})
+    s = client.authsvc.post(f"{P}/session", json={"token": v["token"]})
     assert s.status_code == 200 and s.json()["user_id"] == v["user_id"]
 
 
@@ -60,8 +67,8 @@ def test_unknown_challenge_rejected(client, tmp_path):
 def test_expired_challenge_rejected(client, tmp_path, monkeypatch):
     ch = client.post(f"{P}/ecp/challenge").json()["challenge"]
     monkeypatch.setattr(ecp, "CHALLENGE_TTL", 0)
-    real = auth_app.time.time
-    monkeypatch.setattr(auth_app.time, "time", lambda: real() + 400)
+    real = ecp_app.time.time
+    monkeypatch.setattr(ecp_app.time, "time", lambda: real() + 400)
     r = client.post(f"{P}/ecp/login", json={"challenge": ch, "signature": make_cms(tmp_path, ch)})
     assert r.status_code == 401
 
@@ -93,5 +100,20 @@ def test_same_certificate_same_account_independent_of_password_login(client, tmp
     b = client.post(f"{P}/ecp/login", json={"challenge": ch2, "signature": sig2}).json()
     assert a["user_id"] == b["user_id"] and a["new"] is True and b["new"] is False
     # по email/паролю в такую запись войти нельзя
-    r = client.post(f"{P}/login", json={"email": a["email"], "password": "anything-123"})
+    r = client.authsvc.post(f"{P}/login", json={"email": a["email"], "password": "anything-123"})
     assert r.status_code == 401
+
+
+def test_auth_unavailable(client, tmp_path, monkeypatch):
+    def down():
+        raise ecp_app.httpx.ConnectError("down")
+    monkeypatch.setattr(ecp_app, "auth_client", down)
+    ch, r = login(client, tmp_path)
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "auth_unavailable"
+
+
+def test_identity_recorded_in_ecp_db(client, tmp_path):
+    import sqlite3
+    ch, r = login(client, tmp_path)
+    rows = sqlite3.connect(ecp_app.DB_PATH).execute("SELECT user_id FROM ecp_identities").fetchall()
+    assert rows == [(r.json()["user_id"],)]

@@ -154,3 +154,49 @@ def test_password_not_stored_plain(client, db_path):
     conn.close()
     assert h == auth_app.hash_password(PWD, salt)
     assert PWD.encode() not in h
+
+
+def test_external_user_idempotent_and_no_password_login(client):
+    a = client.post(f"{P}/users/external", json={"external_id": "abc123", "display_name": "X"})
+    assert a.status_code == 200
+    v = a.json()
+    assert v["created"] is True and v["email"].startswith("ecp-") and v["email"].endswith("@ecp.invalid")
+    assert len(v["email"]) == len("ecp-") + 16 + len("@ecp.invalid")
+    b = client.post(f"{P}/users/external", json={"external_id": "abc123", "display_name": "X"}).json()
+    assert b == {"user_id": v["user_id"], "email": v["email"], "created": False}
+    other = client.post(f"{P}/users/external", json={"external_id": "def"}).json()
+    assert other["user_id"] != v["user_id"]
+    assert login(client, v["email"], "anything-123").status_code == 401
+
+
+def test_external_user_empty_id(client):
+    assert client.post(f"{P}/users/external", json={"external_id": " "}).status_code == 422
+
+
+def test_sessions_issue(client):
+    u = client.post(f"{P}/users/external", json={"external_id": "abc"}).json()
+    r = client.post(f"{P}/sessions/issue", json={"user_id": u["user_id"]})
+    assert r.status_code == 200
+    v = r.json()
+    assert v["user_id"] == u["user_id"] and v["email"] == u["email"] and v["ttl"] == auth_app.SESSION_TTL
+    s = client.post(f"{P}/session", json={"token": v["token"]})
+    assert s.status_code == 200 and s.json()["user_id"] == u["user_id"]
+
+
+def test_sessions_issue_unknown_user(client):
+    r = client.post(f"{P}/sessions/issue", json={"user_id": "nope"})
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "user_not_found"
+
+
+def test_external_id_migration_of_old_db(db_path):
+    import os
+    os.makedirs(os.path.dirname(db_path))
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE users(id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,"
+                 " salt BLOB NOT NULL, pwd_hash BLOB NOT NULL, created_at REAL NOT NULL)")
+    conn.execute("INSERT INTO users VALUES('u1','old@example.com',x'00',x'00',0)")
+    conn.commit(); conn.close()
+    c = TestClient(auth_app.app)
+    assert c.post(f"{P}/users/external", json={"external_id": "z"}).json()["created"] is True
+    cols = [r[1] for r in sqlite3.connect(db_path).execute("PRAGMA table_info(users)")]
+    assert "external_id" in cols
