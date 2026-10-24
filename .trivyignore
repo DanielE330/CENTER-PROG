@@ -1,0 +1,4 @@
+# Hermes Agent is installed from a pinned source commit, so its package metadata says
+# version 0.0.0 and trivy assumes it predates the fix. The pinned commit
+# (75f8bd95) is 3727 commits ahead of release v0.22.2, which is later than 0.16.0.
+CVE-2026-53869
