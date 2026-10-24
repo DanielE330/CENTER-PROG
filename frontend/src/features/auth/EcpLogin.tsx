@@ -11,7 +11,8 @@ import { Select } from '../../components/ui/Select'
 import type { Me } from '../../types'
 
 /** Sign-in or registration with an electronic signature (CryptoPro Browser plug-in): pick a certificate, sign the challenge. */
-export function EcpLogin({ onDone, register = false, companyName = '' }: { onDone: (me: Me) => void; register?: boolean; companyName?: string }) {
+/** Название юрлица, ИНН и ОГРН сервер берёт из сертификата, поэтому при регистрации вводить их не нужно. */
+export function EcpLogin({ onDone, register = false }: { onDone: (me: Me) => void; register?: boolean }) {
   const { t } = useTranslation()
   const [certs, setCerts] = useState<CertInfo[] | null>(null)
   const [sel, setSel] = useState('')
@@ -37,13 +38,9 @@ export function EcpLogin({ onDone, register = false, companyName = '' }: { onDon
     setError('')
     setBusy(true)
     try {
-      if (register && companyName.trim().length < 2) {
-        setError(t('auth.ecp.companyRequired'))
-        return
-      }
       const { challenge } = await api.ecpChallenge()
       const signature = await signDetached(sel, challenge)
-      onDone(await api.ecpLogin(challenge, signature, register ? companyName.trim() : undefined))
+      onDone(await api.ecpLogin(challenge, signature))
     } catch (e) {
       setError(errorText(t, e))
     } finally {
