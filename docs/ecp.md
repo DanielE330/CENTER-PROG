@@ -15,3 +15,13 @@
 `bad_signature` 422, `no_certificate` 422, `certificate_expired` 401, `signature_invalid` 401, `invalid_challenge` 401, `verifier_unavailable` 503, `too_many_attempts` 429, `auth_unavailable` 503 (auth недоступен или ответил ошибкой).
 
 Auth: `users/external` -> 422 `invalid_external_id`; `sessions/issue` -> 404 `user_not_found`. В `auth.db` у `users` добавлена колонка `external_id` (уникальный индекс, миграция при старте).
+
+
+## Регистрация и вход (режимы)
+
+`POST /internal/v1/ecp/login` принимает дополнительно `register` (по умолчанию `false`) и `company_name`.
+
+- `register=true` — регистрация: нужно `company_name` (2–200 символов, иначе 422 `invalid_company_name`). Если сертификат уже зарегистрирован, 409 `already_registered`. Создаётся пользователь без пароля и компания с этим названием.
+- `register=false` — вход: если сертификат неизвестен, 404 `not_registered` (интерфейс предлагает зарегистрироваться по ЭЦП).
+
+Проверки идут после проверки подписи, поэтому неподписанные запросы не могут узнать, зарегистрирован ли сертификат.

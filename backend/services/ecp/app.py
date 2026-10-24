@@ -65,6 +65,8 @@ def call_auth(path: str, payload: dict) -> dict:
 class EcpLoginIn(BaseModel):
     challenge: str
     signature: str  # base64 откреплённой подписи CAdES (DER)
+    register: bool = False  # True: регистрация нового сертификата (нужно company_name); False: вход только для известного
+    company_name: str | None = None
 
 
 app = FastAPI(title="ecp-service", docs_url=None, redoc_url=None)
@@ -88,6 +90,9 @@ def ecp_challenge():
 
 @app.post("/internal/v1/ecp/login")
 def ecp_login(c: EcpLoginIn):
+    company = (c.company_name or "").strip()
+    if c.register and not (2 <= len(company) <= 200):
+        raise HTTPException(422, {"code": "invalid_company_name"})
     try:
         if not c.challenge.startswith(cades.PREFIX):
             raise cades.EcpError("invalid_challenge")
@@ -103,8 +108,14 @@ def ecp_login(c: EcpLoginIn):
         cades.verify_detached(c.challenge.encode(), sig)
     except cades.EcpError as e:
         raise HTTPException(ECP_STATUS.get(e.code, 401), {"code": e.code})
-    u = call_auth("/internal/v1/users/external",
-                  {"external_id": signer.fingerprint, "display_name": signer.display_name})
+    with db() as conn:
+        known = conn.execute("SELECT 1 FROM ecp_identities WHERE fingerprint=?", (signer.fingerprint,)).fetchone() is not None
+    if c.register and known:
+        raise HTTPException(409, {"code": "already_registered"})
+    if not c.register and not known:
+        raise HTTPException(404, {"code": "not_registered"})
+    display_name = company if c.register else signer.display_name
+    u = call_auth("/internal/v1/users/external", {"external_id": signer.fingerprint, "display_name": display_name})
     if u["created"]:
         with db() as conn:
             conn.execute(
@@ -113,4 +124,4 @@ def ecp_login(c: EcpLoginIn):
             )
     s = call_auth("/internal/v1/sessions/issue", {"user_id": u["user_id"]})
     return {"token": s["token"], "user_id": s["user_id"], "email": s["email"], "ttl": s["ttl"],
-            "display_name": signer.display_name, "new": u["created"]}
+            "display_name": display_name, "new": u["created"]}

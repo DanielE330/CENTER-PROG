@@ -48,7 +48,10 @@
       "certLabel": "{{name}} (until {{date}}, {{issuer}})",
       "noCerts": "No valid certificates with a private key in the store",
       "signIn": "Sign and sign in",
-      "signing": "Signing…"
+      "signing": "Signing…",
+      "registerButton": "Register with e-signature",
+      "signRegister": "Sign and register",
+      "companyRequired": "Enter the legal entity name above first"
     }
   },
   "cades": {
@@ -173,7 +176,9 @@
     "bad_origin": "A request from another origin was rejected",
     "not_found": "Not found",
     "no_forecast": "No forecast has been built yet",
-    "gov_error": "Could not get data from the government service"
+    "gov_error": "Could not get data from the government service",
+    "not_registered": "This certificate is not registered. Register with e-signature first",
+    "already_registered": "This certificate is already registered. Sign in with e-signature"
   },
   "quality": {
     "title": "Data quality",

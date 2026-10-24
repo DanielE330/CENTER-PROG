@@ -84,8 +84,12 @@ export const api = {
   register: (b: { email: string; password: string; password_confirm: string; company_name: string }) =>
     request<Me>('POST', '/api/v1/auth/register', { body: b, expect401: true }),
   ecpChallenge: () => request<{ challenge: string }>('POST', '/api/v1/auth/ecp/challenge', { body: {}, expect401: true }),
-  ecpLogin: (challenge: string, signature: string) =>
-    request<Me>('POST', '/api/v1/auth/ecp/login', { body: { challenge, signature }, expect401: true }),
+  /** `companyName` set = registration with a new certificate; omitted = sign-in of an already registered one. */
+  ecpLogin: (challenge: string, signature: string, companyName?: string) =>
+    request<Me>('POST', '/api/v1/auth/ecp/login', {
+      body: companyName === undefined ? { challenge, signature } : { challenge, signature, register: true, company_name: companyName },
+      expect401: true,
+    }),
   logout: () => request<void>('POST', '/api/v1/auth/logout', { body: {}, expect401: true }),
 
   // ----- company -----

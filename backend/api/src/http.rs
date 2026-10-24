@@ -122,6 +122,10 @@ pub async fn login(axum::extract::State(st): axum::extract::State<AppState>, ctx
 pub struct EcpLogin {
     challenge: String,
     signature: String,
+    #[serde(default)]
+    register: bool,
+    #[serde(default)]
+    company_name: Option<String>,
 }
 
 pub async fn ecp_challenge(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx) -> R<Json<Value>> {
@@ -135,6 +139,9 @@ pub async fn ecp_challenge(axum::extract::State(st): axum::extract::State<AppSta
 fn ecp_err(s: StatusCode, v: &Value) -> ApiError {
     match v["detail"]["code"].as_str().unwrap_or("") {
         "invalid_challenge" => err(s, "invalid_challenge", "Запрос на подпись устарел, повторите вход"),
+        "not_registered" => err(s, "not_registered", "Этот сертификат не зарегистрирован. Зарегистрируйтесь по ЭЦП"),
+        "already_registered" => err(s, "already_registered", "Этот сертификат уже зарегистрирован. Войдите по ЭЦП"),
+        "invalid_company_name" => err(s, "invalid_company_name", "Укажите название юридического лица (2–200 символов)"),
         "signature_invalid" => err(s, "signature_invalid", "Подпись не прошла проверку"),
         "certificate_expired" => err(s, "certificate_expired", "Срок действия сертификата истёк"),
         "bad_signature" | "no_certificate" => err(s, "bad_signature", "Не удалось разобрать подпись"),
@@ -147,7 +154,7 @@ fn ecp_err(s: StatusCode, v: &Value) -> ApiError {
 
 /// Вход по ЭЦП: личность определяется сертификатом, email и пароль не нужны.
 pub async fn ecp_login(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx, Json(c): Json<EcpLogin>) -> R<Response> {
-    let (s, v) = service_call(&st.ecp, &ctx, "ecp/login", json!({"challenge": c.challenge, "signature": c.signature})).await?;
+    let (s, v) = service_call(&st.ecp, &ctx, "ecp/login", json!({"challenge": c.challenge, "signature": c.signature, "register": c.register, "company_name": c.company_name})).await?;
     if !s.is_success() {
         return Err(ecp_err(s, &v));
     }

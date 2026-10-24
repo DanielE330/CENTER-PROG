@@ -114,14 +114,10 @@ export default function AuthPage() {
             {reg ? t('auth.register') : t('auth.login')}
           </Button>
 
-          {!reg && (
-            <>
-              <div className="flex items-center gap-3 text-xs text-muted" aria-hidden>
-                <span className="h-px flex-1 bg-line" /> {t('auth.or')} <span className="h-px flex-1 bg-line" />
-              </div>
-              <EcpLogin onDone={setMe} />
-            </>
-          )}
+          <div className="flex items-center gap-3 text-xs text-muted" aria-hidden>
+            <span className="h-px flex-1 bg-line" /> {t('auth.or')} <span className="h-px flex-1 bg-line" />
+          </div>
+          <EcpLogin onDone={setMe} register={reg} companyName={company} />
 
           <button
             type="button"

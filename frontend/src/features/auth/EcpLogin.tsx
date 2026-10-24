@@ -10,8 +10,8 @@ import { Button } from '../../components/ui/Button'
 import { Select } from '../../components/ui/Select'
 import type { Me } from '../../types'
 
-/** Sign-in with an electronic signature (CryptoPro Browser plug-in): pick a certificate, sign the challenge. */
-export function EcpLogin({ onDone }: { onDone: (me: Me) => void }) {
+/** Sign-in or registration with an electronic signature (CryptoPro Browser plug-in): pick a certificate, sign the challenge. */
+export function EcpLogin({ onDone, register = false, companyName = '' }: { onDone: (me: Me) => void; register?: boolean; companyName?: string }) {
   const { t } = useTranslation()
   const [certs, setCerts] = useState<CertInfo[] | null>(null)
   const [sel, setSel] = useState('')
@@ -37,9 +37,13 @@ export function EcpLogin({ onDone }: { onDone: (me: Me) => void }) {
     setError('')
     setBusy(true)
     try {
+      if (register && companyName.trim().length < 2) {
+        setError(t('auth.ecp.companyRequired'))
+        return
+      }
       const { challenge } = await api.ecpChallenge()
       const signature = await signDetached(sel, challenge)
-      onDone(await api.ecpLogin(challenge, signature))
+      onDone(await api.ecpLogin(challenge, signature, register ? companyName.trim() : undefined))
     } catch (e) {
       setError(errorText(t, e))
     } finally {
@@ -56,7 +60,7 @@ export function EcpLogin({ onDone }: { onDone: (me: Me) => void }) {
       <div className="flex flex-col gap-3">
         <Button type="button" disabled={busy} onClick={load} className="w-full">
           {busy ? <Loader2 size={16} className="spin" aria-hidden /> : <ShieldCheck size={16} aria-hidden />}
-          {busy ? t('auth.ecp.searching') : t('auth.ecp.button')}
+          {busy ? t('auth.ecp.searching') : register ? t('auth.ecp.registerButton') : t('auth.ecp.button')}
         </Button>
         {alert}
       </div>
@@ -74,7 +78,7 @@ export function EcpLogin({ onDone }: { onDone: (me: Me) => void }) {
       {alert}
       <Button type="button" variant="primary" disabled={busy || !sel} onClick={sign} className="w-full">
         {busy && <Loader2 size={16} className="spin" aria-hidden />}
-        {busy ? t('auth.ecp.signing') : t('auth.ecp.signIn')}
+        {busy ? t('auth.ecp.signing') : register ? t('auth.ecp.signRegister') : t('auth.ecp.signIn')}
       </Button>
       <Button type="button" variant="ghost" onClick={() => { setCerts(null); setError('') }} className="w-full">{t('common.cancel')}</Button>
     </div>
