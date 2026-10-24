@@ -1,4 +1,4 @@
-# Центр-инвест — фронтенд кассового прогноза
+# Центр Прогнозирования — фронтенд
 
 React 19 + Vite + TypeScript, Tailwind v4, TanStack Query, React Router, ECharts, i18next (RU/EN), светлая и тёмная темы.
 Все данные приходят из публичного API бэкенда (`docs/knowledge-base.md` §5); моков нет.
