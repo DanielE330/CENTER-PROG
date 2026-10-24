@@ -1,0 +1,121 @@
+# The only place where services are described for deployment. `deploy/gen.py`
+# turns it into compose.yaml (dev and stand), nats.conf and Quadlet units.
+#
+#   clients:  SPIFFE names allowed to open an mTLS connection to this service
+#   nats:     subjects this service may publish / subscribe (besides JetStream API)
+#   uid:      user the container runs as; its certificate tmpfs is owned by it
+#   cert:     extra cert-agent options (key formats some runtimes need)
+
+defaults:
+  cert_lifetime: 168h        # demo mode: a failed renewal cannot break the demo for a week
+  restart: unless-stopped
+
+infra:
+  step-ca:
+    image: smallstep/step-ca:0.30.2
+    uid: 1000
+    networks: [app, data, egress, llm]
+  postgres:
+    image: postgres:16.13-bookworm
+    uid: 999
+    networks: [data]
+    memory: 384m
+  nats:
+    image: nats:2.14-alpine
+    uid: 1000
+    networks: [data]
+    memory: 96m
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.5
+    uid: 1000
+    networks: [app, data]
+    memory: 900m
+    clients: [caddy, gateway, tenancy, llm-gateway, advisor-tools, connectors, ingest, obligations, alerts, categorizer, forecast, advisor]
+    cert: {pkcs8: true}
+  caddy:
+    image: ci1/web
+    uid: 1000
+    networks: [edge, app]
+    memory: 96m
+
+services:
+  gateway:
+    kind: rust
+    networks: [app, data]
+    clients: [caddy]
+    memory: 96m
+    secrets: [session_key, gateway_client_secret]
+    nats:
+      publish: ["$KV.bff_sessions.>", "$KV.bff_logins.>"]
+      subscribe: ["ci.v1.forecast.updated", "ci.v1.alerts.raised", "ci.v1.advisor.proposal_created"]
+  tenancy:
+    kind: rust
+    networks: [app, data]
+    clients: [gateway, connectors, llm-gateway, advisor-tools]
+    db: tenancy
+    nats: {publish: ["ci.v1.tenancy.>"]}
+  ingest:
+    kind: rust
+    networks: [app, data]
+    clients: [gateway, connectors]
+    db: ingest
+    memory: 128m
+    secrets: [counterparty_hmac_key]
+    nats: {publish: ["ci.v1.transactions.ingested"]}
+  obligations:
+    kind: rust
+    networks: [app, data]
+    clients: [gateway, connectors, advisor-tools]
+    db: obligations
+    nats: {publish: ["ci.v1.obligations.>"]}
+  alerts:
+    kind: rust
+    networks: [app, data]
+    clients: [gateway]
+    db: alerts
+    nats: {publish: ["ci.v1.alerts.>"]}
+  llm-gateway:
+    kind: rust
+    networks: [app, data, egress, llm]
+    clients: [advisor]
+    db: llm_gateway
+    secrets: [openai_api_key, anthropic_api_key, gemini_api_key, openrouter_api_key]
+  advisor-tools:
+    kind: rust
+    networks: [app, data]
+    clients: [gateway, advisor]
+    db: advisor_tools
+    nats: {publish: ["ci.v1.advisor.>"]}
+  categorizer:
+    kind: python
+    networks: [app, data]
+    clients: [gateway, advisor-tools]
+    db: categorizer
+    memory: 384m
+    nats: {publish: ["ci.v1.transactions.categorized", "ci.v1.categorizer.>"]}
+  forecast:
+    kind: python
+    networks: [app, data]
+    clients: [gateway, advisor-tools]
+    db: forecast
+    memory: 512m
+    nats: {publish: ["ci.v1.forecast.>"]}
+  connectors:
+    kind: python
+    networks: [app, data, egress]
+    clients: [gateway]
+    memory: 256m
+    secrets: [counterparty_hmac_key, demo_password]
+    volumes: ["${DATA_DIR:-../../data}:/data:ro"]
+    nats: {publish: ["ci.v1.connectors.>"]}
+  advisor:
+    kind: advisor
+    networks: [app]
+    clients: [gateway]
+    memory: 512m
+  llm-local:
+    kind: llm
+    profile: gpu
+    networks: [llm]
+    clients: [llm-gateway]
+    memory: 8g

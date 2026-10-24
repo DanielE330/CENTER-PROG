@@ -1,0 +1,36 @@
+[package]
+name = "ci-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+axum.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pki-types.workspace = true
+x509-parser.workspace = true
+reqwest.workspace = true
+sqlx.workspace = true
+async-nats.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+jsonwebtoken.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+arc-swap.workspace = true
+futures.workspace = true
+bytes.workspace = true
+
+[lints]
+workspace = true
