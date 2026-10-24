@@ -181,6 +181,7 @@ def parse_statement(filename: str, data: bytes) -> dict:
                     "category": cat,
                     "category_confidence": conf,
                     "subcategory": cl["subcategory"],
+                    "method": cl["method"],
                     "group": cl["group"],
                     "doc_no": cl["doc_no"],
                     "doc_date": cl["doc_date"],

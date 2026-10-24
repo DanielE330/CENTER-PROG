@@ -11,7 +11,7 @@ import { Notice } from '../../components/shared/Notice'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
-import { useSetCategory, useTransactions } from '../../hooks/queries'
+import { useSetCategory, useSetSubcategory, useTaxonomy, useTransactions } from '../../hooks/queries'
 import { formatDate, formatKop, formatNumber } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
 import { CATEGORIES, categoryLabel } from '../../i18n/categories'
@@ -41,6 +41,9 @@ export default function TransactionsPage() {
 
   const query = useTransactions({ limit: LIMIT, offset, category, direction: dir, q, sort: sort.key, order: sort.dir })
   const setCat = useSetCategory()
+  const setSub = useSetSubcategory()
+  const taxonomy = useTaxonomy()
+  const subOptions = Object.entries(taxonomy.data?.subcategories ?? {}).map(([k, v]) => ({ value: k, label: `${taxonomy.data?.groups[v.group] ?? v.group} · ${v.name}` }))
   const data = query.data
   const filtered = category !== '' || dir !== '' || q !== ''
 
@@ -77,6 +80,19 @@ export default function TransactionsPage() {
             onChange={(c) => setCat.mutate({ id: x.id, category: c })}
             options={[...(CATEGORIES as readonly string[]).includes(x.category) ? [] : [{ value: x.category, label: x.category }], ...CATEGORIES.map((c) => ({ value: c, label: categoryLabel(t, c) }))]}
           />
+          {subOptions.length > 0 && (
+            <div className="mt-1">
+              <Select
+                aria-label={t('transactions.subcategoryOf', { name: x.counterparty || x.purpose.slice(0, 40) })}
+                value={x.subcategory ?? ''}
+                placeholder={t('transactions.subcategoryNone')}
+                disabled={setSub.isPending && setSub.variables?.id === x.id}
+                onChange={(s) => s && setSub.mutate({ id: x.id, subcategory: s })}
+                options={subOptions}
+              />
+              {x.method === 'tail' && <span className="text-xs text-muted">{t('transactions.methodTail')}</span>}
+            </div>
+          )}
         </div>
       ),
     },

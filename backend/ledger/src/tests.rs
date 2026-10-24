@@ -8,7 +8,7 @@ use axum::{
     body::{Body, to_bytes},
     extract::Multipart,
     http::{Request, StatusCode},
-    routing::post,
+    routing::{get, post},
 };
 use chrono::{Duration, Local};
 use common::Upstream;
@@ -28,6 +28,31 @@ async fn fake_parse(mut mp: Multipart) -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(v))
 }
 
+async fn fake_taxonomy() -> Json<Value> {
+    Json(json!({"groups": {}, "subcategories": {
+        "customer_payment": {"group": "revenue", "name": "Оплаты клиентов", "category": "revenue"},
+        "supplier_payment": {"group": "purchases", "name": "Поставщики", "category": "suppliers"},
+        "other_in": {"group": "other", "name": "Прочее", "category": "other_income"},
+    }}))
+}
+
+/// Заглушка модели на хвост: положительные суммы -> customer_payment, остальные не распознаёт.
+async fn fake_tail(Json(b): Json<Value>) -> Json<Value> {
+    let preds: Vec<Value> = b["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            if r["amount_kop"].as_i64().unwrap_or(0) > 0 {
+                json!({"subcategory": "customer_payment", "group": "revenue", "category": "revenue", "confidence": 0.9})
+            } else {
+                Value::Null
+            }
+        })
+        .collect();
+    Json(json!({"ready": true, "predictions": preds, "train_size": b["train"].as_array().unwrap().len()}))
+}
+
 struct Env {
     app: Router,
     _dir: std::path::PathBuf,
@@ -43,7 +68,8 @@ async fn env() -> Env {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move {
-        axum::serve(l, Router::new().route("/internal/v1/parse", post(fake_parse))).await.unwrap();
+        let app = Router::new().route("/internal/v1/parse", post(fake_parse)).route("/internal/v1/taxonomy", get(fake_taxonomy)).route("/internal/v1/tail", post(fake_tail));
+        axum::serve(l, app).await.unwrap();
     });
     let dir = std::env::temp_dir().join(format!("ledger-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -503,4 +529,112 @@ async fn audit_log_lists_newest_first_filters_and_isolates_companies() {
     assert_eq!((p["items"].as_array().unwrap().len(), p["items"][0]["action"].as_str()), (1, Some("goal.status")));
     let (_, other) = call(&e.app, "GET", &format!("/internal/v1/companies/{b}/audit"), None).await;
     assert_eq!(other["total"], 1); // чужие записи не видны
+}
+
+// ---------- подкатегории, правила компании, модель на хвост ----------
+fn sub_tx(row: i64, cp: &str, amount: i64, sub: &str, method: &str) -> Value {
+    let mut t = tx(row, "2026-03-02", amount, cp, "Платёж", "revenue");
+    t["subcategory"] = json!(sub);
+    t["group"] = json!("revenue");
+    t["method"] = json!(method);
+    t
+}
+
+#[tokio::test]
+async fn migration_adds_subcategory_columns_to_an_old_database() {
+    let dir = std::env::temp_dir().join(format!("ledger-mig-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("old.db");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE companies(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, data_revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+             CREATE TABLE transactions(id INTEGER PRIMARY KEY AUTOINCREMENT, company_id TEXT NOT NULL, import_id TEXT NOT NULL, row_no INTEGER NOT NULL, date TEXT NOT NULL,
+               amount_kop INTEGER NOT NULL, balance_kop INTEGER, counterparty TEXT NOT NULL, inn TEXT NOT NULL, purpose TEXT NOT NULL, category TEXT NOT NULL,
+               category_conf REAL NOT NULL, manual INTEGER NOT NULL DEFAULT 0, dedup_key TEXT NOT NULL, UNIQUE(company_id, dedup_key));",
+        )
+        .unwrap();
+    }
+    let db = db::open(path.to_str().unwrap());
+    // повторное открытие идемпотентно
+    drop(db);
+    let db = db::open(path.to_str().unwrap());
+    let c = db.lock().unwrap();
+    let n: i64 = c.query_row("SELECT COUNT(*) FROM pragma_table_info('transactions') WHERE name IN ('subcategory','grp','method')", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn subcategory_correction_becomes_a_company_rule_and_applies_to_similar_rows() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    import_confirmed(
+        &e.app,
+        &cid,
+        "a.csv",
+        vec![sub_tx(1, "ИП Иванов", 500_000, "other_in", "fallback"), sub_tx(2, "ИП Иванов", 700_000, "other_in", "fallback"), sub_tx(3, "ООО Другой", 900_000, "other_in", "fallback")],
+    )
+    .await;
+    let rev = revision(&e.app, &cid).await;
+    let by_cp = |t: &Value, cp: &str| t["items"].as_array().unwrap().iter().filter(|x| x["counterparty"] == cp).cloned().collect::<Vec<_>>();
+    let (_, t) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/transactions"), None).await;
+    let id = by_cp(&t, "ИП Иванов")[0]["id"].as_i64().unwrap();
+    let uri = format!("/internal/v1/companies/{cid}/transactions/{id}/category");
+    let (s, v) = call(&e.app, "PATCH", &uri, Some(json!({"subcategory": "customer_payment"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["category"].as_str(), v["group"].as_str(), v["applied_to_similar"].as_i64()), (Some("revenue"), Some("revenue"), Some(1)));
+    assert_eq!(revision(&e.app, &cid).await, rev + 1);
+    let (_, t) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/transactions"), None).await;
+    let ivan = by_cp(&t, "ИП Иванов");
+    let methods: Vec<&str> = ivan.iter().map(|x| x["method"].as_str().unwrap()).collect();
+    assert!(methods.contains(&"manual") && methods.contains(&"tenant_rule"), "{methods:?}");
+    assert!(ivan.iter().all(|x| x["subcategory"] == "customer_payment"));
+    assert_eq!(by_cp(&t, "ООО Другой")[0]["subcategory"], "other_in");
+    // новая выписка: операции этого контрагента размечаются правилом компании ещё до подтверждения
+    let (s, up) = upload(&e.app, &cid, "b.csv", &parsed(vec![sub_tx(1, "  ИП ИВАНОВ ", 100_000, "other_in", "fallback")])).await;
+    assert_eq!(s, StatusCode::CREATED, "{up}");
+    assert_eq!(up["summary"]["sample"][0]["method"], "tenant_rule");
+    assert_eq!(up["summary"]["sample"][0]["subcategory"], "customer_payment");
+}
+
+#[tokio::test]
+async fn subcategory_validation_and_company_scope() {
+    let (e, cid) = seeded().await;
+    let other = company(&e.app, "u2").await;
+    let (_, t) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/transactions"), None).await;
+    let id = t["items"][0]["id"].as_i64().unwrap();
+    let rev = revision(&e.app, &cid).await;
+    let (s, v) = call(&e.app, "PATCH", &format!("/internal/v1/companies/{cid}/transactions/{id}/category"), Some(json!({"subcategory": "nope"}))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_subcategory")));
+    let (s, _) = call(&e.app, "PATCH", &format!("/internal/v1/companies/{other}/transactions/{id}/category"), Some(json!({"subcategory": "customer_payment"}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(revision(&e.app, &cid).await, rev);
+    let (s, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/taxonomy"), None).await;
+    assert_eq!((s, v["subcategories"]["supplier_payment"]["category"].as_str()), (StatusCode::OK, Some("suppliers")));
+}
+
+#[tokio::test]
+async fn tail_model_labels_fallback_rows_only_with_enough_training_data() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    let unknown = |row| sub_tx(row, "Неизвестный", 123_000, "other_in", "fallback");
+    // мало обучающих примеров: хвост не вызывается
+    let (_, up) = upload(&e.app, &cid, "a.csv", &parsed(vec![unknown(1)])).await;
+    assert_eq!(up["summary"]["sample"][0]["method"], "fallback");
+    // 210 размеченных правилами операций
+    let train: Vec<Value> = (0..210).map(|i| {
+        let mut t = sub_tx(i, &format!("Клиент {i}"), 10_000 + i, "customer_payment", "rule");
+        t["date"] = json!(format!("2026-02-{:02}", 1 + i % 27));
+        t
+    }).collect();
+    import_confirmed(&e.app, &cid, "train.csv", train).await;
+    let mixed = vec![unknown(1), sub_tx(2, "Налоговая", -300_000, "other_out", "fallback"), sub_tx(3, "Арендодатель", -500_000, "rent", "rule")];
+    let (s, up) = upload(&e.app, &cid, "b.csv", &parsed(mixed)).await;
+    assert_eq!(s, StatusCode::CREATED, "{up}");
+    let sample = up["summary"]["sample"].as_array().unwrap();
+    assert_eq!((sample[0]["method"].as_str(), sample[0]["subcategory"].as_str()), (Some("tail"), Some("customer_payment")));
+    assert_eq!(sample[0]["category_confidence"], 0.9);
+    assert_eq!(sample[1]["method"], "fallback", "модель не уверена -> остаётся как было");
+    assert_eq!(sample[2]["method"], "rule", "правила не перезаписываются моделью");
 }

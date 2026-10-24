@@ -86,6 +86,7 @@ async fn main() {
         .route(&format!("{co}/imports/{{iid}}/confirm"), post(http::to_ledger))
         .route(&format!("{co}/transactions"), get(http::to_ledger))
         .route(&format!("{co}/transactions/{{id}}/category"), patch(http::to_ledger))
+        .route(&format!("{co}/taxonomy"), get(http::to_ledger))
         .route(&format!("{co}/expected-events"), get(http::to_ledger).post(http::to_ledger))
         .route(&format!("{co}/expected-events/tax-calendar"), post(http::tax_calendar))
         .route(&format!("{co}/expected-events/{{eid}}"), delete(http::to_ledger))

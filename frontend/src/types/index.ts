@@ -168,6 +168,15 @@ export interface Transaction {
   category: string
   category_confidence: number
   manual: boolean
+  /** подкатегория таксономии, группа и способ разметки (rule | tail | tenant_rule | manual | fallback) */
+  subcategory?: string
+  group?: string
+  method?: string
+}
+
+export interface Taxonomy {
+  groups: Record<string, string>
+  subcategories: Record<string, { group: string; name: string; category: string }>
 }
 
 export interface TransactionPage {

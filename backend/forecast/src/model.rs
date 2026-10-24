@@ -11,7 +11,10 @@ use chrono::{Datelike, Duration, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const MODEL_VERSION: &str = "recurring-bootstrap/2";
+mod delays;
+pub use delays::DelayModel;
+
+pub const MODEL_VERSION: &str = "recurring-bootstrap/3";
 const N_PATHS: usize = 1000;
 /// Окно остаточного потока: столько последних валидных рабочих дней (≈120 календарных).
 const RESIDUAL_BDAYS: usize = 86;
@@ -100,6 +103,19 @@ pub struct DayPoint {
     pub prob_broken_by: f64,
 }
 
+/// Драйвер разрыва: платёж (или неприход поступления) и его доля в давлении на остаток к дате разрыва.
+#[derive(Clone, Debug, Serialize)]
+pub struct Driver {
+    pub date: NaiveDate,
+    pub title: String,
+    pub source: String,
+    pub amount: i64,
+    /// доля в сумме модулей «давящих» статей (расходы до даты разрыва + просроченные поступления), 0..1
+    pub share: f64,
+    /// true — поступление, которое не пришло в срок
+    pub missing_income: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Warning {
     pub code: String,
@@ -107,6 +123,9 @@ pub struct Warning {
     pub date: Option<NaiveDate>,
     pub message: String,
     pub reasons: Vec<PlannedItem>,
+    /// уровень разрыва: "warning" — остаток может уйти ниже нуля, "critical" — уход ниже нуля вероятен (>= 50 %) или есть на медианной траектории
+    pub tier: Option<&'static str>,
+    pub drivers: Vec<Driver>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -203,6 +222,8 @@ pub struct Params {
     pub revert: f64,
     /// Калибровать вероятность разрыва (см. `calibrate_risk`); false — отдавать долю траекторий как есть.
     pub calibrate: bool,
+    /// Задержки оплат поступлений — по кривым Каплана–Мейера (см. `delays`); false — прежняя таблица `DEFAULT_PAY_DELAY`.
+    pub km_delays: bool,
     /// Сегодняшняя дата: если выписка заканчивается раньше, прогноз продлевается «мостом» до этой даты
     /// (не более `MAX_BRIDGE_DAYS`), а `horizon` отсчитывается уже от неё. `None` — без моста (backtest, тесты).
     pub today: Option<NaiveDate>,
@@ -210,7 +231,7 @@ pub struct Params {
 
 impl Default for Params {
     fn default() -> Self {
-        Params { horizon: 30, seed: 42, n_paths: N_PATHS, residual: ResidualMode::Block, drift_keep: 0.0, drift_tau: 0.0, shape_keep: 0.5, revert: 0.015, calibrate: true, today: None }
+        Params { horizon: 30, seed: 42, n_paths: N_PATHS, residual: ResidualMode::Block, drift_keep: 0.0, drift_tau: 0.0, shape_keep: 0.5, revert: 0.015, calibrate: true, km_delays: true, today: None }
     }
 }
 
@@ -581,6 +602,8 @@ struct Occurrence {
     overdue: bool,
     income_delay: bool,
     counterparty: String,
+    /// для просроченных: сколько рабочих дней платёж уже ждём
+    age: i64,
 }
 
 fn expand_rules(rules: &[Rule], txs: &[Tx], as_of: NaiveDate, horizon: usize) -> Vec<Occurrence> {
@@ -604,10 +627,10 @@ fn expand_rules(rules: &[Rule], txs: &[Tx], as_of: NaiveDate, horizon: usize) ->
                         let day = a.min(days_in_month(y, m0 + 1));
                         let d = roll_forward(NaiveDate::from_ymd_opt(y, m0 + 1, day).unwrap());
                         if d > as_of && d <= end {
-                            out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone() });
+                            out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone(), age: 0 });
                         } else if mi == cur_m && d <= as_of && k >= this_month_cnt && (as_of - d).num_days() <= 20 {
                             // ожидался в этом месяце, но не пришёл
-                            out.push(Occurrence { base: as_of + Duration::days(1), rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: if r.direction == "in" { 0.75 } else { 1.0 }, overdue: true, income_delay: r.direction == "in", counterparty: r.counterparty.clone() });
+                            out.push(Occurrence { base: as_of + Duration::days(1), rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: if r.direction == "in" { 0.75 } else { 1.0 }, overdue: true, income_delay: r.direction == "in", counterparty: r.counterparty.clone(), age: bd_diff(d, as_of).max(1) });
                         }
                     }
                     mi += 1;
@@ -617,7 +640,7 @@ fn expand_rules(rules: &[Rule], txs: &[Tx], as_of: NaiveDate, horizon: usize) ->
                 let mut d = as_of + Duration::days(1);
                 while d <= end {
                     if d.weekday().num_days_from_monday() == r.anchors[0] {
-                        out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: 0, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone() });
+                        out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: 0, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone(), age: 0 });
                     }
                     d += Duration::days(1);
                 }
@@ -626,6 +649,21 @@ fn expand_rules(rules: &[Rule], txs: &[Tx], as_of: NaiveDate, horizon: usize) ->
         }
     }
     out
+}
+
+/// Наблюдения задержек оплат: «опоздания» регулярных поступлений относительно самого раннего платежа якоря (оплата наступила)
+/// и просроченные ожидаемые поступления (цензурированные: ждём уже `age` дней).
+fn fit_delays(rules: &[Rule], occs: &[Occurrence]) -> Option<DelayModel> {
+    let mut obs: Vec<(String, i64, bool)> = vec![];
+    for r in rules.iter().filter(|r| r.direction == "in") {
+        for jt in &r.jitters {
+            // самый ранний платёж якоря считаем «в срок», остальные — опоздание относительно него
+            let lo = jt.iter().copied().min().unwrap_or(0);
+            obs.extend(jt.iter().map(|j| (r.counterparty.clone(), *j - lo, true)));
+        }
+    }
+    obs.extend(occs.iter().filter(|o| o.overdue && o.income_delay).map(|o| (o.counterparty.clone(), o.age, false)));
+    DelayModel::fit(&obs)
 }
 
 fn expand_events(events: &[Event], as_of: NaiveDate, horizon: usize) -> Vec<Occurrence> {
@@ -646,6 +684,7 @@ fn expand_events(events: &[Event], as_of: NaiveDate, horizon: usize) -> Vec<Occu
                 overdue,
                 income_delay: e.amount > 0 && e.source != "tax",
                 counterparty: e.counterparty.clone(),
+                age: if overdue { bd_diff(e.date, as_of).max(1) } else { 0 },
             })
         })
         .collect()
@@ -732,11 +771,12 @@ pub fn forecast(
         None => true,
     });
     occs.extend(ev_occs);
+    let km: Option<DelayModel> = if p.km_delays { fit_delays(&rules, &occs) } else { None };
     if let (Some(a), Some(d)) = (scenario.extra_expense_kop, scenario.extra_expense_date) {
-        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: -a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: String::new() });
+        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: -a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: String::new(), age: 0 });
     }
     if let (Some(a), Some(d)) = (scenario.extra_income_kop, scenario.extra_income_date) {
-        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: "\u{0}scenario-income".into() });
+        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: "\u{0}scenario-income".into(), age: 0 });
     }
 
     // --- плановый календарь (детерминированный, для объяснений) ---
@@ -907,7 +947,14 @@ pub fn forecast(
             amount = scale_amount(amount, in_scale, out_scale, o.rule_ix.is_some());
             let mut shift = jitter;
             if o.income_delay {
-                shift += if o.overdue { OVERDUE_IN_DELAY[rng.below(OVERDUE_IN_DELAY.len())] - 1 } else { DEFAULT_PAY_DELAY[rng.below(DEFAULT_PAY_DELAY.len())] };
+                shift += match &km {
+                    Some(m) if o.rule_ix.is_none() || o.overdue => {
+                        let d = m.sample(&o.counterparty, if o.overdue { o.age } else { 0 }, &mut rng);
+                        if o.overdue { d - o.age } else { d }
+                    }
+                    _ if o.overdue => OVERDUE_IN_DELAY[rng.below(OVERDUE_IN_DELAY.len())] - 1,
+                    _ => DEFAULT_PAY_DELAY[rng.below(DEFAULT_PAY_DELAY.len())],
+                };
             }
             // сдвиги (джиттер, задержка оплаты) — в рабочих днях от номинальной даты, перенесённой с выходного
             let mut date = bd_add(roll_forward(o.base), shift);
@@ -1050,6 +1097,15 @@ pub fn forecast(
             r.truncate(4);
             r
         };
+        let upto = when.unwrap_or(as_of + Duration::days(h as i64));
+        let pressing: Vec<&PlannedItem> = planned.iter().filter(|x| (x.amount < 0 && x.date <= upto) || (x.amount > 0 && x.overdue)).collect();
+        let total: i64 = pressing.iter().map(|x| x.amount.abs()).sum();
+        let mut drivers: Vec<Driver> = pressing
+            .iter()
+            .map(|x| Driver { date: x.date, title: x.title.clone(), source: x.source.clone(), amount: x.amount, share: if total > 0 { x.amount.abs() as f64 / total as f64 } else { 0.0 }, missing_income: x.amount > 0 })
+            .collect();
+        drivers.sort_by(|a, b| b.share.partial_cmp(&a.share).unwrap_or(std::cmp::Ordering::Equal).then(a.date.cmp(&b.date)));
+        drivers.truncate(5);
         warnings.push(Warning {
             code: "cash_gap".into(),
             severity: if level == "high" { "high" } else if level == "medium" { "medium" } else { "low" },
@@ -1060,6 +1116,8 @@ pub fn forecast(
                 shortfall_probability * 100.0
             ),
             reasons,
+            tier: Some(if shortfall_probability >= 0.5 || median_path_deficit > 0 { "critical" } else { "warning" }),
+            drivers,
         });
     }
     for it in planned.iter().filter(|x| x.overdue) {
@@ -1073,6 +1131,8 @@ pub fn forecast(
                 format!("Платёж «{}» ожидался, но не прошёл", it.title)
             },
             reasons: vec![it.clone()],
+            tier: None,
+            drivers: vec![],
         });
     }
 
@@ -1725,5 +1785,69 @@ mod tests {
         b.insert(last, -1_000);
         let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 5, seed: 1, n_paths: 50, ..Default::default() }).unwrap();
         assert_eq!(fc.risk.shortfall_probability, fc.risk.raw_shortfall_probability);
+    }
+
+    /// Клиент платит то 3-го, то 12-го числа: «опоздания» относительно привычного дня дают кривую задержек.
+    fn late_payer() -> (Vec<Tx>, BTreeMap<NaiveDate, i64>) {
+        let mut v = vec![];
+        let mut day = d(2025, 1, 1);
+        while day < d(2026, 3, 1) {
+            let late = day.month() % 2 == 0;
+            if day.day() == if late { 12 } else { 3 } {
+                v.push(tx(day, 30_000_000, "Клиент"));
+            }
+            if day.day() == 1 {
+                v.push(tx(day, -10_000_000, "Арендодатель"));
+            }
+            if day.weekday().num_days_from_monday() < 5 {
+                v.push(tx(day, 100_000, "Розница"));
+            }
+            day += Duration::days(1);
+        }
+        let mut bal = 5_000_000i64;
+        let mut b = BTreeMap::new();
+        for t in &v {
+            bal += t.amount;
+            b.insert(t.date, bal);
+        }
+        (v, b)
+    }
+
+    #[test]
+    fn km_delay_model_is_fitted_from_rule_lateness() {
+        let (v, _) = late_payer();
+        let as_of = v.iter().map(|t| t.date).max().unwrap();
+        let rules = detect_rules(&v, as_of);
+        let m = fit_delays(&rules, &[]).expect("enough observations");
+        assert!(m.global.n >= 8);
+        assert!(m.global.mean() > 0.0);
+        assert!(m.weight("Клиент") > 0.5);
+    }
+
+    #[test]
+    fn km_and_legacy_delays_are_deterministic_and_both_run_with_events() {
+        let (v, b) = late_payer();
+        let ev = Event { id: "1".into(), date: d(2026, 3, 6), amount: 50_000_000, title: "Счёт".into(), source: "invoice".into(), confidence: 1.0, counterparty: "Клиент".into() };
+        let run = |km: bool| forecast(&v, &b, &[ev.clone()], &Scenario::default(), &Params { horizon: 14, seed: 9, n_paths: 100, km_delays: km, ..Default::default() }).unwrap();
+        let (a1, a2, legacy) = (run(true), run(true), run(false));
+        assert_eq!(a1.days.iter().map(|x| x.p50).collect::<Vec<_>>(), a2.days.iter().map(|x| x.p50).collect::<Vec<_>>());
+        assert_eq!(a1.seed, legacy.seed);
+        assert!(legacy.days.len() == a1.days.len());
+    }
+
+    #[test]
+    fn cash_gap_warning_carries_tier_and_driver_shares() {
+        let (v, b) = sample();
+        let ev = Event { id: "1".into(), date: d(2026, 9, 15), amount: -900_000_000, title: "Оборудование".into(), source: "manual".into(), confidence: 1.0, counterparty: String::new() };
+        let as_of = v.iter().map(|t| t.date).max().unwrap();
+        let ev = Event { date: as_of + Duration::days(5), ..ev };
+        let fc = forecast(&v, &b, &[ev], &Scenario::default(), &Params { horizon: 14, seed: 1, n_paths: 100, ..Default::default() }).unwrap();
+        let w = fc.risk.warnings.iter().find(|w| w.code == "cash_gap").expect("gap warning");
+        assert_eq!(w.tier, Some("critical"));
+        assert!(!w.drivers.is_empty());
+        assert_eq!(w.drivers[0].title, "Оборудование");
+        let sum: f64 = w.drivers.iter().map(|x| x.share).sum();
+        assert!(sum > 0.5 && sum <= 1.0 + 1e-9, "{sum}");
+        assert!(w.drivers.windows(2).all(|p| p[0].share >= p[1].share));
     }
 }

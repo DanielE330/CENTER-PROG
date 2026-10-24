@@ -1,4 +1,5 @@
 """Таксономия, документы-основания, «спасательные» поступления, режим налогов, ML на хвост."""
+import importlib.util
 from datetime import date
 
 import pytest
@@ -136,3 +137,59 @@ def test_dataset_rules_cover_almost_everything_and_agree_with_legacy():
         agree += old == c["legacy_category"]
     assert fallback / n < 0.02
     assert agree / n > 0.8
+
+
+# ---------- внутренний API: справочник и модель на хвост ----------
+def _client():
+    from fastapi.testclient import TestClient
+
+    from parser.app import app
+
+    return TestClient(app)
+
+
+def test_taxonomy_endpoint_maps_every_subcategory_to_ledger_category():
+    r = _client().get("/internal/v1/taxonomy").json()
+    assert set(r["subcategories"]) == set(taxonomy.LEGACY)
+    assert r["subcategories"]["enp"] == {"group": "taxes", "name": r["subcategories"]["enp"]["name"], "category": "taxes"}
+
+
+def _train(n=240):
+    rows = []
+    for i in range(n):
+        if i % 2:
+            rows.append({"purpose": f"Оплата за консультацию по счёту {i}", "name": f"ООО Клиент {i % 7}", "amount_kop": 500_000 + i, "subcategory": "customer_payment"})
+        else:
+            rows.append({"purpose": f"Аренда склада за месяц, договор {i}", "name": "ИП Арендодатель", "amount_kop": -900_000 - i, "subcategory": "rent"})
+    return rows
+
+
+@pytest.mark.skipif(importlib.util.find_spec("sklearn") is None, reason="scikit-learn не установлен (группа tail)")
+def test_tail_endpoint_predicts_confident_rows_and_skips_direction_clash():
+    rows = [
+        {"purpose": "Оплата за консультацию по счёту 9999", "name": "ООО Клиент 3", "amount_kop": 510_000},
+        {"purpose": "Аренда склада за месяц, договор 9998", "name": "ИП Арендодатель", "amount_kop": -950_000},
+        {"purpose": "Аренда склада за месяц, договор 9997", "name": "ИП Арендодатель", "amount_kop": 950_000},  # поступление «аренды» — подозрительно
+    ]
+    r = _client().post("/internal/v1/tail", json={"train": _train(), "rows": rows}).json()
+    assert r["ready"] is True
+    p = r["predictions"]
+    assert (p[0]["subcategory"], p[0]["category"], p[0]["group"]) == ("customer_payment", "revenue", "revenue")
+    assert p[0]["confidence"] >= tail.MIN_CONFIDENCE
+    assert p[1]["subcategory"] == "rent" and p[1]["category"] == "rent"
+    assert p[2] is None
+
+
+def test_tail_endpoint_without_enough_training_returns_nothing_and_ignores_fallback_labels():
+    c = _client()
+    r = c.post("/internal/v1/tail", json={"train": _train(20), "rows": [{"purpose": "x", "name": "y", "amount_kop": 1}]}).json()
+    assert r == {"ready": False, "predictions": [None]}
+    only_fallback = [{**t, "subcategory": "other_in" if t["amount_kop"] > 0 else "other_out"} for t in _train()]
+    r = c.post("/internal/v1/tail", json={"train": only_fallback, "rows": [{"purpose": "x", "name": "y", "amount_kop": 1}]}).json()
+    assert r["ready"] is False
+
+
+def test_statement_rows_carry_method_for_fallback_and_rule():
+    csv = "Дата;Сумма;Назначение платежа;Контрагент\n2026-03-01;1000,00;Оплата по договору;ООО Х\n".encode("utf-8")
+    out = parse_statement("a.csv", csv)
+    assert out["transactions"][0]["method"] in {"rule", "fallback"}

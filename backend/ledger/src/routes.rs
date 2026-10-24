@@ -219,7 +219,8 @@ pub async fn upload_import(State(st): State<AppState>, ctx: Ctx, Path(cid): Path
         };
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "parse_failed", format!("{msg} ({code})")));
     }
-    let txs = parsed["transactions"].as_array().cloned().unwrap_or_default();
+    let mut txs = parsed["transactions"].as_array().cloned().unwrap_or_default();
+    enrich_categories(&st, &ctx, &cid, &mut txs).await;
     if txs.is_empty() {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "no_valid_rows", "В файле нет ни одной корректной операции"));
     }
@@ -307,8 +308,8 @@ pub async fn confirm_import(State(st): State<AppState>, ctx: Ctx, Path((cid, iid
     {
         let mut ins = tx
             .prepare(
-                "INSERT OR IGNORE INTO transactions(company_id, import_id, row_no, date, amount_kop, balance_kop, counterparty, inn, purpose, category, category_conf, dedup_key)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO transactions(company_id, import_id, row_no, date, amount_kop, balance_kop, counterparty, inn, purpose, category, category_conf, dedup_key, subcategory, grp, method)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             )
             .map_err(internal)?;
         for (t, k) in txs.iter().zip(keys.iter()) {
@@ -318,7 +319,8 @@ pub async fn confirm_import(State(st): State<AppState>, ctx: Ctx, Path((cid, iid
                 .execute(params![
                     cid, iid, t["row_no"].as_i64().unwrap_or(0), t["date"].as_str().unwrap_or(""), amount, balance,
                     t["counterparty"].as_str().unwrap_or(""), t["inn"].as_str().unwrap_or(""), t["purpose"].as_str().unwrap_or(""),
-                    t["category"].as_str().unwrap_or("other_expense"), t["category_confidence"].as_f64().unwrap_or(0.0), k
+                    t["category"].as_str().unwrap_or("other_expense"), t["category_confidence"].as_f64().unwrap_or(0.0), k,
+                    t["subcategory"].as_str().unwrap_or(""), t["group"].as_str().unwrap_or(""), t["method"].as_str().unwrap_or("")
                 ])
                 .map_err(internal)?;
             if n == 1 { inserted += 1 } else { skipped += 1 }
@@ -362,14 +364,15 @@ pub async fn list_transactions(State(st): State<AppState>, Path(cid): Path<Strin
     let total: i64 = c.query_row(&format!("SELECT COUNT(*) FROM transactions WHERE {where_}"), params![cid, cat, dir, "", "", search], |r| r.get(0)).map_err(internal)?;
     let mut s = c
         .prepare(&format!(
-            "SELECT id, date, amount_kop, counterparty, purpose, category, category_conf, manual, balance_kop FROM transactions WHERE {where_} ORDER BY {order_col} {dir_sql}, id {dir_sql} LIMIT ?4 OFFSET ?5"
+            "SELECT id, date, amount_kop, counterparty, purpose, category, category_conf, manual, balance_kop, subcategory, grp, method FROM transactions WHERE {where_} ORDER BY {order_col} {dir_sql}, id {dir_sql} LIMIT ?4 OFFSET ?5"
         ))
         .map_err(internal)?;
     let items: Vec<Value> = s
         .query_map(params![cid, cat, dir, limit, offset, search], |r| {
             Ok(json!({"id": r.get::<_, i64>(0)?, "date": r.get::<_, String>(1)?, "amount_kop": r.get::<_, i64>(2)?, "counterparty": r.get::<_, String>(3)?,
                 "purpose": r.get::<_, String>(4)?, "category": r.get::<_, String>(5)?, "category_confidence": r.get::<_, f64>(6)?,
-                "manual": r.get::<_, i64>(7)? == 1, "balance_kop": r.get::<_, Option<i64>>(8)?}))
+                "manual": r.get::<_, i64>(7)? == 1, "balance_kop": r.get::<_, Option<i64>>(8)?,
+                "subcategory": r.get::<_, String>(9)?, "group": r.get::<_, String>(10)?, "method": r.get::<_, String>(11)?}))
         })
         .map_err(internal)?
         .filter_map(|x| x.ok())
@@ -379,20 +382,154 @@ pub async fn list_transactions(State(st): State<AppState>, Path(cid): Path<Strin
 
 #[derive(Deserialize)]
 pub struct CategoryBody {
-    category: String,
+    #[serde(default)]
+    category: Option<String>,
+    /// подкатегория таксономии: категория и группа выводятся из неё, правка запоминается как правило компании
+    #[serde(default)]
+    subcategory: Option<String>,
 }
 
-pub async fn set_category(State(st): State<AppState>, Path((cid, id)): Path<(String, i64)>, Json(b): Json<CategoryBody>) -> R<Json<Value>> {
-    if !CATEGORIES.contains(&b.category.as_str()) {
+/// Минимум обучающих примеров хвостовой модели компании (совпадает с `parser.tail.MIN_SAMPLES`).
+const TAIL_MIN_TRAIN: usize = 200;
+const TAIL_MAX_TRAIN: i64 = 30_000;
+const FALLBACK_SUBS: [&str; 2] = ["other_in", "other_out"];
+
+fn rule_key(counterparty: &str) -> String {
+    counterparty.trim().to_lowercase()
+}
+
+/// Подкатегория и группа из словаря парсера: (подкатегория -> (группа, категория ledger)).
+async fn taxonomy(st: &AppState, ctx: &Ctx) -> Option<BTreeMap<String, (String, String)>> {
+    let v = st.parser.get("/internal/v1/taxonomy", ctx).await.ok()?;
+    let subs = v["subcategories"].as_object()?;
+    Some(subs.iter().map(|(k, x)| (k.clone(), (x["group"].as_str().unwrap_or("other").to_string(), x["category"].as_str().unwrap_or("").to_string()))).collect())
+}
+
+fn apply_sub(t: &mut Value, sub: &str, group: &str, category: &str, conf: f64, method: &str) {
+    t["subcategory"] = json!(sub);
+    t["group"] = json!(group);
+    t["category"] = json!(category);
+    t["category_confidence"] = json!(conf);
+    t["method"] = json!(method);
+}
+
+/// Подкатегории из правил компании (правки пользователя) и из модели на хвост; не критично: при сбое парсера
+/// импорт идёт с разметкой по правилам, как раньше.
+async fn enrich_categories(st: &AppState, ctx: &Ctx, cid: &str, txs: &mut [Value]) {
+    let tax = match taxonomy(st, ctx).await {
+        Some(t) => t,
+        None => return,
+    };
+    let rules: BTreeMap<String, String> = {
+        let c = lock(st);
+        let mut q = match c.prepare("SELECT key, subcategory FROM tenant_rules WHERE company_id=?") {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        q.query_map([cid], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map(|it| it.filter_map(|x| x.ok()).collect()).unwrap_or_default()
+    };
+    let mut pending: Vec<usize> = vec![];
+    for (i, t) in txs.iter_mut().enumerate() {
+        let key = rule_key(t["counterparty"].as_str().unwrap_or(""));
+        if let Some((group, cat)) = rules.get(&key).filter(|_| !key.is_empty()).and_then(|s| tax.get(s).map(|g| (g.0.clone(), g.1.clone()))) {
+            let sub = rules[&key].clone();
+            apply_sub(t, &sub, &group, &cat, 1.0, "tenant_rule");
+        } else if t["method"].as_str() == Some("fallback") {
+            pending.push(i);
+        }
+    }
+    if pending.is_empty() {
+        return;
+    }
+    let train: Vec<Value> = {
+        let c = lock(st);
+        let mut q = match c.prepare(
+            "SELECT purpose, counterparty, amount_kop, subcategory FROM transactions WHERE company_id=?1 AND subcategory<>'' AND subcategory NOT IN ('other_in','other_out') ORDER BY id DESC LIMIT ?2",
+        ) {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        q.query_map(params![cid, TAIL_MAX_TRAIN], |r| Ok(json!({"purpose": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)?, "amount_kop": r.get::<_, i64>(2)?, "subcategory": r.get::<_, String>(3)?})))
+            .map(|it| it.filter_map(|x| x.ok()).collect())
+            .unwrap_or_default()
+    };
+    if train.len() < TAIL_MIN_TRAIN {
+        return;
+    }
+    let rows: Vec<Value> = pending
+        .iter()
+        .map(|&i| json!({"purpose": txs[i]["purpose"], "name": txs[i]["counterparty"], "amount_kop": txs[i]["amount_kop"].as_str().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0)}))
+        .collect();
+    let resp = match st.parser.post("/internal/v1/tail", ctx, &json!({"train": train, "rows": rows})).await {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let preds = resp["predictions"].as_array().cloned().unwrap_or_default();
+    for (&i, p) in pending.iter().zip(preds.iter()) {
+        if let (Some(sub), Some(group), Some(cat)) = (p["subcategory"].as_str(), p["group"].as_str(), p["category"].as_str()) {
+            apply_sub(&mut txs[i], sub, group, cat, p["confidence"].as_f64().unwrap_or(0.0), "tail");
+        }
+    }
+}
+
+pub async fn get_taxonomy(State(st): State<AppState>, ctx: Ctx) -> R<Json<Value>> {
+    st.parser.get("/internal/v1/taxonomy", &ctx).await.map(Json)
+}
+
+pub async fn set_category(State(st): State<AppState>, ctx: Ctx, Path((cid, id)): Path<(String, i64)>, Json(b): Json<CategoryBody>) -> R<Json<Value>> {
+    if let Some(sub) = b.subcategory.as_deref().filter(|s| !s.is_empty()) {
+        let tax = taxonomy(&st, &ctx).await.ok_or_else(|| err(StatusCode::BAD_GATEWAY, "taxonomy_unavailable", "Справочник подкатегорий недоступен"))?;
+        let (group, category) = tax.get(sub).cloned().ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_subcategory", "Неизвестная подкатегория"))?;
+        let mut c = lock(&st);
+        let cp: Option<String> = c
+            .query_row("SELECT counterparty FROM transactions WHERE id=? AND company_id=?", params![id, cid], |r| r.get(0))
+            .optional()
+            .map_err(internal)?;
+        let cp = cp.ok_or_else(not_found)?;
+        let key = rule_key(&cp);
+        let tx = c.transaction().map_err(internal)?;
+        tx.execute(
+            "UPDATE transactions SET category=?, subcategory=?, grp=?, method='manual', manual=1, category_conf=1.0 WHERE id=? AND company_id=?",
+            params![category, sub, group, id, cid],
+        )
+        .map_err(internal)?;
+        let mut same = 0;
+        if !key.is_empty() && !FALLBACK_SUBS.contains(&sub) {
+            // правило компании действует сразу: на остальные операции этого контрагента, которых не правили вручную
+            tx.execute(
+                "INSERT INTO tenant_rules(company_id, key, subcategory, created_at) VALUES(?,?,?,?) ON CONFLICT(company_id, key) DO UPDATE SET subcategory=excluded.subcategory",
+                params![cid, key, sub, now()],
+            )
+            .map_err(internal)?;
+            // регистр сравниваем в Rust: SQLite lower() не приводит кириллицу
+            let income = tx.query_row("SELECT amount_kop FROM transactions WHERE id=?", [id], |r| r.get::<_, i64>(0)).map_err(internal)? > 0;
+            let ids: Vec<i64> = {
+                let mut q = tx.prepare("SELECT id, counterparty FROM transactions WHERE company_id=? AND manual=0 AND (amount_kop>0)=?").map_err(internal)?;
+                let rows = q.query_map(params![cid, income], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).map_err(internal)?;
+                rows.filter_map(|x| x.ok()).filter(|(_, c)| rule_key(c) == key).map(|(i, _)| i).collect()
+            };
+            for i in &ids {
+                tx.execute("UPDATE transactions SET category=?, subcategory=?, grp=?, method='tenant_rule', category_conf=1.0 WHERE id=?", params![category, sub, group, i]).map_err(internal)?;
+            }
+            same = ids.len();
+        }
+        tx.commit().map_err(internal)?;
+        bump(&c, &cid)?;
+        drop(c);
+        audit(&st, &ctx, &cid, "transaction.subcategory", &id.to_string(), "ok");
+        return Ok(Json(json!({"id": id, "category": category, "subcategory": sub, "group": group, "applied_to_similar": same})));
+    }
+    let category = b.category.unwrap_or_default();
+    if !CATEGORIES.contains(&category.as_str()) {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_category", "Неизвестная категория"));
     }
     let c = lock(&st);
-    let n = c.execute("UPDATE transactions SET category=?, manual=1, category_conf=1.0 WHERE id=? AND company_id=?", params![b.category, id, cid]).map_err(internal)?;
+    let n = c.execute("UPDATE transactions SET category=?, manual=1, category_conf=1.0, method='manual' WHERE id=? AND company_id=?", params![category, id, cid]).map_err(internal)?;
     if n == 0 {
         return Err(not_found());
     }
     bump(&c, &cid)?;
-    Ok(Json(json!({"id": id, "category": b.category})))
+    Ok(Json(json!({"id": id, "category": category})))
 }
 
 // ---------- ожидаемые события ----------

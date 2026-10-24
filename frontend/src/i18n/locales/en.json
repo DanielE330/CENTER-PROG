@@ -386,6 +386,9 @@
     "emptyTitle": "No transactions yet",
     "emptyText": "Import a bank statement to see the transaction history.",
     "categoryOf": "Transaction category: {{name}}",
+    "subcategoryOf": "Transaction subcategory: {{name}}",
+    "subcategoryNone": "No subcategory",
+    "methodTail": "set by the model",
     "pagination": "Transaction pages",
     "range": "{{from}}–{{to}} of {{total}}",
     "col": {

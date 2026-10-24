@@ -103,6 +103,9 @@ ml = [
     { name = "scikit-learn" },
     { name = "statsforecast" },
 ]
+tail = [
+    { name = "scikit-learn" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -130,6 +133,7 @@ ml = [
     { name = "scikit-learn", specifier = ">=1.5" },
     { name = "statsforecast", specifier = ">=2.0" },
 ]
+tail = [{ name = "scikit-learn", specifier = ">=1.5" }]
 
 [[package]]
 name = "click"

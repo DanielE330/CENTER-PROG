@@ -18,6 +18,8 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx>=0.27"]
+# модель на хвост категорий (ставится только в образ parser)
+tail = ["scikit-learn>=1.5"]
 # ML-лаборатория (бэктест, challenger-модели): в образы сервисов не попадает, ставится `uv sync --group ml`
 ml = ["numpy>=2", "pandas>=2.2", "scikit-learn>=1.5", "statsforecast>=2.0"]
 

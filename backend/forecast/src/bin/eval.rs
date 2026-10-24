@@ -338,7 +338,7 @@ fn main() {
         println!("perf: {} ops, forecast (1000 paths, 30d) = {:.3}s, ok={}", txs.len(), t0.elapsed().as_secs_f64(), r.is_ok());
         return;
     }
-    let mk = |mode: ResidualMode, keep: f64, tau: f64, shape: f64, rev: f64| Params { revert: rev, horizon: 30, seed: 1, n_paths: paths, residual: mode, drift_keep: keep, drift_tau: tau, shape_keep: shape, calibrate: true, today: None };
+    let mk = |mode: ResidualMode, keep: f64, tau: f64, shape: f64, rev: f64| Params { revert: rev, horizon: 30, seed: 1, n_paths: paths, residual: mode, drift_keep: keep, drift_tau: tau, shape_keep: shape, calibrate: true, km_delays: !has("--no-km"), today: None };
     let nm = |mode: ResidualMode, keep: f64, tau: f64, shape: f64, rev: f64| {
         let mut n = mode.name().to_string();
         if keep < 1.0 { n += &format!("+keep{keep}"); }

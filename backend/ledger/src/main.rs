@@ -41,6 +41,7 @@ pub fn build(st: AppState) -> Router {
         .route(&format!("{co}/imports/{{iid}}/confirm"), post(confirm_import))
         .route(&format!("{co}/transactions"), get(list_transactions))
         .route(&format!("{co}/transactions/{{id}}/category"), patch(set_category))
+        .route(&format!("{co}/taxonomy"), get(get_taxonomy))
         .route(&format!("{co}/expected-events"), get(list_events).post(create_event))
         .route(&format!("{co}/expected-events/bulk"), post(bulk_events))
         .route(&format!("{co}/expected-events/{{eid}}"), axum::routing::delete(delete_event))

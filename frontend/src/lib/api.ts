@@ -40,6 +40,7 @@ import type {
   TaxCalendarResult,
   TeamInvite,
   TeamMember,
+  Taxonomy,
   TransactionPage,
   WebRole,
 } from '../types'
@@ -175,6 +176,8 @@ export const api = {
     return request<TransactionPage>('GET', co(`/transactions?${p}`))
   },
   setCategory: (id: number, category: string) => request<unknown>('PATCH', co(`/transactions/${id}/category`), { body: { category } }),
+  taxonomy: () => request<Taxonomy>('GET', co('/taxonomy')),
+  setSubcategory: (id: number, subcategory: string) => request<unknown>('PATCH', co(`/transactions/${id}/category`), { body: { subcategory } }),
   expectedEvents: () => request<{ items: ExpectedEvent[] }>('GET', co('/expected-events')),
   createEvent: (e: NewExpectedEvent) => request<unknown>('POST', co('/expected-events'), { body: e }),
   deleteEvent: (id: string) => request<void>('DELETE', co(`/expected-events/${id}`)),

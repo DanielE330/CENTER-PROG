@@ -59,6 +59,15 @@ export function useTransactions(q: TransactionQuery) {
   return useQuery({ queryKey: key('transactions', q), queryFn: () => api.transactions(q), placeholderData: (prev) => prev })
 }
 
+export function useTaxonomy() {
+  return useQuery({ queryKey: ['taxonomy'], queryFn: api.taxonomy, staleTime: Infinity })
+}
+
+export function useSetSubcategory() {
+  const all = useInvalidateAll()
+  return useMutation({ mutationFn: (v: { id: number; subcategory: string }) => api.setSubcategory(v.id, v.subcategory), onSuccess: () => void all() })
+}
+
 export function useSetCategory() {
   const all = useInvalidateAll()
   return useMutation({ mutationFn: (v: { id: number; category: string }) => api.setCategory(v.id, v.category), onSuccess: () => void all() })

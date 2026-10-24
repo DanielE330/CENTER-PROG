@@ -19,6 +19,8 @@ EXPOSE 8001
 CMD ["uvicorn", "auth.app:app", "--host", "0.0.0.0", "--port", "8001"]
 
 FROM base AS parser
+# scikit-learn нужен только парсеру: модель на хвост категорий (parser/tail.py)
+RUN uv sync --frozen --no-dev --group tail
 USER app
 EXPOSE 8002
 CMD ["uvicorn", "parser.app:app", "--host", "0.0.0.0", "--port", "8002"]

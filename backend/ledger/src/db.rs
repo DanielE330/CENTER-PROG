@@ -38,7 +38,10 @@ pub fn open(path: &str) -> Db {
         CREATE TABLE IF NOT EXISTS audit_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
             company_id TEXT, action TEXT NOT NULL, object_id TEXT, outcome TEXT NOT NULL, request_id TEXT);
-        CREATE INDEX IF NOT EXISTS audit_company ON audit_events(company_id, id);",
+        CREATE INDEX IF NOT EXISTS audit_company ON audit_events(company_id, id);
+        CREATE TABLE IF NOT EXISTS tenant_rules(
+            company_id TEXT NOT NULL REFERENCES companies(id), key TEXT NOT NULL, subcategory TEXT NOT NULL,
+            created_at TEXT NOT NULL, PRIMARY KEY(company_id, key));",
     )
     .expect("migrate");
     // реквизиты компании (из сертификата ЭЦП) добавлены позже
@@ -50,6 +53,17 @@ pub fn open(path: &str) -> Db {
     for col in ["inn", "ogrn"] {
         if !cols.iter().any(|c| c == col) {
             conn.execute(&format!("ALTER TABLE companies ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"), []).expect("add column");
+        }
+    }
+    // подкатегория, группа и способ разметки (rule | tail | tenant_rule | manual | fallback) добавлены позже
+    let tx_cols: Vec<String> = {
+        let mut q = conn.prepare("PRAGMA table_info(transactions)").expect("table_info");
+        let rows = q.query_map([], |r| r.get::<_, String>(1)).expect("table_info");
+        rows.collect::<Result<_, _>>().expect("table_info")
+    };
+    for col in ["subcategory", "grp", "method"] {
+        if !tx_cols.iter().any(|c| c == col) {
+            conn.execute(&format!("ALTER TABLE transactions ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"), []).expect("add column");
         }
     }
     Arc::new(Mutex::new(conn))
