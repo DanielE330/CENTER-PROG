@@ -9,6 +9,10 @@ uvicorn notify.app:app --host 127.0.0.1 --port 8014
   GET  /internal/v1/companies/{cid}/subscribers -> {alerts, reports}; GET /internal/v1/companies-with-subscribers
   GET|PUT /internal/v1/prefs/{user_id}?company_id=&role= -> {alerts, reports}
   POST /internal/v1/unsubscribe {token} -> {ok}; DELETE /internal/v1/users/{user_id}
+  GET  /internal/v1/smtp/check -> {ok, stage, error_class, hint, ...}: проверка SMTP без отправки письма (соединение, EHLO,
+       STARTTLS, вход, отправитель); пароля в ответе нет. То же из консоли: python -m notify.check [--to адрес]
+  GET  /internal/v1/outbox -> состояние очереди (queued/sent/failed, род ошибок); POST /internal/v1/outbox/requeue ->
+       {requeued}: вернуть в очередь письма со статусом failed за сутки (после исправления SMTP_*)
 Ошибки: {"error":{"code","message"}}.
 """
 
@@ -49,7 +53,9 @@ MAX_ATTACHMENT = 5 * 1024 * 1024
 SUBSCRIBERS_TTL = 300  # список компаний с подписчиками для планировщика notifier
 _subscribed: dict[str, Any] = {}  # {"at": время, "items": [company_id]}
 UID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_BAD = r'\s<>(),;:"\[\]\\'  # знаки, из-за которых «один адрес» превращается в список адресов или заголовок
+EMAIL = re.compile(rf"^[^@{_BAD}]+@[^@{_BAD}]+\.[^@{_BAD}]+$")
+_tasks: set = set()  # ссылки на фоновые отправки: без них asyncio может собрать задачу до завершения
 
 
 def log(msg: str) -> None:
@@ -71,8 +77,34 @@ async def _loop(name: str, every: float, job) -> None:
         await asyncio.sleep(every)
 
 
+def kick() -> None:
+    """Отправить очередь сейчас, не дожидаясь цикла; ответ клиенту от SMTP не зависит."""
+    t = asyncio.get_running_loop().create_task(_flush_quietly())
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+
+
+async def _flush_quietly() -> None:
+    try:
+        await mailer.flush()
+    except Exception as e:  # noqa: BLE001
+        log(f"outbox flush failed: {type(e).__name__}")
+
+
+def smtp_summary() -> str:
+    try:
+        c = mailer.config()
+    except mailer.ConfigError as e:
+        return f"smtp config error: {e}"
+    return (
+        f"smtp {c['host']}:{c['port']} security={c['security']} auth={'yes' if c['user'] else 'no'} "
+        f"helo={c['helo']} from_domain={c['sender_addr'].rpartition('@')[2]}"
+    )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    log(smtp_summary())
     tasks = []
     if SCHEDULER:
         tasks = [asyncio.create_task(_loop("outbox", FLUSH_EVERY, mailer.flush))]
@@ -199,8 +231,28 @@ async def send(b: SendIn):
     except Exception as e:  # noqa: BLE001 ошибка шаблона (нет переменной) — ошибка вызывающего
         log(f"render {b.kind} failed: {type(e).__name__}")
         raise ApiErr(422, "invalid_request", "Не хватает данных для письма")
-    asyncio.get_running_loop().create_task(mailer.flush())  # не ждём минутного цикла
+    kick()  # не ждём цикла очереди
     return {"id": out["id"], "status": out["status"]}
+
+
+# ---------- диагностика почты ----------
+@app.get("/internal/v1/smtp/check")
+async def smtp_check():
+    """Соединение, EHLO, STARTTLS, вход и проверка отправителя без отправки письма. Всегда 200: результат в теле."""
+    return await asyncio.to_thread(mailer.check)
+
+
+@app.get("/internal/v1/outbox")
+def outbox_stats():
+    return store.stats()
+
+
+@app.post("/internal/v1/outbox/requeue")
+async def outbox_requeue():
+    n = store.requeue_failed()
+    if n:
+        kick()
+    return {"requeued": n}
 
 
 # ---------- настройки ----------
@@ -328,7 +380,7 @@ async def broadcast(cid: str, b: BroadcastIn):
         out = queue("report", p["email"], data, f"{b.kind}:{p['user_id']}:{b.key}", p["unsub_token"], cid, attachments)
         queued += not out["duplicate"]
     if queued:
-        asyncio.get_running_loop().create_task(mailer.flush())
+        kick()
     return {"queued": queued, "recipients": sum(1 for p in people if p[want])}
 
 
