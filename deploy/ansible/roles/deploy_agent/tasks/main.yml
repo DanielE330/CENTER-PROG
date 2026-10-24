@@ -1,0 +1,40 @@
+---
+- name: User systemd directory
+  ansible.builtin.file:
+    path: "{{ ci1_home }}/.config/systemd/user"
+    state: directory
+    owner: "{{ ci1_user }}"
+    mode: "0700"
+
+- name: Deploy script
+  ansible.builtin.template:
+    src: ci1-deploy.sh.j2
+    dest: "{{ ci1_home }}/.local/bin/ci1-deploy"
+    owner: "{{ ci1_user }}"
+    mode: "0750"
+
+- name: Deploy service and timer (every 5 minutes)
+  ansible.builtin.copy:
+    dest: "{{ ci1_home }}/.config/systemd/user/{{ item.name }}"
+    content: "{{ item.content }}"
+    owner: "{{ ci1_user }}"
+    mode: "0600"
+  loop:
+    - name: ci1-deploy.service
+      content: |
+        [Unit]
+        Description=Pull and verify the latest CI1 release
+        [Service]
+        Type=oneshot
+        ExecStart={{ ci1_home }}/.local/bin/ci1-deploy
+    - name: ci1-deploy.timer
+      content: |
+        [Unit]
+        Description=Check for CI1 releases
+        [Timer]
+        OnBootSec=2min
+        OnUnitActiveSec=5min
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"

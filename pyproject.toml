@@ -1,0 +1,35 @@
+[project]
+name = "ci1"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["py/ci_common", "services/categorizer", "services/forecast", "services/connectors", "services/advisor"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.15", "hypothesis>=6"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "LOG", "G"]
+ignore = ["S101", "E501"]  # line length is the formatter's job
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S105", "S106", "S603", "S607"]
+# Container tmpfs mount points, not host temp files.
+"deploy/gen.py" = ["S108"]
+# Seeded synthetic data, not cryptography.
+"ml/synth/*" = ["S311"]
+
+[tool.pytest.ini_options]
+addopts = "-q"

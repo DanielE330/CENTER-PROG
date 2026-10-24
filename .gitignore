@@ -23,3 +23,9 @@ test-results/
 /cashflow_dataset_participants.zip
 /Case.pdf
 /.claude/settings.json
+
+# Build outputs and local environments
+/web/dist/
+/.venv-app/
+/deploy/dev-secrets/
+/models/

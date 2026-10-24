@@ -1,0 +1,37 @@
+name: python
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      UV_PROJECT_ENVIRONMENT: .venv-app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --all-packages --frozen
+      - name: Lint
+        run: |
+          uv run ruff check py services ml deploy tests
+          uv run ruff format --check py services ml deploy tests
+      - name: Generated deploy files are up to date
+        run: uv run python deploy/gen.py --check
+      - name: Unit tests
+        run: uv run pytest py/ci_common/tests services/categorizer/tests services/forecast/tests services/advisor/tests
+      - name: Dependency audit
+        run: uv export --frozen --no-dev --all-packages --no-hashes --no-emit-workspace > /tmp/requirements.txt && uvx pip-audit==2.9.0 -r /tmp/requirements.txt --strict
+      # The organizers' dataset is not in git: the quality gate runs on seeded synthetic data.
+      - name: Forecast quality gate (synthetic)
+        run: |
+          uv run python ml/synth/generate.py --out /tmp/synth --companies 4
+          uv run python ml/backtest/run.py --data /tmp/synth --companies 4 --cutoffs 6 --paths 200 --out /tmp/report
+          uv run python ml/backtest/gate.py /tmp/report >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,25 @@
+---
+- name: Checkout of the stable branch (scripts and generated units)
+  ansible.builtin.git:
+    repo: "{{ ci1_repo }}"
+    dest: "{{ ci1_home }}/ci1"
+    version: "{{ ci1_branch }}"
+    depth: 1
+  become: true
+  become_user: "{{ ci1_user }}"
+
+- name: Quadlet directory
+  ansible.builtin.file:
+    path: "{{ ci1_home }}/.config/containers/systemd"
+    state: directory
+    owner: "{{ ci1_user }}"
+    mode: "0700"
+
+- name: Quadlet units generated from deploy/services.yaml
+  ansible.builtin.copy:
+    src: "{{ ci1_home }}/ci1/deploy/quadlet/generated/"
+    dest: "{{ ci1_home }}/.config/containers/systemd/"
+    remote_src: true
+    owner: "{{ ci1_user }}"
+    mode: "0600"
+  notify: Reload user units

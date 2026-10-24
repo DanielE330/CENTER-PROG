@@ -1,0 +1,30 @@
+[package]
+name = "gateway"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ci-core.workspace = true
+ci-domain.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+async-nats.workspace = true
+aes-gcm.workspace = true
+base64.workspace = true
+sha2.workspace = true
+hex.workspace = true
+url.workspace = true
+futures.workspace = true
+
+[lints]
+workspace = true

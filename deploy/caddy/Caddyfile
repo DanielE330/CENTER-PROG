@@ -1,0 +1,51 @@
+{
+	admin localhost:2019
+	local_certs
+	auto_https disable_redirects
+	servers {
+		protocols h1 h2
+	}
+}
+
+(upstream_mtls) {
+	transport http {
+		tls_client_auth /certs/cert.pem /certs/key.pem
+		tls_trust_pool file /certs/ca.pem
+		tls_server_name {args[0]}
+	}
+}
+
+{$PUBLIC_SITE:https://localhost:8443} {
+	tls internal
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy https://gateway:8443 {
+			import upstream_mtls gateway
+			flush_interval -1
+		}
+	}
+
+	# Keycloak login pages set their own CSP.
+	handle /auth/* {
+		reverse_proxy https://keycloak:8443 {
+			import upstream_mtls keycloak
+			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	handle {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

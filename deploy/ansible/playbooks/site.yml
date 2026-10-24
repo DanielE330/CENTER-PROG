@@ -1,0 +1,15 @@
+---
+# Turns the laptop into a small server for the stand.
+- name: Configure the CI1 stand
+  hosts: stand
+  become: true
+  roles:
+    - role: base
+    - role: hardening
+    - role: podman
+    - role: nvidia
+      when: ci1_gpu | bool
+    - role: secrets
+    - role: app
+    - role: deploy_agent
+    - role: backup
