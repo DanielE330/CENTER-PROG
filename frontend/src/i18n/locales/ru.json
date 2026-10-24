@@ -102,6 +102,15 @@
     "select": {
       "placeholder": "Выберите…",
       "empty": "Нет вариантов"
+    },
+    "datePicker": {
+      "placeholder": "ДД.ММ.ГГГГ",
+      "open": "Открыть календарь",
+      "calendar": "Календарь",
+      "prevMonth": "Предыдущий месяц",
+      "nextMonth": "Следующий месяц",
+      "today": "Сегодня",
+      "clear": "Очистить"
     }
   },
   "status": {

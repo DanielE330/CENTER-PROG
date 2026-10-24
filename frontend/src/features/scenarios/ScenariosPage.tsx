@@ -9,6 +9,7 @@ import { Notice } from '../../components/shared/Notice'
 import { Badge } from '../../components/shared/StatusBadge'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { DatePicker } from '../../components/ui/DatePicker'
 import { Select } from '../../components/ui/Select'
 import { useForecast, useScenario } from '../../hooks/queries'
 import { formatDate, formatKop, formatNumber, formatPercent } from '../../lib/formatters'
@@ -172,9 +173,9 @@ function Workspace({ v }: { v: ForecastView }) {
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Input label={t('scenarios.params.extraExpense')} inputMode="decimal" placeholder={t('scenarios.params.extraExpensePh')} value={p.extra_expense} onChange={(e) => set('extra_expense', e.target.value)} />
-            <Input label={t('scenarios.params.extraExpenseDate')} type="date" value={p.extra_expense_date} onChange={(e) => set('extra_expense_date', e.target.value)} />
+            <DatePicker label={t('scenarios.params.extraExpenseDate')} value={p.extra_expense_date} onChange={(v) => set('extra_expense_date', v)} />
             <Input label={t('scenarios.params.extraIncome')} inputMode="decimal" placeholder={t('scenarios.params.extraIncomePh')} value={p.extra_income} onChange={(e) => set('extra_income', e.target.value)} />
-            <Input label={t('scenarios.params.extraIncomeDate')} type="date" value={p.extra_income_date} onChange={(e) => set('extra_income_date', e.target.value)} />
+            <DatePicker label={t('scenarios.params.extraIncomeDate')} value={p.extra_income_date} onChange={(v) => set('extra_income_date', v)} />
           </div>
 
           {formError && <Notice tone="danger">{t(`scenarios.errors.${formError}`)}</Notice>}

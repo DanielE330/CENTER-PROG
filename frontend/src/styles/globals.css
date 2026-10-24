@@ -272,3 +272,55 @@ button:disabled { cursor: not-allowed; }
   button:active, .pressable:active { transform: none !important; }
   .theme-icon[data-active='false'] { transform: none; }
 }
+
+/* ---------- Number inputs: no native spinners ---------- */
+input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+
+/* ---------- Date picker ---------- */
+.dp-pop {
+  position: fixed; z-index: var(--z-menu); box-sizing: border-box; padding: 16px 18px 20px;
+  display: flex; flex-direction: column; gap: 10px; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--menu-bg); border: 1px solid var(--menu-border); border-radius: 12px;
+  box-shadow: var(--menu-shadow); color: var(--c-ink);
+  transition: opacity var(--motion-fast) var(--ease), transform var(--motion-fast) var(--ease);
+  transform-origin: top right;
+}
+.dp-pop[data-up] { transform-origin: bottom right; }
+.dp-pop[data-state='open'] { animation: pop-in var(--motion-fast) var(--ease) both; }
+.dp-pop[data-state='closed'] { opacity: 0; transform: translateY(-4px); pointer-events: none; }
+.dp-pop[data-state='closed'][data-up] { transform: translateY(4px); }
+.dp-head, .dp-grid, .dp-foot { flex-shrink: 0; }
+.dp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dp-title { font-weight: 600; font-size: 14px; }
+.dp-nav {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
+  background: transparent; border: 0; color: var(--c-muted); cursor: pointer;
+}
+.dp-nav:hover { background: var(--c-hover); color: var(--c-ink); }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 36px; gap: 2px; flex: none; }
+.dp-dow { display: grid; place-items: center; font-size: 12px; color: var(--c-muted); text-transform: capitalize; }
+.dp-day {
+  display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--c-ink); font: inherit; font-size: 13px; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.dp-day:hover:not(:disabled):not([data-selected]) { background: var(--c-hover); }
+.dp-day[data-outside] { color: var(--c-muted); opacity: 0.55; }
+.dp-day[data-today]:not([data-selected]) { border-color: var(--c-primary); color: var(--c-primary); font-weight: 600; }
+.dp-day[data-selected] { background: var(--c-primary); color: var(--c-on-primary); font-weight: 600; opacity: 1; }
+.dp-day[data-selected]:hover { background: var(--c-primary-hover); }
+.dp-day:disabled { opacity: 0.3; cursor: not-allowed; }
+.dp-day:focus-visible, .dp-nav:focus-visible, .dp-link:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 1px; }
+.dp-foot { display: flex; justify-content: space-between; align-items: center; margin-top: auto; border-top: 1px solid var(--c-line); padding-top: 12px; }
+.dp-link {
+  background: transparent; border: 0; padding: 4px 8px; border-radius: 6px; cursor: pointer;
+  color: var(--c-primary); font: inherit; font-size: 13px; font-weight: 500;
+}
+.dp-link:hover:not(:disabled) { background: var(--c-primary-soft); }
+.dp-link:disabled { color: var(--c-muted); opacity: 0.5; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .dp-pop { transition: none; } }
+
+/* The toggle's own icon swap must keep animating while the global theme cross-fade is active. */
+.theme-transition .theme-icon { transition-property: transform, opacity, color !important; transition-duration: 300ms !important; }
