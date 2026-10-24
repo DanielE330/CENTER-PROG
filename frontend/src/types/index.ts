@@ -7,6 +7,20 @@
 export type Kop = string
 
 // ---------- auth ----------
+/** Пароль верен, но нужен второй фактор: сессии ещё нет. `setup` — первый вход, 2FA надо подключить. */
+export interface MfaChallenge {
+  mfa: 'setup' | 'verify'
+  mfa_token: string
+}
+export interface MfaSetup {
+  secret: string
+  otpauth_uri: string
+  /** SVG-картинка QR, нарисованная сервером. */
+  qr_svg: string
+}
+/** Вход завершён; при подключении 2FA приходят резервные коды (показываются один раз). */
+export type MeWithCodes = Me & { backup_codes?: string[]; backup_codes_left?: number }
+
 export interface Me {
   /** null when the account signs in only with an electronic signature. */
   email: string | null

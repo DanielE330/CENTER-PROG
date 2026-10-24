@@ -10,3 +10,6 @@ frontend/dist/
 # локальные секреты (токены доступа) не коммитим
 git_token.md
 .env
+
+# логин и пароль оператора, создаются install.sh
+infra/.operator-credentials

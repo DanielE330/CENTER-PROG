@@ -57,6 +57,8 @@ def call_auth(path: str, payload: dict) -> dict:
             r = c.post(path, json=payload)
     except httpx.HTTPError:
         raise HTTPException(503, {"code": "auth_unavailable"})
+    if r.status_code == 403 and r.json().get("detail", {}).get("code") == "mfa_required":
+        raise HTTPException(403, {"code": "mfa_required"})
     if r.status_code != 200:
         raise HTTPException(503, {"code": "auth_unavailable"})
     return r.json()

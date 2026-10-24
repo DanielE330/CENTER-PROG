@@ -1,7 +1,0 @@
-# Vendored agent skills and build outputs are not our code.
-.claude/
-target/
-web/node_modules/
-web/dist/
-.venv*/
-data/

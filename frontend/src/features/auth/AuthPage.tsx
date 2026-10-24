@@ -11,6 +11,8 @@ import { PasswordInput } from '../../components/ui/PasswordInput'
 import { ThemeToggle } from '../../components/layout/ThemeToggle'
 import { LanguageSwitch } from '../../components/layout/LanguageSwitch'
 import { EcpLogin } from './EcpLogin'
+import { MfaStep } from './MfaStep'
+import type { MfaChallenge } from '../../types'
 
 export default function AuthPage() {
   const { t } = useTranslation()
@@ -22,6 +24,7 @@ export default function AuthPage() {
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [challenge, setChallenge] = useState<MfaChallenge | null>(null)
   const reg = mode === 'register'
   const mismatch = reg && confirm !== '' && confirm !== password
 
@@ -34,7 +37,11 @@ export default function AuthPage() {
       const me = reg
         ? await api.register({ email, password, password_confirm: confirm, company_name: company.trim() })
         : await api.login(email, password)
-      setMe(me)
+      if ('mfa' in me) {
+        // пароль принят, дальше второй фактор; сессия появится только после кода
+        setChallenge(me)
+        setBusy(false)
+      } else setMe(me)
     } catch (err) {
       setError(errorText(t, err))
       setBusy(false)
@@ -48,6 +55,16 @@ export default function AuthPage() {
         <ThemeToggle />
       </div>
       <main className="flex-1 grid place-items-center px-4 pb-10">
+        {challenge ? (
+          <div className="card enter w-full max-w-[420px] p-6 sm:p-8">
+            <MfaStep
+              mode={challenge.mfa}
+              ticket={challenge.mfa_token}
+              onDone={setMe}
+              onCancel={() => { setChallenge(null); setPassword('') }}
+            />
+          </div>
+        ) : (
         <form className="card enter w-full max-w-[420px] p-6 sm:p-8 flex flex-col gap-4" onSubmit={submit} noValidate={false}>
           <div className="flex items-center gap-2.5">
             <span className="grid place-items-center size-9 rounded-[10px] bg-primary text-on-primary shrink-0" aria-hidden>
@@ -131,6 +148,7 @@ export default function AuthPage() {
             {reg ? t('auth.haveAccount') : t('auth.noAccount')}
           </button>
         </form>
+        )}
       </main>
     </div>
   )

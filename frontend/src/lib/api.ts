@@ -16,6 +16,9 @@ import type {
   ImportRow,
   KeyRate,
   Me,
+  MeWithCodes,
+  MfaChallenge,
+  MfaSetup,
   NewApiToken,
   NewInvite,
   NewExpectedEvent,
@@ -102,7 +105,10 @@ export interface TransactionQuery {
 export const api = {
   // ----- auth -----
   me: () => request<Me>('GET', '/api/v1/auth/me', { expect401: true }),
-  login: (email: string, password: string) => request<Me>('POST', '/api/v1/auth/login', { body: { email, password }, expect401: true }),
+  login: (email: string, password: string) => request<Me | MfaChallenge>('POST', '/api/v1/auth/login', { body: { email, password }, expect401: true }),
+  mfaSetup: (mfa_token: string) => request<MfaSetup>('POST', '/api/v1/auth/mfa/setup', { body: { mfa_token }, expect401: true }),
+  mfaEnable: (mfa_token: string, code: string) => request<MeWithCodes>('POST', '/api/v1/auth/mfa/enable', { body: { mfa_token, code }, expect401: true }),
+  mfaVerify: (mfa_token: string, code: string) => request<MeWithCodes>('POST', '/api/v1/auth/mfa/verify', { body: { mfa_token, code }, expect401: true }),
   register: (b: { email: string; password: string; password_confirm: string; company_name: string }) =>
     request<Me>('POST', '/api/v1/auth/register', { body: b, expect401: true }),
   ecpChallenge: () => request<{ challenge: string }>('POST', '/api/v1/auth/ecp/challenge', { body: {}, expect401: true }),

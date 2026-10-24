@@ -5,6 +5,7 @@
 #   ./run.sh reset      остановить и удалить данные (тома)
 #   ./run.sh logs [svc] логи
 #   ./run.sh status     состояние контейнеров
+# Первая установка «под ключ» (секреты, оператор с обязательной 2FA): ./install.sh
 # Настройки: infra/.env.example (скопируйте в infra/.env). Полный датасет: DATASET_DIR=../data/dataset ./run.sh
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -33,10 +34,13 @@ case "${1:-up}" in
       printf '.'; sleep 2
     done
     echo
-    bash infra/scripts/seed_demo.sh "http://localhost:$P" || echo "(демо-данные не загружены, можно повторить: infra/scripts/seed_demo.sh)"
+    DEMO=$(grep -E '^DEMO_SEED=' infra/.env 2>/dev/null | cut -d= -f2 | cut -d' ' -f1 || true)
+    if [ "${DEMO:-1}" != "0" ]; then
+      bash infra/scripts/seed_demo.sh "http://localhost:$P" || echo "(демо-данные не загружены, можно повторить: infra/scripts/seed_demo.sh)"
+    fi
     echo
     echo "Готово: http://localhost:$P"
-    echo "Демо-вход: demo@example.com / demo12345"
+    if [ "${DEMO:-1}" != "0" ]; then echo "Демо-вход: demo@example.com / demo12345"; fi
     ;;
   stop)   need_docker; $C down ;;
   reset)  need_docker; $C down -v ;;

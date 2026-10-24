@@ -48,3 +48,7 @@
 
 Порты: наружу публикуется только `3000` шлюза. Остальные сервисы и внутренний API `3100` доступны только внутри сети compose. При работе по обычному HTTP оставьте `COOKIE_SECURE=false` (значение по умолчанию).
 Данные хранятся в томах `auth-data`, `ecp-data`, `ledger-data`, `forecast-data`. Образы Docker: `infra/docker/rust.Dockerfile` (цели ledger, forecast, planfact, api) и `infra/docker/python.Dockerfile` (auth, parser, gov, ecp, onec, edo, bank, integrator).
+
+## Установка одной командой
+
+`./install.sh` поднимает сервисы, создаёт оператора с обязательной двухфакторной защитой (TOTP) и печатает адрес, логин и пароль. Подробности и сброс 2FA: [docs/install.md](docs/install.md).

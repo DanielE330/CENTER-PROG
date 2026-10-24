@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from . import mfa
+
 
 DB_PATH = os.environ.get("AUTH_DB", "../data/auth.db")
 SESSION_TTL = 7 * 24 * 3600
@@ -26,11 +28,14 @@ MAX_TOKENS = 10
 TOKEN_PREFIX = "ckt_"
 INVITE_TTL = 7 * 24 * 3600
 MAX_MEMBERS = 20
+MFA_TTL = 300
+MFA_MAX_ATTEMPTS = 5
 ROLE_RANK = {"observer": 1, "analyst": 2, "admin": 3, "owner": 4}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _lock = threading.Lock()
 _fails: dict[str, tuple[int, float]] = {}
+_mfa_fails: dict[str, tuple[int, float]] = {}
 
 
 @contextmanager
@@ -81,6 +86,20 @@ def db():
             )
             if "email" not in [r[1] for r in conn.execute("PRAGMA table_info(invites)")]:
                 conn.execute("ALTER TABLE invites ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+            # 2FA: секрет TOTP только в зашифрованном виде; mfa_required — обязательность (оператор), last_step — защита от повтора кода
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(users)")]
+            for name, ddl in (("mfa_secret", "TEXT"), ("mfa_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                              ("mfa_required", "INTEGER NOT NULL DEFAULT 0"), ("mfa_last_step", "INTEGER NOT NULL DEFAULT 0")):
+                if name not in cols:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS mfa_pending(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, purpose TEXT NOT NULL,"
+                " secret_enc TEXT, attempts INTEGER NOT NULL DEFAULT 0, expires_at REAL NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS mfa_backup(code_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, used_at REAL)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS mfa_backup_user ON mfa_backup(user_id)")
             yield conn
             conn.commit()
         finally:
@@ -161,6 +180,32 @@ def register(c: Credentials):
     return {"user_id": uid, "email": email}
 
 
+def _new_session(conn, uid: str) -> str:
+    token = secrets.token_urlsafe(32)
+    conn.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
+    conn.execute("INSERT INTO sessions VALUES(?,?,?)", (token_hash(token), uid, time.time() + SESSION_TTL))
+    return token
+
+
+def _mfa_state(conn, uid: str, password_login: bool) -> str | None:
+    """None — второй фактор не нужен; 'setup' — обязателен, но ещё не настроен; 'verify' — нужен код."""
+    enabled, required, has_email = conn.execute(
+        "SELECT mfa_enabled, mfa_required, has_email FROM users WHERE id=?", (uid,)).fetchone()
+    if enabled:
+        return "verify"
+    if required or (password_login and has_email and os.environ.get("AUTH_REQUIRE_2FA") == "1"):
+        return "setup"
+    return None
+
+
+def _mfa_pending(conn, uid: str, purpose: str) -> str:
+    conn.execute("DELETE FROM mfa_pending WHERE expires_at < ? OR user_id=?", (time.time(), uid))
+    tok = secrets.token_urlsafe(32)
+    conn.execute("INSERT INTO mfa_pending(token_hash,user_id,purpose,expires_at) VALUES(?,?,?,?)",
+                 (token_hash(tok), uid, purpose, time.time() + MFA_TTL))
+    return tok
+
+
 @app.post("/internal/v1/login")
 def login(c: Credentials):
     email = c.email.strip().lower()
@@ -176,12 +221,106 @@ def login(c: Credentials):
             _fails[email] = (cnt + 1, time.time() + LOCK_SECONDS)
             raise HTTPException(401, {"code": "invalid_credentials"})
         _fails.pop(email, None)
-        token = secrets.token_urlsafe(32)
-        conn.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
-        conn.execute(
-            "INSERT INTO sessions VALUES(?,?,?)", (token_hash(token), row[0], time.time() + SESSION_TTL)
-        )
+        state = _mfa_state(conn, row[0], True)
+        if state:
+            # пароль верен, но сессии ещё нет: выдаём короткоживущий билет для второго шага
+            return {"mfa": state, "mfa_token": _mfa_pending(conn, row[0], state), "user_id": row[0], "email": email}
+        token = _new_session(conn, row[0])
     return {"token": token, "user_id": row[0], "email": email, "ttl": SESSION_TTL}
+
+
+class MfaTokenIn(BaseModel):
+    mfa_token: str
+
+
+class MfaCodeIn(BaseModel):
+    mfa_token: str
+    code: str
+
+
+def _pending(conn, tok: str, purpose: str):
+    row = conn.execute(
+        "SELECT user_id, secret_enc, attempts FROM mfa_pending WHERE token_hash=? AND purpose=? AND expires_at>=?",
+        (token_hash(tok), purpose, time.time())).fetchone()
+    if not row:
+        raise HTTPException(401, {"code": "mfa_session_expired"})
+    cnt, until = _mfa_fails.get(row[0], (0, 0.0))
+    if cnt >= MAX_FAILS and time.time() < until:
+        raise HTTPException(429, {"code": "too_many_attempts"})
+    return row
+
+
+def _mfa_fail(conn, tok: str, uid: str):
+    cnt, _ = _mfa_fails.get(uid, (0, 0.0))
+    _mfa_fails[uid] = (cnt + 1, time.time() + LOCK_SECONDS)
+    conn.execute("UPDATE mfa_pending SET attempts=attempts+1 WHERE token_hash=?", (token_hash(tok),))
+    if conn.execute("SELECT attempts FROM mfa_pending WHERE token_hash=?", (token_hash(tok),)).fetchone()[0] >= MFA_MAX_ATTEMPTS:
+        conn.execute("DELETE FROM mfa_pending WHERE token_hash=?", (token_hash(tok),))  # после 5 ошибок нужен новый вход по паролю
+    conn.commit()
+    raise HTTPException(401, {"code": "invalid_mfa_code"})
+
+
+def _mfa_done(conn, tok: str, uid: str, extra: dict | None = None) -> dict:
+    _mfa_fails.pop(uid, None)
+    conn.execute("DELETE FROM mfa_pending WHERE token_hash=?", (token_hash(tok),))
+    email = conn.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()[0]
+    return {"token": _new_session(conn, uid), "user_id": uid, "email": email, "ttl": SESSION_TTL, **(extra or {})}
+
+
+def _take_step(conn, uid: str, step: int) -> bool:
+    """Код каждого шага принимается один раз: шаг должен быть строго больше последнего принятого."""
+    return conn.execute("UPDATE users SET mfa_last_step=? WHERE id=? AND mfa_last_step<?", (step, uid, step)).rowcount == 1
+
+
+@app.post("/internal/v1/mfa/setup")
+def mfa_setup(b: MfaTokenIn):
+    """Первый вход: выдаёт секрет и otpauth-ссылку. Секрет включается только после подтверждения кодом."""
+    with db() as conn:
+        uid, enc, _ = _pending(conn, b.mfa_token, "setup")
+        secret = mfa.unseal(DB_PATH, enc) if enc else mfa.new_secret()
+        if not enc:
+            conn.execute("UPDATE mfa_pending SET secret_enc=? WHERE token_hash=?",
+                         (mfa.seal(DB_PATH, secret), token_hash(b.mfa_token)))
+        email = conn.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()[0]
+        uri = mfa.otpauth_uri(secret, email)
+    return {"secret": secret, "otpauth_uri": uri, "qr_svg": mfa.qr_svg(uri)}
+
+
+@app.post("/internal/v1/mfa/enable")
+def mfa_enable(b: MfaCodeIn):
+    with db() as conn:
+        uid, enc, _ = _pending(conn, b.mfa_token, "setup")
+        if not enc:
+            raise HTTPException(409, {"code": "mfa_setup_not_started"})
+        secret = mfa.unseal(DB_PATH, enc)
+        step = mfa.match_step(secret, b.code)
+        if step is None:
+            _mfa_fail(conn, b.mfa_token, uid)
+        conn.execute("UPDATE users SET mfa_secret=?, mfa_enabled=1, mfa_last_step=? WHERE id=?",
+                     (enc, step, uid))
+        codes = mfa.new_backup_codes()
+        conn.execute("DELETE FROM mfa_backup WHERE user_id=?", (uid,))
+        conn.executemany("INSERT INTO mfa_backup(code_hash,user_id) VALUES(?,?)", [(mfa.backup_hash(c), uid) for c in codes])
+        return _mfa_done(conn, b.mfa_token, uid, {"backup_codes": codes})
+
+
+@app.post("/internal/v1/mfa/verify")
+def mfa_verify(b: MfaCodeIn):
+    """Код из приложения или один из резервных кодов (каждый действует один раз)."""
+    with db() as conn:
+        uid, _, _ = _pending(conn, b.mfa_token, "verify")
+        enc = conn.execute("SELECT mfa_secret FROM users WHERE id=?", (uid,)).fetchone()[0]
+        step = mfa.match_step(mfa.unseal(DB_PATH, enc), b.code) if enc else None
+        if step is not None:
+            if not _take_step(conn, uid, step):
+                _mfa_fail(conn, b.mfa_token, uid)  # повтор уже использованного кода
+            return _mfa_done(conn, b.mfa_token, uid)
+        used = conn.execute("UPDATE mfa_backup SET used_at=? WHERE code_hash=? AND user_id=? AND used_at IS NULL",
+                            (time.time(), mfa.backup_hash(b.code), uid)).rowcount
+        if used != 1:
+            _mfa_fail(conn, b.mfa_token, uid)
+        left = conn.execute("SELECT COUNT(*) FROM mfa_backup WHERE user_id=? AND used_at IS NULL", (uid,)).fetchone()[0]
+        return _mfa_done(conn, b.mfa_token, uid, {"backup_codes_left": left})
 
 
 @app.post("/internal/v1/users/external")
@@ -354,9 +493,10 @@ def sessions_issue(u: IssueIn):
         row = conn.execute("SELECT id, email, has_email FROM users WHERE id=?", (u.user_id,)).fetchone()
         if not row:
             raise HTTPException(404, {"code": "user_not_found"})
-        token = secrets.token_urlsafe(32)
-        conn.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
-        conn.execute("INSERT INTO sessions VALUES(?,?,?)", (token_hash(token), row[0], time.time() + SESSION_TTL))
+        # вход по ЭЦП не обходит 2FA: у учётной записи с включённым или обязательным вторым фактором сессию даёт только вход по паролю и коду
+        if _mfa_state(conn, row[0], False):
+            raise HTTPException(403, {"code": "mfa_required"})
+        token = _new_session(conn, row[0])
     return {"token": token, "ttl": SESSION_TTL, "user_id": row[0], "email": row[1], "has_email": bool(row[2])}
 
 

@@ -211,13 +211,76 @@ pub async fn login(axum::extract::State(st): axum::extract::State<AppState>, ctx
     if !s.is_success() {
         return Err(auth_err(s, &v));
     }
+    // пароль верен, но нужен второй фактор: сессии и cookie ещё нет, клиент идёт на шаг 2FA
+    if let Some(step) = v["mfa"].as_str() {
+        return Ok(Json(json!({"mfa": step, "mfa_token": v["mfa_token"]})).into_response());
+    }
+    finish_login(&st, &ctx, &v, c.company_name.as_deref(), None).await
+}
+
+/// Общий конец входа по паролю: компания, роль, cookie сессии. `extra` — поля поверх ответа (резервные коды при включении 2FA).
+async fn finish_login(st: &AppState, ctx: &Ctx, v: &Value, company_name: Option<&str>, extra: Option<Value>) -> R<Response> {
     let uid = v["user_id"].as_str().unwrap_or_default();
     let email = v["email"].as_str().unwrap_or_default();
-    let (tenant, role) = tenant_of(&st, &ctx, uid).await?;
+    let (tenant, role) = tenant_of(st, ctx, uid).await?;
     // название компании при входе задаёт только её владелец
-    let reqs = if role == "owner" { Requisites { name: c.company_name.as_deref(), ..Default::default() } } else { Requisites::default() };
-    let co = ensure_company(&st, &ctx, &tenant, email, reqs).await?;
-    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": email, "company_id": co.id, "company_name": co.name, "role": role})))
+    let reqs = if role == "owner" { Requisites { name: company_name, ..Default::default() } } else { Requisites::default() };
+    let co = ensure_company(st, ctx, &tenant, email, reqs).await?;
+    let mut body = json!({"email": email, "company_id": co.id, "company_name": co.name, "role": role});
+    if let (Some(extra), Some(obj)) = (extra, body.as_object_mut()) {
+        if let Some(e) = extra.as_object() {
+            obj.extend(e.clone());
+        }
+    }
+    Ok(session_response(st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), body))
+}
+
+fn mfa_err(s: StatusCode, v: &Value) -> ApiError {
+    match (s.as_u16(), v["detail"]["code"].as_str().unwrap_or("")) {
+        (401, "invalid_mfa_code") => err(s, "invalid_mfa_code", "Неверный код. Проверьте время на телефоне или введите резервный код"),
+        (401, _) => err(s, "mfa_session_expired", "Время ввода кода истекло, войдите заново"),
+        (429, _) => err(s, "too_many_attempts", "Слишком много попыток, подождите несколько минут"),
+        (409, _) => err(s, "mfa_setup_not_started", "Сначала откройте настройку двухфакторной защиты"),
+        _ => err(StatusCode::BAD_GATEWAY, "auth_error", "Ошибка сервиса входа"),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct MfaTicket {
+    mfa_token: String,
+}
+
+#[derive(Deserialize)]
+pub struct MfaCode {
+    mfa_token: String,
+    code: String,
+}
+
+/// Первый вход: секрет, otpauth-ссылка и QR (SVG рисуется на сервере, наружу ничего не уходит).
+pub async fn mfa_setup(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx, Json(c): Json<MfaTicket>) -> R<Json<Value>> {
+    let (s, v) = auth_call(&st, &ctx, "mfa/setup", json!({"mfa_token": c.mfa_token})).await?;
+    if !s.is_success() {
+        return Err(mfa_err(s, &v));
+    }
+    Ok(Json(v))
+}
+
+pub async fn mfa_enable(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx, Json(c): Json<MfaCode>) -> R<Response> {
+    let (s, v) = auth_call(&st, &ctx, "mfa/enable", json!({"mfa_token": c.mfa_token, "code": c.code})).await?;
+    if !s.is_success() {
+        return Err(mfa_err(s, &v));
+    }
+    let extra = json!({"backup_codes": v["backup_codes"]});
+    finish_login(&st, &ctx, &v, None, Some(extra)).await
+}
+
+pub async fn mfa_verify(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx, Json(c): Json<MfaCode>) -> R<Response> {
+    let (s, v) = auth_call(&st, &ctx, "mfa/verify", json!({"mfa_token": c.mfa_token, "code": c.code})).await?;
+    if !s.is_success() {
+        return Err(mfa_err(s, &v));
+    }
+    let extra = v["backup_codes_left"].as_i64().map(|n| json!({"backup_codes_left": n}));
+    finish_login(&st, &ctx, &v, None, extra).await
 }
 
 #[derive(Deserialize)]
@@ -250,6 +313,7 @@ fn ecp_err(s: StatusCode, v: &Value) -> ApiError {
         "signature_time_invalid" => err(s, "signature_time_invalid", "Время подписи не совпадает с текущим: проверьте дату и время на компьютере"),
         "bad_signature" | "no_certificate" => err(s, "bad_signature", "Не удалось разобрать подпись"),
         "too_many_attempts" => err(s, "too_many_attempts", "Слишком много попыток, подождите"),
+        "mfa_required" => err(s, "mfa_required", "У этой учётной записи включена двухфакторная защита: войдите по email, паролю и коду"),
         "auth_unavailable" => err(StatusCode::SERVICE_UNAVAILABLE, "auth_unavailable", "Сервис входа недоступен"),
         "verifier_unavailable" => err(StatusCode::SERVICE_UNAVAILABLE, "verifier_unavailable", "Проверка ЭЦП на сервере недоступна"),
         _ => err(StatusCode::BAD_GATEWAY, "auth_error", "Ошибка сервиса входа"),

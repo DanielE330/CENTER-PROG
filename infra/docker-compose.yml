@@ -25,6 +25,9 @@ services:
     environment:
       AUTH_DB: /data/auth.db
       DEMO_SEED: ${DEMO_SEED:-1}
+      # ключ шифрования секретов TOTP (пусто — файл mfa.key в томе); AUTH_REQUIRE_2FA=1 — 2FA для всех, кто входит по паролю
+      AUTH_MFA_KEY: ${AUTH_MFA_KEY:-}
+      AUTH_REQUIRE_2FA: ${AUTH_REQUIRE_2FA:-0}
     volumes: [auth-data:/data]
     networks: [internal]
     healthcheck:
