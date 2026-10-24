@@ -31,10 +31,14 @@ export function KeyRateCard() {
                 <Badge tone={delta < 0 ? 'success' : 'warning'}>{delta > 0 ? '+' : '−'}{formatRate(Math.abs(delta)).replace('%', '')} {t('keyRate.pp')}</Badge>
               )}
             </div>
-            <p className="text-[13px] text-muted">
-              {d.changed_on ? t('keyRate.since', { date: formatDate(d.changed_on) }) : t('keyRate.asOf', { date: formatDate(d.as_of) })}
-              {d.previous_rate != null && ` · ${t('keyRate.previous', { value: formatRate(d.previous_rate) })}`}
-            </p>
+            {(d.changed_on || d.previous_rate != null) && (
+              <p className="text-[13px] text-muted">
+                {[
+                  d.changed_on ? t('keyRate.since', { date: formatDate(d.changed_on) }) : null,
+                  d.previous_rate != null ? t('keyRate.previous', { value: formatRate(d.previous_rate) }) : null,
+                ].filter(Boolean).join(' · ')}
+              </p>
+            )}
             <p className="text-xs text-muted">
               {t('keyRate.source', { date: formatDate(d.as_of) })}
               {d.stale && ` · ${t('keyRate.stale')}`}

@@ -28,12 +28,12 @@ def client(tmp_path, monkeypatch):
 
 
 def make_cms(tmp_path, message: str, cn="Ivan", days=30, requisites=None) -> str:
-    """requisites: {'1.2.643.100.4': '...'} — OID российских реквизитов (openssl не знает их имён, регистрируем в конфиге)."""
+    """requisites: {'1.2.643.100.4': '...'} — OID российских реквизитов; задаём их числовыми именами полей
+    (регистрировать OID в конфиге нельзя: новые версии openssl уже знают часть из них и отвечают «oid exists»)."""
     d = tmp_path
-    names = {oid: f"req{i}" for i, oid in enumerate(requisites or {})}
-    conf = "oid_section=oids\n[oids]\n" + "".join(f"{n}={oid}\n" for oid, n in names.items())
-    conf += "[req]\ndistinguished_name=dn\nprompt=no\n[dn]\n" f"CN={cn}\nO=Romashka\n"
-    conf += "".join(f"{names[oid]}={v}\n" for oid, v in (requisites or {}).items())
+    conf = "[req]\ndistinguished_name=dn\nprompt=no\n[dn]\n" f"CN={cn}\nO=Romashka\n"
+    # префикс «0.» нужен: openssl читает «1.2.…» как «<номер>.<имя поля>» и отбрасывает первую дугу OID
+    conf += "".join(f"0.{oid}={v}\n" for oid, v in (requisites or {}).items())
     (d / "req.cnf").write_text(conf)
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", d / "k.pem", "-out", d / "c.pem",
@@ -143,3 +143,29 @@ def test_verify_does_not_create_user_and_burns_challenge(client, tmp_path):
     r = client.post(f"{P}/ecp/verify", json={"challenge": ch, "signature": sig})
     assert r.status_code == 200 and len(r.json()["external_id"]) == 64
     assert client.post(f"{P}/ecp/verify", json={"challenge": ch, "signature": sig}).status_code == 401
+
+
+def _signed(tmp_path):
+    import time
+    from ecp import cades
+    sig = base64.b64decode(make_cms(tmp_path, "ecp-login:x", days=30))
+    return cades, sig, time.time()
+
+
+def test_certificate_validity_period_is_checked(tmp_path):
+    cades, sig, now = _signed(tmp_path)
+    assert cades.parse_signer(sig, now=now).display_name == "Romashka"
+    with pytest.raises(cades.EcpError) as e:
+        cades.parse_signer(sig, now=now + 40 * 86400)  # сертификат на 30 дней
+    assert e.value.code == "certificate_expired"
+    with pytest.raises(cades.EcpError) as e:
+        cades.parse_signer(sig, now=now - 3600)
+    assert e.value.code == "certificate_not_yet_valid"
+
+
+def test_signing_time_must_be_recent(tmp_path):
+    cades, sig, now = _signed(tmp_path)
+    cades.parse_signer(sig, now=now + 120)  # небольшое расхождение часов допустимо
+    with pytest.raises(cades.EcpError) as e:
+        cades.parse_signer(sig, now=now + 3600)  # подпись «из прошлого» (повтор старой подписи)
+    assert e.value.code == "signature_time_invalid"

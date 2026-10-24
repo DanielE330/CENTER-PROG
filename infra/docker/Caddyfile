@@ -36,8 +36,17 @@
 		reverse_proxy web-api:3000
 	}
 
+	# хэшированные ассеты: неизменяемы; отсутствующий файл — честный 404, а не index.html (иначе устаревший
+	# клиент получает HTML вместо модуля и падает с «error loading dynamically imported module»)
+	handle /assets/* {
+		root * /srv
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
 	handle {
 		root * /srv
+		header Cache-Control "no-cache"
 		try_files {path} /index.html
 		file_server
 	}

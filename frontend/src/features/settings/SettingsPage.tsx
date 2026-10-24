@@ -90,7 +90,7 @@ export default function SettingsPage() {
               <Input label={t('settings.org.name')} value={name} onChange={(e) => { setName(e.target.value); rename.reset() }} required minLength={2} maxLength={200} />
               {me.company_inn && <Input label={t('settings.org.inn')} value={me.company_inn} readOnly className="tnum" />}
               {me.company_ogrn && <Input label={t('settings.org.ogrn')} value={me.company_ogrn} readOnly className="tnum" />}
-              <Select label={t('settings.org.currency')} disabled onChange={() => {}} hint={t('settings.org.currencyHint')} value="RUB" options={[{ value: 'RUB', label: t('settings.org.rub') }]} />
+              <Select label={t('settings.org.currency')} disabled onChange={() => {}} value="RUB" options={[{ value: 'RUB', label: t('settings.org.rub') }]} />
               {rename.isSuccess && <Notice tone="success">{t('settings.org.saved')}</Notice>}
               {rename.isError && <Notice tone="danger">{errorText(t, rename.error)}</Notice>}
               <div>

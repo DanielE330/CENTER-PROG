@@ -91,7 +91,7 @@ export default function TransactionsPage() {
     <PageContainer>
       <PageHeader
         title={t('transactions.title')}
-        description={data ? t('transactions.descriptionCount', { count: data.total, formatted: formatNumber(data.total) }) : t('transactions.description')}
+        description={data && data.total > 0 ? t('transactions.descriptionCount', { count: data.total, formatted: formatNumber(data.total) }) : t('transactions.description')}
       />
       {setCat.isError && <Notice tone="danger">{errorText(t, setCat.error)}</Notice>}
       <Card>

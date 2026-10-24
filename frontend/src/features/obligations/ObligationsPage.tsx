@@ -111,14 +111,14 @@ export default function ObligationsPage() {
         <>
           {run && <ForecastBanners run={run} />}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard index={0} label={t('obligations.kpi.payments')} value={formatKop((-outSum).toString())} tone={outSum > 0n ? 'warning' : 'default'} hint={t('obligations.kpi.paymentsHint')} />
-            <StatCard index={1} label={t('obligations.kpi.receipts')} value={formatKop(inSum.toString())} hint={t('obligations.kpi.receiptsHint')} />
-            <StatCard index={2} label={t('obligations.kpi.overdue')} value={String(overdue)} tone={overdue > 0 ? 'danger' : 'default'} hint={overdue > 0 ? t('obligations.kpi.overdueHint') : t('obligations.kpi.overdueNone')} />
+            <StatCard index={0} label={t('obligations.kpi.payments')} value={formatKop((-outSum).toString())} tone={outSum > 0n ? 'warning' : 'default'} hint={t('obligations.kpi.paymentsHint', { count: week.filter((o) => o.kind === 'payment').length })} />
+            <StatCard index={1} label={t('obligations.kpi.receipts')} value={formatKop(inSum.toString())} hint={t('obligations.kpi.receiptsHint', { count: week.filter((o) => o.kind === 'receipt').length })} />
+            <StatCard index={2} label={t('obligations.kpi.overdue')} value={String(overdue)} tone={overdue > 0 ? 'danger' : 'default'} />
             <StatCard index={3} label={t('obligations.kpi.events')} value={String(events.data?.items.length ?? 0)} hint={t('obligations.kpi.eventsHint')} />
           </div>
 
           {overdue > 0 && (
-            <Notice tone="danger" title={t('obligations.overdueCount', { count: overdue })}>{t('obligations.overdueNote')}</Notice>
+            <Notice tone="danger">{t('obligations.overdueNote')}</Notice>
           )}
 
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">

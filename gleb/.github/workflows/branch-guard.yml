@@ -1,0 +1,68 @@
+# Rulesets are unavailable for a private repository on the free plan, so this
+# workflow detects pushes to stable/tested that bypass the process. It cannot
+# block a push; it fails loudly and opens an issue. When the repository becomes
+# public (or moves to a paid plan), replace it with rulesets (ARCHITECTURE.md, 13.4).
+name: branch-guard
+
+on:
+  push:
+    branches: [stable, tested]
+
+permissions: {}
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Check how the branch moved
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # The push that introduces this workflow is the bootstrap: there was no process yet.
+          if ! gh api "repos/$REPO/contents/.github/workflows/branch-guard.yml?ref=$BEFORE" --silent 2>/dev/null; then
+            echo "::notice::branch-guard bootstrap push, nothing to check"
+            exit 0
+          fi
+
+          reason=""
+          case "$BRANCH" in
+            tested)
+              merged=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+                --jq '[.[] | select(.merged_at != null and .base.ref == "tested")] | length')
+              if [ "$merged" -eq 0 ]; then
+                reason="tested moved to $SHA without a merged PR into tested"
+              fi
+              ;;
+            stable)
+              status=$(gh api "repos/$REPO/compare/tested...$SHA" --jq .status)
+              case "$status" in
+                identical|behind) ;;
+                *) reason="stable at $SHA is not contained in tested (compare status: $status)" ;;
+              esac
+              if [ "$ACTOR" != "github-actions[bot]" ]; then
+                reason="${reason:+$reason; }stable was pushed by $ACTOR instead of the promote workflow"
+              fi
+              ;;
+          esac
+
+          if [ -n "$reason" ]; then
+            gh issue create --repo "$REPO" \
+              --title "branch-guard: $BRANCH changed outside the process" \
+              --body "$reason. Run: $RUN_URL"
+            echo "::error::$reason"
+            exit 1
+          fi
+          echo "$BRANCH moved through the expected path"

@@ -129,7 +129,7 @@ export default function ForecastPage() {
               <Card title={t('forecast.cardTitle')} subtitle={t('common.updated', { value: formatDateTime(run.created_at) })}>
                 <div className="px-3 pb-4 sm:px-5">
                   <ForecastChart points={v.points} today={r.as_of} shortageDate={r.risk.level === 'none' ? null : v.gapDate} height={440} />
-                  <p className="text-xs text-muted mt-2">{t('forecast.caption')} {t('forecast.captionBand')} {t('forecast.captionDeficit')}</p>
+                  <p className="text-xs text-muted mt-2">{t('forecast.caption')} {t('forecast.captionBand')}</p>
                 </div>
               </Card>
               <RiskAlert risk={r.risk} />

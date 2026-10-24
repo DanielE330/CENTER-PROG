@@ -52,6 +52,7 @@ services:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: ecp}
     environment:
+      ECP_DEBUG_DUMP: ${ECP_DEBUG_DUMP:-0}
       ECP_DB: /data/ecp.db
       AUTH_URL: http://auth:8001
     volumes: [ecp-data:/data]
@@ -69,7 +70,7 @@ services:
       MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
       MOCK_DATASET_DIR: /dataset
     networks: [internal]
-    volumes: ["../data/dataset:/dataset:ro"]  # синтетический датасет (git-ignored), нужен имитаторам
+    volumes: ["${DATASET_DIR:-../data/demo}:/dataset:ro"]  # данные для имитаторов: демо-выборка из репозитория или полный датасет (DATASET_DIR=../data/dataset)
     healthcheck:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8004/live', timeout=2)"]
@@ -81,7 +82,7 @@ services:
       MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
       MOCK_DATASET_DIR: /dataset
     networks: [internal]
-    volumes: ["../data/dataset:/dataset:ro"]  # синтетический датасет (git-ignored), нужен имитаторам
+    volumes: ["${DATASET_DIR:-../data/demo}:/dataset:ro"]  # данные для имитаторов: демо-выборка из репозитория или полный датасет (DATASET_DIR=../data/dataset)
     healthcheck:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8005/live', timeout=2)"]
@@ -93,7 +94,7 @@ services:
       MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
       MOCK_DATASET_DIR: /dataset
     networks: [internal]
-    volumes: ["../data/dataset:/dataset:ro"]  # синтетический датасет (git-ignored), нужен имитаторам
+    volumes: ["${DATASET_DIR:-../data/demo}:/dataset:ro"]  # данные для имитаторов: демо-выборка из репозитория или полный датасет (DATASET_DIR=../data/dataset)
     healthcheck:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8006/live', timeout=2)"]

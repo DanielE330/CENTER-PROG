@@ -21,7 +21,7 @@ AUTH_URL = os.environ.get("AUTH_URL", "http://127.0.0.1:8001")
 _lock = threading.Lock()
 
 ECP_STATUS = {
-    "bad_signature": 422, "no_certificate": 422, "certificate_expired": 401,
+    "bad_signature": 422, "no_certificate": 422, "certificate_expired": 401, "certificate_not_yet_valid": 401, "signature_time_invalid": 401,
     "signature_invalid": 401, "invalid_challenge": 401, "verifier_unavailable": 503,
 }
 

@@ -106,6 +106,7 @@ export const api = {
   register: (b: { email: string; password: string; password_confirm: string; company_name: string }) =>
     request<Me>('POST', '/api/v1/auth/register', { body: b, expect401: true }),
   ecpChallenge: () => request<{ challenge: string }>('POST', '/api/v1/auth/ecp/challenge', { body: {}, expect401: true }),
+  /** Регистрация и вход по ЭЦП одним запросом: данные компании сервер берёт из сертификата. */
   ecpLogin: (challenge: string, signature: string) =>
     request<Me>('POST', '/api/v1/auth/ecp/login', { body: { challenge, signature }, expect401: true }),
   logout: () => request<void>('POST', '/api/v1/auth/logout', { body: {}, expect401: true }),

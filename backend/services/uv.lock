@@ -6,10 +6,10 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -81,6 +81,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "asn1crypto" },
     { name = "fastapi" },
+    { name = "gostcrypto" },
     { name = "httpx" },
     { name = "matplotlib" },
     { name = "openpyxl" },
@@ -106,6 +107,7 @@ ml = [
 requires-dist = [
     { name = "asn1crypto", specifier = ">=1.5.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "gostcrypto", specifier = ">=1.2.5" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "matplotlib", specifier = ">=3.9" },
     { name = "openpyxl", specifier = ">=3.1" },
@@ -399,6 +401,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7b/49/c4226843a434d6650bf9911648802fb91285b47a5f507ec8a052ce36671f/fugue-0.9.4.tar.gz", hash = "sha256:3725eeb3f06301d7e2812940a099e9bc2db9b863987b80124e39a6399024503f", size = 226792, upload-time = "2025-12-30T21:42:23.828Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/40/0934fb680f280f14062e0be552abdc150d676a92e6cba4ca7d00b27fcad8/fugue-0.9.4-py3-none-any.whl", hash = "sha256:299729a2fd523097673174244a7bef9b89732870977665d6f09906f578403331", size = 280666, upload-time = "2025-12-30T21:42:21.83Z" },
+]
+
+[[package]]
+name = "gostcrypto"
+version = "1.2.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/97/44/f0399c03dd36a628df53017c40a4ffc73f05a76acaf56aea706e2c12ec10/gostcrypto-1.2.5.tar.gz", hash = "sha256:1e69b5c89d22435e690307470d8f561fcc10d5edecb847b90eb572038c2b6c2e", size = 77753, upload-time = "2021-09-05T11:04:52.3Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/ab/ca495b239518791248491633041657ea0815bb3b8b81af8ad4d4aed432fa/gostcrypto-1.2.5-py3-none-any.whl", hash = "sha256:5cfc8b4c33d2a110fea0cfcb693b4a5f2b021004b9cf8d6bba8b78aab23d2001", size = 82400, upload-time = "2021-09-05T11:05:33.134Z" },
 ]
 
 [[package]]

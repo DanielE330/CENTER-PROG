@@ -7,7 +7,8 @@ import { Badge } from './StatusBadge'
 const tone = { good: 'success', medium: 'warning', low: 'danger' } as const
 
 /** Data quality as reported by the forecast: level, length of history and notes. */
-export function DataQuality({ quality }: { quality: ForecastResult['quality'] }) {
+/** `showTitle={false}` when the surrounding card is already titled "Data quality". */
+export function DataQuality({ quality, showTitle = true }: { quality: ForecastResult['quality']; showTitle?: boolean }) {
   const { t } = useTranslation()
   const level = (quality.level in tone ? quality.level : 'medium') as keyof typeof tone
   const Icon = quality.notes.length || level !== 'good' ? AlertTriangle : CheckCircle2
@@ -16,7 +17,7 @@ export function DataQuality({ quality }: { quality: ForecastResult['quality'] })
       <div className="flex items-center justify-between gap-2 text-[13px]">
         <span className="inline-flex items-center gap-1.5 font-medium">
           <Icon size={14} className={cn(quality.notes.length || level !== 'good' ? 'text-warning' : 'text-primary')} aria-hidden />
-          {t('quality.title')}
+          {showTitle && t('quality.title')}
         </span>
         <Badge tone={tone[level]}>{t(`quality.level.${level}`)}</Badge>
       </div>

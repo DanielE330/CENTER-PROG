@@ -1,0 +1,13 @@
+# Hermes sees exactly one MCP server: our tools through the loopback mTLS proxy.
+# No terminal, files, browser, memory sync or messaging gateways (enabled_toolsets=["mcp-ci1"]).
+mcp_servers:
+  ci1:
+    url: http://127.0.0.1:9100/mcp
+tools:
+  # Eight tools fit in the prompt; hiding them behind a search tool only adds a round trip.
+  tool_search:
+    enabled: off
+model:
+  # Hermes only talks to cloud models (it requires at least 64K context); the local
+  # 8K model is served by the built-in loop instead.
+  context_length: 128000

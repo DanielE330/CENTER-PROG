@@ -17,7 +17,11 @@ EXCLUDE = re.compile(r"налог|ЕНП|единый|зарплат|зараб�
 
 def dataset_dir() -> Path:
     env = os.environ.get("MOCK_DATASET_DIR")
-    return Path(env) if env else Path(__file__).resolve().parents[3] / "data" / "dataset"
+    if env:
+        return Path(env)
+    data = Path(__file__).resolve().parents[3] / "data"
+    # полный датасет (git-ignored) или небольшая демо-выборка из репозитория
+    return data / "dataset" if (data / "dataset" / "statements").is_dir() else data / "demo"
 
 
 def company_exists(cid: str) -> bool:

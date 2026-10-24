@@ -157,7 +157,6 @@ function Workspace({ v }: { v: ForecastView }) {
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Select
               label={t('scenarios.params.counterparty')}
-              hint={t('scenarios.params.counterpartyHint')}
               value={p.delay_counterparty}
               onChange={(val) => set('delay_counterparty', val)}
               options={clientOptions}
@@ -221,8 +220,6 @@ function Result({ out }: { out: { res: ScenarioResponse; base: ForecastView; sce
           tone: ps >= 0.5 ? ('danger' as const) : ('warning' as const),
           text: t('scenarios.concl.risk', {
             direction: t(ps >= pb ? 'scenarios.concl.up' : 'scenarios.concl.down'),
-            from: formatPercent(pb), to: formatPercent(ps),
-            when: sGap ? t('scenarios.concl.when', { date: formatDate(sGap), deficit: formatKop(s.risk.max_deficit_p90) }) : '',
           }),
         }
 
