@@ -28,12 +28,12 @@ def client(tmp_path, monkeypatch):
 
 
 def make_cms(tmp_path, message: str, cn="Ivan", days=30, requisites=None) -> str:
-    """requisites: {'1.2.643.100.4': '...'} — OID российских реквизитов (openssl не знает их имён, регистрируем в конфиге)."""
+    """requisites: {'1.2.643.100.4': '...'} — OID российских реквизитов; задаём их числовыми именами полей
+    (регистрировать OID в конфиге нельзя: новые версии openssl уже знают часть из них и отвечают «oid exists»)."""
     d = tmp_path
-    names = {oid: f"req{i}" for i, oid in enumerate(requisites or {})}
-    conf = "oid_section=oids\n[oids]\n" + "".join(f"{n}={oid}\n" for oid, n in names.items())
-    conf += "[req]\ndistinguished_name=dn\nprompt=no\n[dn]\n" f"CN={cn}\nO=Romashka\n"
-    conf += "".join(f"{names[oid]}={v}\n" for oid, v in (requisites or {}).items())
+    conf = "[req]\ndistinguished_name=dn\nprompt=no\n[dn]\n" f"CN={cn}\nO=Romashka\n"
+    # префикс «0.» нужен: openssl читает «1.2.…» как «<номер>.<имя поля>» и отбрасывает первую дугу OID
+    conf += "".join(f"0.{oid}={v}\n" for oid, v in (requisites or {}).items())
     (d / "req.cnf").write_text(conf)
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", d / "k.pem", "-out", d / "c.pem",

@@ -1,5 +1,15 @@
 # CI-hack: сервис прогноза денежного потока
 
+## Быстрый старт (нужен только Docker)
+    git clone https://github.com/DanielE330/CI-hack.git && cd CI-hack
+    ./run.sh            # сборка, запуск всех сервисов и загрузка демо-данных (первая сборка 15–25 мин, дальше быстро)
+
+Откройте http://localhost:3000, демо-вход `demo@example.com` / `demo12345`.
+`./run.sh stop` — остановить, `./run.sh reset` — удалить данные, `./run.sh logs`, `./run.sh status`.
+Порт, HTTPS, данные для имитаторов настраиваются в `infra/.env` (шаблон `infra/.env.example`).
+Демо-выписка (компания C001) лежит в репозитории: `data/demo/`. Полный датасет хакатона не нужен: если он есть в `data/dataset/`, укажите `DATASET_DIR=../data/dataset`.
+Вход по ЭЦП в Docker не проверяет подпись: в образ `ecp` нельзя включить проприетарный КриптоПро CSP. Для проверки подписи запускайте стек без Docker (`infra/scripts/dev.sh`) на машине с КриптоПро.
+
 ## Архитектура
 - Шлюз Caddy (`infra/docker/Caddyfile`): единственная публичная точка входа (`:3000`), раздаёт SPA, проксирует `/api/*` в Rust API, скрывает `/internal/*`, выставляет заголовки безопасности; автоматический TLS при `SITE_ADDRESS=<домен>` и `CADDY_AUTO_HTTPS=on` (тогда же задайте `COOKIE_SECURE=true`).
 - Rust workspace (`backend/`, один `Cargo.lock`): `api` (BFF, публичный `:3000` + внутренний `:3100`, без базы данных), `ledger` (`:3002`, владеет `ledger.db`), `forecast` (`:3003`, владеет `forecast.db`), `planfact` (`:3004`), общая библиотека `common`. Внутренние сервисы слушают только внутренние адреса; публичный контракт `/api/v1/...` не менялся. Подробнее в `docs/microservices.md`.
