@@ -4,7 +4,7 @@
 use crate::AppState;
 use axum::{
     Json,
-    extract::{FromRequestParts, Path, Request},
+    extract::{FromRequestParts, Path, RawQuery, Request},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
@@ -24,6 +24,10 @@ pub struct Principal {
     pub company_name: String,
     pub company_inn: String,
     pub company_ogrn: String,
+    /// Владелец компании (его id в ledger хранится как owner_id): у участника команды он общий для всех.
+    pub tenant_id: String,
+    /// owner | admin | analyst | observer
+    pub role: String,
 }
 
 /// Реквизиты компании, которые ledger знает со слов сертификата ЭЦП.
@@ -53,9 +57,57 @@ async fn ensure_company(st: &AppState, ctx: &Ctx, user_id: &str, email: &str, re
     Ok(Company { id: s("company_id"), name: s("company_name"), inn: s("inn"), ogrn: s("ogrn") })
 }
 
-async fn principal_of(st: &AppState, ctx: &Ctx, user_id: String, email: String, has_email: bool) -> R<Principal> {
-    let c = ensure_company(st, ctx, &user_id, &email, Requisites::default()).await?;
-    Ok(Principal { user_id, email, has_email, company_id: c.id, company_name: c.name, company_inn: c.inn, company_ogrn: c.ogrn })
+async fn principal_of(st: &AppState, ctx: &Ctx, user_id: String, tenant_id: String, role: String, email: String, has_email: bool) -> R<Principal> {
+    let c = ensure_company(st, ctx, &tenant_id, &email, Requisites::default()).await?;
+    Ok(Principal { user_id, email, has_email, company_id: c.id, company_name: c.name, company_inn: c.inn, company_ogrn: c.ogrn, tenant_id, role })
+}
+
+/// Компания и роль пользователя: участник команды работает в компании владельца, остальные — в своей.
+async fn tenant_of(st: &AppState, ctx: &Ctx, uid: &str) -> R<(String, String)> {
+    let v = st.auth.get(&format!("/internal/v1/users/{uid}/tenant"), ctx).await?;
+    Ok((v["tenant_id"].as_str().unwrap_or(uid).to_string(), v["role"].as_str().unwrap_or("owner").to_string()))
+}
+
+const OBSERVER: u8 = 1;
+const ANALYST: u8 = 2;
+const ADMIN: u8 = 3;
+const OWNER: u8 = 4;
+
+fn rank(role: &str) -> u8 {
+    match role {
+        "owner" => OWNER,
+        "admin" => ADMIN,
+        "analyst" => ANALYST,
+        _ => OBSERVER,
+    }
+}
+
+fn require(p: &Principal, min: u8) -> R<()> {
+    if rank(&p.role) >= min { Ok(()) } else { Err(err(StatusCode::FORBIDDEN, "forbidden", "Недостаточно прав для этого действия")) }
+}
+
+/// Минимальная роль для запроса к /api/v1/companies/{cid}/...: наблюдатель читает, аналитик меняет данные,
+/// админ управляет компанией, Telegram-настройками и командой.
+fn need_for(method: &Method, path: &str) -> u8 {
+    let parts: Vec<&str> = path.split('/').collect();
+    let rest = parts.get(5..).map(|r| r.join("/")).unwrap_or_default();
+    let read = *method == Method::GET || *method == Method::HEAD;
+    if let Some(sub) = rest.strip_prefix("notifications") {
+        let first = sub.trim_start_matches('/').split('/').next().unwrap_or("");
+        return match (read, first) {
+            (true, "team") => ADMIN,
+            (true, _) => OBSERVER,
+            (false, "goals") | (false, "retro") => ANALYST,
+            (false, _) => ADMIN,
+        };
+    }
+    if read {
+        OBSERVER
+    } else if rest.is_empty() {
+        ADMIN
+    } else {
+        ANALYST
+    }
 }
 
 impl FromRequestParts<AppState> for Principal {
@@ -68,7 +120,10 @@ impl FromRequestParts<AppState> for Principal {
             return Err(err(StatusCode::UNAUTHORIZED, "unauthenticated", "Сессия недействительна"));
         }
         let v = r.json();
-        principal_of(st, &ctx, v["user_id"].as_str().unwrap_or_default().to_string(), v["email"].as_str().unwrap_or_default().to_string(), v["has_email"].as_bool().unwrap_or(true)).await
+        let uid = v["user_id"].as_str().unwrap_or_default().to_string();
+        let tenant = v["tenant_id"].as_str().unwrap_or(&uid).to_string();
+        let role = v["role"].as_str().unwrap_or("owner").to_string();
+        principal_of(st, &ctx, uid, tenant, role, v["email"].as_str().unwrap_or_default().to_string(), v["has_email"].as_bool().unwrap_or(true)).await
     }
 }
 
@@ -87,7 +142,10 @@ impl FromRequestParts<AppState> for TokenPrincipal {
             return Err(err(StatusCode::UNAUTHORIZED, "invalid_token", "Токен недействителен или отозван"));
         }
         let v = r.json();
-        Ok(TokenPrincipal(principal_of(st, &ctx, v["user_id"].as_str().unwrap_or_default().to_string(), v["email"].as_str().unwrap_or_default().to_string(), true).await?))
+        let uid = v["user_id"].as_str().unwrap_or_default().to_string();
+        let tenant = v["tenant_id"].as_str().unwrap_or(&uid).to_string();
+        let role = v["role"].as_str().unwrap_or("owner").to_string();
+        Ok(TokenPrincipal(principal_of(st, &ctx, uid, tenant, role, v["email"].as_str().unwrap_or_default().to_string(), true).await?))
     }
 }
 
@@ -155,8 +213,11 @@ pub async fn login(axum::extract::State(st): axum::extract::State<AppState>, ctx
     }
     let uid = v["user_id"].as_str().unwrap_or_default();
     let email = v["email"].as_str().unwrap_or_default();
-    let co = ensure_company(&st, &ctx, uid, email, Requisites { name: c.company_name.as_deref(), ..Default::default() }).await?;
-    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": email, "company_id": co.id, "company_name": co.name})))
+    let (tenant, role) = tenant_of(&st, &ctx, uid).await?;
+    // название компании при входе задаёт только её владелец
+    let reqs = if role == "owner" { Requisites { name: c.company_name.as_deref(), ..Default::default() } } else { Requisites::default() };
+    let co = ensure_company(&st, &ctx, &tenant, email, reqs).await?;
+    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": email, "company_id": co.id, "company_name": co.name, "role": role})))
 }
 
 #[derive(Deserialize)]
@@ -196,13 +257,18 @@ pub async fn ecp_login(axum::extract::State(st): axum::extract::State<AppState>,
     let email = v["email"].as_str().unwrap_or_default();
     // данные компании берём из сертификата: название (организация или ФИО), ИНН, ОГРН
     let cert = &v["company"];
-    let requisites = Requisites {
-        name: cert["name"].as_str().map(str::trim).filter(|n| n.chars().count() >= 2),
-        inn: cert["inn"].as_str(),
-        ogrn: cert["ogrn"].as_str(),
+    let (tenant, role) = tenant_of(&st, &ctx, uid).await?;
+    let requisites = if role == "owner" {
+        Requisites {
+            name: cert["name"].as_str().map(str::trim).filter(|n| n.chars().count() >= 2),
+            inn: cert["inn"].as_str(),
+            ogrn: cert["ogrn"].as_str(),
+        }
+    } else {
+        Requisites::default()
     };
-    let co = ensure_company(&st, &ctx, uid, email, requisites).await?;
-    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": v["has_email"].as_bool().unwrap_or(false).then_some(email), "company_id": co.id, "company_name": co.name, "company_inn": co.inn, "company_ogrn": co.ogrn, "ecp": true})))
+    let co = ensure_company(&st, &ctx, &tenant, email, requisites).await?;
+    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": v["has_email"].as_bool().unwrap_or(false).then_some(email), "company_id": co.id, "company_name": co.name, "company_inn": co.inn, "company_ogrn": co.ogrn, "ecp": true, "role": role})))
 }
 
 pub async fn register(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx, Json(mut c): Json<Creds>) -> R<Response> {
@@ -231,7 +297,7 @@ pub async fn logout(axum::extract::State(st): axum::extract::State<AppState>, ct
 }
 
 pub async fn me(p: Principal) -> Json<Value> {
-    Json(json!({"email": p.has_email.then_some(&p.email), "company_id": p.company_id, "company_name": p.company_name, "company_inn": p.company_inn, "company_ogrn": p.company_ogrn}))
+    Json(json!({"email": p.has_email.then_some(&p.email), "company_id": p.company_id, "company_name": p.company_name, "company_inn": p.company_inn, "company_ogrn": p.company_ogrn, "role": p.role, "user_id": p.user_id}))
 }
 
 // ---------- аккаунт: способы входа и токены внешнего API ----------
@@ -293,7 +359,9 @@ pub async fn account_add_signature(axum::extract::State(st): axum::extract::Stat
     let out = account_call(&st, &ctx, &p, Method::POST, "/signatures", Some(json!({"external_id": v["external_id"], "label": label}))).await?;
     // реквизиты, которых у компании ещё нет, берём из сертификата (введённые вручную не затираются)
     let cert = &v["company"];
-    let _ = ensure_company(&st, &ctx, &p.user_id, &p.email, Requisites { name: None, inn: cert["inn"].as_str(), ogrn: cert["ogrn"].as_str() }).await;
+    if p.role == "owner" {
+        let _ = ensure_company(&st, &ctx, &p.tenant_id, &p.email, Requisites { name: None, inn: cert["inn"].as_str(), ogrn: cert["ogrn"].as_str() }).await;
+    }
     audit(&st, &ctx, &p, "account.signature_add", "").await;
     Ok(Json(out))
 }
@@ -326,8 +394,209 @@ pub async fn tokens_delete(axum::extract::State(st): axum::extract::State<AppSta
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ---------- команда компании: роли и приглашения ----------
+fn team_err(s: StatusCode, v: &Value) -> ApiError {
+    let (code, msg) = match v["detail"]["code"].as_str().unwrap_or("") {
+        "forbidden_role" => ("forbidden", "Недостаточно прав для этого действия"),
+        "invalid_role" => ("invalid_role", "Неизвестная роль"),
+        "invite_invalid" => ("invite_invalid", "Приглашение недействительно или истекло"),
+        "already_member" => ("already_member", "Вы уже состоите в команде"),
+        "has_team" => ("has_team", "У вас есть своя команда: сначала удалите её участников"),
+        "member_not_found" | "invite_not_found" => ("not_found", "Не найдено"),
+        "owner_immutable" => ("owner_immutable", "Владельца изменить нельзя"),
+        "too_many_members" => ("too_many_members", "Достигнут предел числа участников"),
+        "not_member" => ("not_member", "Вы не состоите в чужой команде"),
+        "invite_email_mismatch" => ("invite_email_mismatch", "Приглашение выписано на другой email: войдите под адресом, на который оно отправлено"),
+        "owner_cannot_leave" => ("owner_cannot_leave", "Владелец не может выйти: сначала передайте владение"),
+        "former_owner" => ("former_owner", "Бывшего владельца нельзя удалить или он не может выйти: понизьте его роль"),
+        "same_owner" => ("same_owner", "Вы уже владелец"),
+        "invalid_email" => ("invalid_email", "Некорректный email"),
+        _ => return err(StatusCode::BAD_GATEWAY, "auth_error", "Ошибка сервиса входа"),
+    };
+    err(s, code, msg)
+}
+
+async fn team_call(st: &AppState, ctx: &Ctx, p: &Principal, method: Method, path: &str, body: Option<Value>) -> R<Value> {
+    let r = st.auth.json(method, path, &with_actor(ctx, p), body.as_ref()).await?;
+    if r.status.is_success() { Ok(r.json()) } else { Err(team_err(r.status, &r.json())) }
+}
+
+/// Telegram-роль выводится из веб-роли: после изменения или удаления сообщаем боту (ошибка не мешает основному действию).
+async fn sync_telegram_role(st: &AppState, ctx: &Ctx, p: &Principal, web_user: &str, role: Option<&str>) {
+    let _ = st
+        .notifier
+        .post(&format!("/internal/v1/companies/{}/notifications/web-role", p.company_id), &with_actor(ctx, p), &json!({"web_user_id": web_user, "web_role": role}))
+        .await;
+}
+
+pub async fn team_members(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<Json<Value>> {
+    require(&p, ADMIN)?;
+    Ok(Json(team_call(&st, &ctx, &p, Method::GET, &format!("/internal/v1/tenants/{}/members", p.tenant_id), None).await?))
+}
+
+pub async fn team_invites_list(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<Json<Value>> {
+    require(&p, ADMIN)?;
+    Ok(Json(team_call(&st, &ctx, &p, Method::GET, &format!("/internal/v1/tenants/{}/invites", p.tenant_id), None).await?))
+}
+
+pub async fn team_invite_create(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(b): Json<Value>) -> R<(StatusCode, Json<Value>)> {
+    require(&p, ADMIN)?;
+    let email = b["email"].as_str().unwrap_or("").trim().to_string();
+    let body = json!({"role": b["role"].as_str().unwrap_or(""), "actor": p.user_id, "email": email});
+    let mut v = team_call(&st, &ctx, &p, Method::POST, &format!("/internal/v1/tenants/{}/invites", p.tenant_id), Some(body)).await?;
+    // приглашение на email уходит письмом; без настроенного SMTP сайт показывает ссылку, и её отправляют вручную
+    let mut emailed = false;
+    if !email.is_empty() {
+        let inviter = if p.has_email { p.email.clone() } else { String::new() };
+        let mail = json!({"company_id": p.company_id, "to": email, "code": v["code"], "company": p.company_name, "role": v["role"], "inviter": inviter});
+        if let Ok(m) = st.notifier.post("/internal/v1/mail/invite", &with_actor(&ctx, &p), &mail).await {
+            emailed = m["sent"].as_bool().unwrap_or(false);
+            v["email_limited"] = json!(m["limited"].as_bool().unwrap_or(false));
+        }
+    }
+    v["emailed"] = json!(emailed);
+    audit(&st, &ctx, &p, "team.invite_create", v["role"].as_str().unwrap_or("")).await;
+    Ok((StatusCode::CREATED, Json(v)))
+}
+
+pub async fn team_invite_delete(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(id): Path<String>) -> R<StatusCode> {
+    require(&p, ADMIN)?;
+    team_call(&st, &ctx, &p, Method::DELETE, &format!("/internal/v1/tenants/{}/invites/{id}", p.tenant_id), None).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn team_member_patch(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(uid): Path<String>, Json(b): Json<Value>) -> R<Json<Value>> {
+    require(&p, ADMIN)?;
+    let role = b["role"].as_str().unwrap_or("").to_string();
+    let body = json!({"role": role, "actor": p.user_id});
+    let v = team_call(&st, &ctx, &p, Method::PATCH, &format!("/internal/v1/tenants/{}/members/{uid}", p.tenant_id), Some(body)).await?;
+    sync_telegram_role(&st, &ctx, &p, &uid, Some(role.as_str())).await;
+    audit(&st, &ctx, &p, "team.member_role", &uid).await;
+    Ok(Json(v))
+}
+
+pub async fn team_member_delete(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(uid): Path<String>) -> R<StatusCode> {
+    require(&p, ADMIN)?;
+    team_call(&st, &ctx, &p, Method::DELETE, &format!("/internal/v1/tenants/{}/members/{uid}?actor={}", p.tenant_id, p.user_id), None).await?;
+    sync_telegram_role(&st, &ctx, &p, &uid, None).await;
+    audit(&st, &ctx, &p, "team.member_remove", &uid).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Владелец передаёт владение участнику и сам становится администратором (id компании не меняется).
+pub async fn team_transfer(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(b): Json<Value>) -> R<Json<Value>> {
+    require(&p, OWNER)?;
+    let new_owner = b["user_id"].as_str().unwrap_or("").to_string();
+    let body = json!({"actor": p.user_id, "new_owner": new_owner});
+    let v = team_call(&st, &ctx, &p, Method::POST, &format!("/internal/v1/tenants/{}/transfer", p.tenant_id), Some(body)).await?;
+    sync_telegram_role(&st, &ctx, &p, &new_owner, Some("owner")).await;
+    sync_telegram_role(&st, &ctx, &p, &p.user_id, Some("admin")).await;
+    audit(&st, &ctx, &p, "team.transfer_ownership", &new_owner).await;
+    Ok(Json(v))
+}
+
+/// id пользователя -> email или название сертификата (для журнала).
+async fn actor_names(st: &AppState, ctx: &Ctx, p: &Principal) -> BTreeMap<String, String> {
+    let members = team_call(st, ctx, p, Method::GET, &format!("/internal/v1/tenants/{}/members", p.tenant_id), None).await.unwrap_or(Value::Null);
+    let mut names = BTreeMap::new();
+    if let Some(list) = members["items"].as_array() {
+        for m in list {
+            let name = m["email"].as_str().filter(|s| !s.is_empty()).or(m["label"].as_str().filter(|s| !s.is_empty()));
+            if let (Some(id), Some(name)) = (m["user_id"].as_str(), name) {
+                names.insert(id.to_string(), name.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// Ячейка CSV: кавычки удваиваются, а значения, которые Excel принял бы за формулу, получают префикс-апостроф.
+pub fn csv_cell(s: &str) -> String {
+    let s = s.replace(['\r', '\n'], " ");
+    let s = if s.starts_with(['=', '+', '-', '@', '\t']) { format!("'{s}") } else { s };
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+#[derive(Deserialize)]
+pub struct ExportQuery {
+    q: Option<String>,
+}
+
+/// Выгрузка журнала в CSV (UTF-8 с BOM, открывается в Excel). Фильтр `q` — та же подстрока действия, что на странице.
+pub async fn team_activity_export(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, axum::extract::Query(eq): axum::extract::Query<ExportQuery>) -> R<Response> {
+    require(&p, ADMIN)?;
+    let actx = with_actor(&ctx, &p);
+    let q: String = eq.q.unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.').collect();
+    let mut rows: Vec<Value> = vec![];
+    let mut offset = 0;
+    loop {
+        let v = st.ledger.get(&format!("/internal/v1/companies/{}/audit?limit=200&offset={offset}&q={q}", p.company_id), &actx).await?;
+        let items = v["items"].as_array().cloned().unwrap_or_default();
+        let n = items.len();
+        rows.extend(items);
+        offset += 200;
+        if n < 200 || rows.len() >= 20_000 {
+            break;
+        }
+    }
+    let names = actor_names(&st, &ctx, &p).await;
+    let mut out = String::from("\u{feff}\"Время\";\"Кто\";\"Действие\";\"Объект\";\"Результат\"\r\n");
+    for r in &rows {
+        let actor = r["actor"].as_str().unwrap_or("");
+        let who = names.get(actor).map(String::as_str).unwrap_or(actor);
+        let cells = [r["at"].as_str().unwrap_or(""), who, r["action"].as_str().unwrap_or(""), r["object_id"].as_str().unwrap_or(""), r["outcome"].as_str().unwrap_or("")];
+        out.push_str(&cells.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(";"));
+        out.push_str("\r\n");
+    }
+    audit(&st, &ctx, &p, "team.activity_export", &rows.len().to_string()).await;
+    Ok((StatusCode::OK, [(header::CONTENT_TYPE, "text/csv; charset=utf-8"), (header::CONTENT_DISPOSITION, "attachment; filename=\"activity.csv\"")], out).into_response())
+}
+
+/// Журнал действий компании с именами участников (id -> email или название сертификата).
+pub async fn team_activity(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, RawQuery(q): RawQuery) -> R<Json<Value>> {
+    require(&p, ADMIN)?;
+    let path = match q {
+        Some(q) => format!("/internal/v1/companies/{}/audit?{q}", p.company_id),
+        None => format!("/internal/v1/companies/{}/audit", p.company_id),
+    };
+    let mut v = st.ledger.get(&path, &with_actor(&ctx, &p)).await?;
+    let names = actor_names(&st, &ctx, &p).await;
+    if let Some(items) = v["items"].as_array_mut() {
+        for it in items.iter_mut() {
+            let actor = it["actor"].as_str().unwrap_or("").to_string();
+            if let Some(n) = names.get(&actor) {
+                it["actor_name"] = json!(n);
+            }
+        }
+    }
+    Ok(Json(v))
+}
+
+/// Участник выходит из чужой команды и возвращается в собственную компанию.
+pub async fn team_leave(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<StatusCode> {
+    team_call(&st, &ctx, &p, Method::POST, &format!("/internal/v1/users/{}/leave", p.user_id), Some(json!({}))).await?;
+    sync_telegram_role(&st, &ctx, &p, &p.user_id, None).await;
+    audit(&st, &ctx, &p, "team.leave", &p.user_id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Принять приглашение (одноразовый код из ссылки): после этого пользователь работает в компании пригласившего.
+pub async fn team_accept(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(b): Json<Value>) -> R<Json<Value>> {
+    let body = json!({"code": b["code"].as_str().unwrap_or(""), "user_id": p.user_id});
+    Ok(Json(team_call(&st, &ctx, &p, Method::POST, "/internal/v1/invites/accept", Some(body)).await?))
+}
+
+/// Ссылка привязки Telegram доступна любой роли: роль в боте выводится из веб-роли того, кто привязывает.
+pub async fn notifier_link(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>) -> R<Response> {
+    authorize(&p, &cid)?;
+    let body = json!({"web_user_id": p.user_id, "web_role": p.role});
+    audit(&st, &ctx, &p, "telegram.link_request", "").await;
+    Ok(st.notifier.json(Method::POST, &format!("/internal/v1/companies/{cid}/notifications/link"), &with_actor(&ctx, &p), Some(&body)).await?.into_response())
+}
+
 // ---------- внешний API по токену: /api/ext/v1/* ----------
 async fn ext_forward(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request, tail: &str) -> R<Response> {
+    require(p, if *req.method() == Method::GET { OBSERVER } else { ANALYST })?;
     let q = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
     let path = format!("/internal/v1/companies/{}/{tail}{q}", p.company_id);
     Ok(forward(up, p, ctx, req, path).await?.into_response())
@@ -366,6 +635,7 @@ async fn relay(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request) -> R<Reply
     let uri = req.uri().clone();
     let cid = uri.path().split('/').nth(4).unwrap_or_default().to_string();
     authorize(p, &cid)?;
+    require(p, need_for(req.method(), uri.path()))?;
     let tail = uri.path().strip_prefix("/api/v1").unwrap_or(uri.path());
     let path = match uri.query() {
         Some(q) => format!("/internal/v1{tail}?{q}"),
@@ -394,6 +664,16 @@ pub async fn to_forecast(axum::extract::State(st): axum::extract::State<AppState
 
 pub async fn to_planfact(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
     Ok(relay(&st.planfact, &p, &ctx, req).await?.into_response())
+}
+
+pub async fn to_notifier(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
+    let method = req.method().clone();
+    let section = req.uri().path().split('/').nth(6).unwrap_or("").to_string();
+    let r = relay(&st.notifier, &p, &ctx, req).await?;
+    if method != Method::GET && r.status.is_success() {
+        audit(&st, &ctx, &p, &format!("notifications.{}.{}", section, method.as_str().to_lowercase()), "").await;
+    }
+    Ok(r.into_response())
 }
 
 pub async fn create_forecast(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
@@ -562,6 +842,7 @@ async fn load_snapshot(st: &AppState, ctx: &Ctx, cid: &str) -> R<Snapshot> {
 /// Сумма: из запроса или оценка по налоговым платежам из выписки. События создаются в ledger.
 pub async fn tax_calendar(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>, body: Option<Json<TaxBody>>) -> R<(StatusCode, Json<Value>)> {
     authorize(&p, &cid)?;
+    require(&p, ANALYST)?;
     let actx = with_actor(&ctx, &p);
     let snap = load_snapshot(&st, &actx, &cid).await?;
     let txs: Vec<Tx> = snap.transactions.iter().map(|r| r.tx.clone()).collect();
@@ -665,6 +946,7 @@ pub fn obligation_to_event(it: &Value) -> Option<Value> {
 /// Забирает счета и договоры из integrator (1С, ЭДО, банк) и идемпотентно создаёт ожидаемые события в ledger.
 pub async fn integrations_sync(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>, body: Option<Json<SyncBody>>) -> R<Json<Value>> {
     authorize(&p, &cid)?;
+    require(&p, ANALYST)?;
     let actx = with_actor(&ctx, &p);
     let ext = body.and_then(|b| b.0.external_company).unwrap_or_else(|| "C001".into());
     if ext.is_empty() || ext.len() > 32 || !ext.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
@@ -693,6 +975,43 @@ mod tests {
     }
     fn tax(date: NaiveDate, amount: i64) -> Tx {
         Tx { date, amount, counterparty: "ФНС".into(), inn: String::new(), purpose: String::new(), category: "taxes".into() }
+    }
+
+    #[test]
+    fn minimum_role_by_route() {
+        let c = "/api/v1/companies/c1";
+        let get = Method::GET;
+        let post = Method::POST;
+        assert_eq!(need_for(&get, &format!("{c}/forecasts/latest")), OBSERVER);
+        assert_eq!(need_for(&get, &format!("{c}/plan-fact")), OBSERVER);
+        assert_eq!(need_for(&post, &format!("{c}/imports")), ANALYST);
+        assert_eq!(need_for(&post, &format!("{c}/scenarios")), ANALYST);
+        assert_eq!(need_for(&Method::PATCH, c), ADMIN); // переименование компании
+        assert_eq!(need_for(&get, &format!("{c}/notifications")), OBSERVER);
+        assert_eq!(need_for(&get, &format!("{c}/notifications/sprint")), OBSERVER);
+        assert_eq!(need_for(&get, &format!("{c}/notifications/team")), ADMIN);
+        assert_eq!(need_for(&Method::PATCH, &format!("{c}/notifications/goals/3")), ANALYST);
+        assert_eq!(need_for(&post, &format!("{c}/notifications/retro")), ANALYST);
+        assert_eq!(need_for(&Method::PUT, &format!("{c}/notifications/prefs")), ADMIN);
+        assert_eq!(need_for(&post, &format!("{c}/notifications/departments")), ADMIN);
+        assert_eq!(need_for(&Method::DELETE, &format!("{c}/notifications/chats/5")), ADMIN);
+    }
+
+    #[test]
+    fn csv_cells_are_quoted_and_formula_safe() {
+        assert_eq!(csv_cell("простой"), "\"простой\"");
+        assert_eq!(csv_cell("a\"b"), "\"a\"\"b\"");
+        assert_eq!(csv_cell("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
+        assert_eq!(csv_cell("+1"), "\"'+1\"");
+        assert_eq!(csv_cell("-2"), "\"'-2\"");
+        assert_eq!(csv_cell("@cmd"), "\"'@cmd\"");
+        assert_eq!(csv_cell("a\nb"), "\"a b\"");
+    }
+
+    #[test]
+    fn role_ranks() {
+        assert!(rank("owner") > rank("admin") && rank("admin") > rank("analyst") && rank("analyst") > rank("observer"));
+        assert_eq!(rank("unknown"), OBSERVER); // неизвестная роль = минимум прав
     }
 
     fn cat(date: NaiveDate, amount: i64, category: &str) -> Tx {

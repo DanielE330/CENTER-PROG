@@ -482,3 +482,25 @@ async fn bulk_events_validation_and_unknown_company() {
     let (s, _) = call(&e.app, "POST", "/internal/v1/companies/no-such/expected-events/bulk", Some(json!({"events": [bulk_item("a", 1)]}))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn audit_log_lists_newest_first_filters_and_isolates_companies() {
+    let e = env().await;
+    let a = company(&e.app, "oa").await;
+    let b = company(&e.app, "ob").await;
+    for (cid, action) in [(&a, "team.invite_create"), (&a, "goal.status"), (&a, "team.member_role"), (&b, "team.leave")] {
+        let (s, _) = call(&e.app, "POST", &format!("/internal/v1/companies/{cid}/audit"), Some(json!({"action": action, "object_id": "o"}))).await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+    }
+    let (s, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{a}/audit"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["total"], 3);
+    assert_eq!(v["items"][0]["action"], "team.member_role"); // новые сверху
+    assert_eq!(v["items"][0]["actor"], "tester");
+    let (_, f) = call(&e.app, "GET", &format!("/internal/v1/companies/{a}/audit?q=TEAM"), None).await;
+    assert_eq!(f["total"], 2);
+    let (_, p) = call(&e.app, "GET", &format!("/internal/v1/companies/{a}/audit?limit=1&offset=1"), None).await;
+    assert_eq!((p["items"].as_array().unwrap().len(), p["items"][0]["action"].as_str()), (1, Some("goal.status")));
+    let (_, other) = call(&e.app, "GET", &format!("/internal/v1/companies/{b}/audit"), None).await;
+    assert_eq!(other["total"], 1); // чужие записи не видны
+}

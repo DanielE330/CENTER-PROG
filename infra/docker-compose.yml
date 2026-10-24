@@ -117,6 +117,41 @@ services:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8008/live', timeout=2)"]
 
+  notifier:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: notifier}
+    # Telegram-бот и расписание уведомлений; ходит на api.telegram.org (сеть edge) и во внутренние сервисы.
+    # Без TELEGRAM_BOT_TOKEN сервис запускается, но бот и рассылки выключены.
+    environment:
+      NOTIFIER_DB: /data/notifier.db
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      # консультант Hermes (OpenAI-совместимый API, лучше свой сервер: в запрос уходит статистика компании); пусто — только правила
+      HERMES_URL: ${HERMES_URL:-}
+      HERMES_MODEL: ${HERMES_MODEL:-NousResearch/Hermes-3-Llama-3.1-8B}
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
+      # письма с приглашениями в команду; без SMTP_HOST и SMTP_FROM письма не шлются, сайт показывает ссылку
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SSL: ${SMTP_SSL:-0}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-1}
+      LEDGER_URL: http://ledger:3002
+      FORECAST_URL: http://forecast:3003
+      PLANFACT_URL: http://planfact:3004
+    volumes: [notifier-data:/data]
+    networks: [internal, edge]
+    depends_on:
+      ledger: {condition: service_healthy}
+      forecast: {condition: service_healthy}
+      planfact: {condition: service_healthy}
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8009/live', timeout=2)"]
+
   ledger:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/rust.Dockerfile, target: ledger}
@@ -177,6 +212,7 @@ services:
       FORECAST_URL: http://forecast:3003
       PLANFACT_URL: http://planfact:3004
       INTEGRATOR_URL: http://integrator:8008
+      NOTIFIER_URL: http://notifier:8009
       WEB_DIR: /app/frontend/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     networks: [internal, edge]
@@ -186,6 +222,7 @@ services:
       ledger: {condition: service_healthy}
       forecast: {condition: service_healthy}
       planfact: {condition: service_healthy}
+      notifier: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/live"]
       interval: 10s
@@ -214,3 +251,4 @@ volumes:
   ecp-data:
   ledger-data:
   forecast-data:
+  notifier-data:

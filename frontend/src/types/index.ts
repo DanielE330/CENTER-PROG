@@ -15,7 +15,12 @@ export interface Me {
   company_inn?: string
   company_ogrn?: string
   ecp?: boolean
+  /** Web role in the company; the server enforces it, the UI only hides what is not allowed. */
+  role: WebRole
+  user_id?: string
 }
+
+export type WebRole = 'owner' | 'admin' | 'analyst' | 'observer'
 
 // ---------- forecast ----------
 export type RiskLevel = 'none' | 'low' | 'medium' | 'high'
@@ -349,4 +354,158 @@ export interface ApiTokenInfo {
 /** `token` is returned once, at creation. */
 export interface NewApiToken extends ApiTokenInfo {
   token: string
+}
+
+/** Telegram notifications (service `notifier`). Booleans in prefs come as 0/1. */
+export interface TgChat {
+  chat_id: number
+  kind: 'private' | 'group'
+  title: string
+  linked_at: number
+  department_id: number | null
+}
+
+export interface TgPrefs {
+  tz: string
+  risk_enabled: number
+  risk_dow: number
+  risk_time: string
+  week_enabled: number
+  week_dow: number
+  week_time: string
+  month_enabled: number
+  month_day: number
+  month_time: string
+  gap_enabled: number
+  gap_days: number
+  gap_threshold: number
+  /** Admin allows sending company statistics to the cloud advisor (Hermes). */
+  ai_consent: number
+}
+
+export interface TgStatus {
+  configured: boolean
+  /** Hermes advisor is connected (otherwise reports use rules only). */
+  advisor: boolean
+  bot_username: string
+  chats: TgChat[]
+  prefs: TgPrefs
+}
+
+export interface TgLink {
+  code: string
+  expires_in: number
+  link: string
+  group_link: string
+}
+
+export type GoalStatus = 'open' | 'done' | 'partial' | 'failed' | 'skipped'
+
+/** Weekly (sprint) goal. `target_kop` is a plain number in kopecks, not a decimal string. */
+export interface Goal {
+  id: number
+  week_start: string
+  kind: string
+  title: string
+  target_kop: number | null
+  due: string | null
+  status: GoalStatus
+  source: 'auto' | 'user'
+}
+
+export interface Retro {
+  week_start: string
+  mood: number | null
+  blockers: string
+  note: string
+}
+
+export interface SprintView {
+  today: string
+  sprint: string | null
+  goals: Goal[]
+  prev_sprint: string | null
+  prev_goals: Goal[]
+  velocity: number | null
+  retro: Retro | null
+}
+
+export interface SprintHistoryItem {
+  week_start: string
+  velocity: number | null
+  done: number
+  total: number
+  retro: Retro | null
+}
+
+export type TgRole = 'viewer' | 'rater' | 'admin'
+export type TgKind = 'risk' | 'week' | 'month' | 'gap'
+
+export interface Department {
+  id: number
+  name: string
+  kinds: TgKind[]
+  allow_excel: number
+  default_role: TgRole
+}
+
+export interface TgMember {
+  tg_user_id: number
+  name: string
+  /** null — role comes from the department policy. */
+  role: TgRole | null
+  department_id: number | null
+}
+
+export interface TgTeam {
+  roles: TgRole[]
+  kinds: TgKind[]
+  departments: Department[]
+  chats: TgChat[]
+  members: TgMember[]
+}
+
+export interface TeamMember {
+  user_id: string
+  email: string | null
+  label: string
+  role: WebRole
+  joined_at: number | null
+}
+
+export interface TeamInvite {
+  id: string
+  role: Exclude<WebRole, 'owner'>
+  email: string | null
+  created_at: number
+  expires_at: number
+}
+
+export interface NewInvite {
+  code: string
+  role: Exclude<WebRole, 'owner'>
+  email: string | null
+  /** The invitation e-mail was accepted by the SMTP server; otherwise the link must be sent by hand. */
+  emailed: boolean
+  /** The hourly e-mail limit of the company was reached. */
+  email_limited?: boolean
+  expires_at: number
+}
+
+export interface AuditItem {
+  id: number
+  at: string
+  actor: string
+  /** E-mail or certificate name of a web user; absent for Telegram (`tg:<id>`) and system actors. */
+  actor_name?: string
+  action: string
+  object_id: string | null
+  outcome: string
+}
+
+export interface AuditPage {
+  items: AuditItem[]
+  total: number
+  limit: number
+  offset: number
 }

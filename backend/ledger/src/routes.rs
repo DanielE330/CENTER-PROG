@@ -536,3 +536,34 @@ pub async fn audit_event(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
     audit(&st, &ctx, &cid, &b.action, &b.object_id, &b.outcome);
     StatusCode::NO_CONTENT
 }
+
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    /// подстрока в названии действия («team», «goal», «import»…)
+    q: Option<String>,
+}
+
+/// Журнал действий компании, новые сверху. Фильтр по подстроке действия, постранично.
+pub async fn list_audit(State(st): State<AppState>, Path(cid): Path<String>, Query(q): Query<AuditQuery>) -> R<Json<Value>> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let like = q.q.unwrap_or_default().trim().to_lowercase();
+    let c = lock(&st);
+    let total: i64 = c
+        .query_row("SELECT COUNT(*) FROM audit_events WHERE company_id=?1 AND (?2='' OR instr(lower(action),?2)>0)", params![cid, like], |r| r.get(0))
+        .map_err(internal)?;
+    let mut s = c
+        .prepare("SELECT id, at, actor, action, object_id, outcome FROM audit_events WHERE company_id=?1 AND (?2='' OR instr(lower(action),?2)>0) ORDER BY id DESC LIMIT ?3 OFFSET ?4")
+        .map_err(internal)?;
+    let items: Vec<Value> = s
+        .query_map(params![cid, like, limit, offset], |r| {
+            Ok(json!({"id": r.get::<_, i64>(0)?, "at": r.get::<_, String>(1)?, "actor": r.get::<_, String>(2)?, "action": r.get::<_, String>(3)?,
+                "object_id": r.get::<_, Option<String>>(4)?, "outcome": r.get::<_, String>(5)?}))
+        })
+        .map_err(internal)?
+        .filter_map(|x| x.ok())
+        .collect();
+    Ok(Json(json!({"items": items, "total": total, "limit": limit, "offset": offset})))
+}

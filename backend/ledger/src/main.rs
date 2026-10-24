@@ -44,6 +44,6 @@ pub fn build(st: AppState) -> Router {
         .route(&format!("{co}/expected-events"), get(list_events).post(create_event))
         .route(&format!("{co}/expected-events/bulk"), post(bulk_events))
         .route(&format!("{co}/expected-events/{{eid}}"), axum::routing::delete(delete_event))
-        .route(&format!("{co}/audit"), post(audit_event))
+        .route(&format!("{co}/audit"), post(audit_event).get(list_audit))
         .with_state(st)
 }

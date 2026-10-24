@@ -9,7 +9,7 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::Response,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use common::{Upstream, mw::env};
 use std::sync::Arc;
@@ -28,6 +28,7 @@ pub struct AppState {
     pub forecast: Upstream,
     pub planfact: Upstream,
     pub integrator: Upstream,
+    pub notifier: Upstream,
     pub cfg: Arc<Config>,
 }
 
@@ -42,6 +43,7 @@ async fn main() {
         forecast: Upstream::new("forecast", "Сервис прогноза", &env("FORECAST_URL", "http://127.0.0.1:3003"), 80),
         planfact: Upstream::new("planfact", "Сервис план-факта", &env("PLANFACT_URL", "http://127.0.0.1:3004"), 60),
         integrator: Upstream::new("integrator", "Сервис интеграций", &env("INTEGRATOR_URL", "http://127.0.0.1:8008"), 30),
+        notifier: Upstream::new("notifier", "Сервис уведомлений", &env("NOTIFIER_URL", "http://127.0.0.1:8009"), 60),
         cfg: Arc::new(Config { cookie_secure: env("COOKIE_SECURE", "0") == "1" }),
     };
 
@@ -59,6 +61,16 @@ async fn main() {
         .route("/api/v1/account/signatures/{id}", delete(http::account_remove_signature))
         .route("/api/v1/account/tokens", get(http::tokens_list).post(http::tokens_create))
         .route("/api/v1/account/tokens/{id}", delete(http::tokens_delete))
+        // команда компании: роли, приглашения
+        .route("/api/v1/team/members", get(http::team_members))
+        .route("/api/v1/team/members/{uid}", patch(http::team_member_patch).delete(http::team_member_delete))
+        .route("/api/v1/team/invites", get(http::team_invites_list).post(http::team_invite_create))
+        .route("/api/v1/team/invites/{id}", delete(http::team_invite_delete))
+        .route("/api/v1/team/leave", post(http::team_leave))
+        .route("/api/v1/team/accept", post(http::team_accept))
+        .route("/api/v1/team/transfer", post(http::team_transfer))
+        .route("/api/v1/team/activity", get(http::team_activity))
+        .route("/api/v1/team/activity/export", get(http::team_activity_export))
         // внешний API: Authorization: Bearer <токен>, компания определяется токеном
         .route("/api/ext/v1/company", get(http::ext_company))
         .route("/api/ext/v1/forecast", get(http::ext_forecast_latest).post(http::ext_forecast_create))
@@ -82,6 +94,10 @@ async fn main() {
         .route(&format!("{co}/backtest"), get(http::to_forecast))
         .route(&format!("{co}/scenarios"), post(http::create_scenario))
         .route(&format!("{co}/plan-fact"), get(http::to_planfact))
+        // Telegram-уведомления, цели недели и ретро: сервис notifier (привязка чата, расписание, agile-цикл)
+        .route(&format!("{co}/notifications"), get(http::to_notifier))
+        .route(&format!("{co}/notifications/link"), post(http::notifier_link))
+        .route(&format!("{co}/notifications/{{*tail}}"), get(http::to_notifier).post(http::to_notifier).put(http::to_notifier).patch(http::to_notifier).delete(http::to_notifier))
         .layer(middleware::from_fn(security_layer))
         .with_state(state.clone());
 

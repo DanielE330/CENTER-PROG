@@ -4,23 +4,41 @@
  */
 import type {
   AccountMethods,
+  AuditPage,
   ApiTokenInfo,
   Backtest,
+  Department,
   ExpectedEvent,
+  Goal,
+  GoalStatus,
   ForecastRun,
   ImportPreview,
   ImportRow,
   KeyRate,
   Me,
   NewApiToken,
+  NewInvite,
   NewExpectedEvent,
   PlanFact,
+  Retro,
   ScenarioParams,
   ScenarioResponse,
+  SprintHistoryItem,
+  SprintView,
   SyncResult,
+  TgLink,
+  TgKind,
+  TgMember,
+  TgPrefs,
+  TgRole,
+  TgStatus,
+  TgTeam,
   TaxCalendarRequest,
   TaxCalendarResult,
+  TeamInvite,
+  TeamMember,
   TransactionPage,
+  WebRole,
 } from '../types'
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
@@ -102,6 +120,22 @@ export const api = {
   createApiToken: (name: string) => request<NewApiToken>('POST', '/api/v1/account/tokens', { body: { name } }),
   deleteApiToken: (id: string) => request<void>('DELETE', `/api/v1/account/tokens/${encodeURIComponent(id)}`),
 
+  // ----- company team: members, invites, roles -----
+  teamMembers: () => request<{ items: TeamMember[] }>('GET', '/api/v1/team/members'),
+  teamInvites: () => request<{ items: TeamInvite[] }>('GET', '/api/v1/team/invites'),
+  createInvite: (role: Exclude<WebRole, 'owner'>, email?: string) =>
+    request<NewInvite>('POST', '/api/v1/team/invites', { body: { role, ...(email ? { email } : {}) } }),
+  transferOwnership: (userId: string) => request<unknown>('POST', '/api/v1/team/transfer', { body: { user_id: userId } }),
+  activity: (q: { limit: number; offset: number; q?: string }) => {
+    const p = new URLSearchParams({ limit: String(q.limit), offset: String(q.offset), q: q.q ?? '' })
+    return request<AuditPage>('GET', `/api/v1/team/activity?${p}`)
+  },
+  deleteInvite: (id: string) => request<void>('DELETE', `/api/v1/team/invites/${encodeURIComponent(id)}`),
+  setMemberRole: (uid: string, role: Exclude<WebRole, 'owner'>) => request<unknown>('PATCH', `/api/v1/team/members/${encodeURIComponent(uid)}`, { body: { role } }),
+  removeMember: (uid: string) => request<void>('DELETE', `/api/v1/team/members/${encodeURIComponent(uid)}`),
+  leaveTeam: () => request<void>('POST', '/api/v1/team/leave', { body: {} }),
+  acceptInvite: (code: string) => request<{ tenant_id: string; role: WebRole }>('POST', '/api/v1/team/accept', { body: { code } }),
+
   // ----- company -----
   renameCompany: (name: string) => request<{ company_name: string }>('PATCH', co(), { body: { name } }),
 
@@ -152,6 +186,31 @@ export const api = {
     return request<ImportPreview>('POST', co('/imports'), { form })
   },
   confirmImport: (id: string) => request<{ inserted: number; skipped_duplicates: number; status: string }>('POST', co(`/imports/${id}/confirm`), { body: {} }),
+
+  // ----- Telegram notifications -----
+  tgStatus: () => request<TgStatus>('GET', co('/notifications')),
+  tgLink: () => request<TgLink>('POST', co('/notifications/link'), { body: {} }),
+  tgSavePrefs: (p: Partial<TgPrefs>) => request<TgPrefs>('PUT', co('/notifications/prefs'), { body: p }),
+  tgUnlink: (chatId: number) => request<void>('DELETE', co(`/notifications/chats/${chatId}`)),
+  tgTest: () => request<{ delivered: number }>('POST', co('/notifications/test'), { body: {} }),
+
+  // ----- weekly goals (agile cycle) -----
+  tgSprint: () => request<SprintView>('GET', co('/notifications/sprint')),
+  tgHistory: () => request<{ items: SprintHistoryItem[] }>('GET', co('/notifications/history')),
+  tgAddGoal: (b: { title: string; target_kop?: number }) => request<Goal>('POST', co('/notifications/goals'), { body: b }),
+  tgPatchGoal: (id: number, b: { status?: GoalStatus; title?: string; actual_kop?: number }) => request<Goal>('PATCH', co(`/notifications/goals/${id}`), { body: b }),
+  tgDeleteGoal: (id: number) => request<void>('DELETE', co(`/notifications/goals/${id}`)),
+  tgRetro: (b: { week_start: string; mood?: number; blockers?: string }) => request<Retro>('POST', co('/notifications/retro'), { body: b }),
+
+  // ----- team: departments, roles, group policies -----
+  tgTeam: () => request<TgTeam>('GET', co('/notifications/team')),
+  tgAddDepartment: (b: { name: string; kinds: TgKind[]; allow_excel: boolean; default_role: TgRole }) => request<Department>('POST', co('/notifications/departments'), { body: b }),
+  tgPatchDepartment: (id: number, b: Partial<{ name: string; kinds: TgKind[]; allow_excel: boolean; default_role: TgRole }>) =>
+    request<Department>('PATCH', co(`/notifications/departments/${id}`), { body: b }),
+  tgDeleteDepartment: (id: number) => request<void>('DELETE', co(`/notifications/departments/${id}`)),
+  tgChatDepartment: (chatId: number, departmentId: number | null) => request<unknown>('PATCH', co(`/notifications/chats/${chatId}`), { body: { department_id: departmentId } }),
+  tgPatchMember: (uid: number, b: { role?: TgRole | ''; department_id?: number | null }) => request<TgMember>('PATCH', co(`/notifications/members/${uid}`), { body: b }),
+  tgDeleteMember: (uid: number) => request<void>('DELETE', co(`/notifications/members/${uid}`)),
 
   // ----- plan / fact, gov -----
   planFact: (days: number) => request<PlanFact>('GET', co(`/plan-fact?days=${days}`)),

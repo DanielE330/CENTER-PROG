@@ -23,6 +23,10 @@ import type { ImportRow } from '../../types'
 import { ImportStatement } from './ImportStatement'
 import { AccountMethods } from './AccountMethods'
 import { ApiTokens } from './ApiTokens'
+import { TelegramNotifications } from './TelegramNotifications'
+import { TeamPolicies } from './TeamPolicies'
+import { LeaveTeam, TeamMembers } from './TeamMembers'
+import { canEdit, isAdmin } from '../../lib/roles'
 
 export default function SettingsPage() {
   const { t } = useTranslation()
@@ -97,6 +101,12 @@ export default function SettingsPage() {
             </form>
           </Card>
 
+          <TelegramNotifications />
+
+          {isAdmin(me) && <TeamMembers />}
+          <LeaveTeam />
+          {isAdmin(me) && <TeamPolicies />}
+
           <AccountMethods />
 
           <ApiTokens />
@@ -122,9 +132,11 @@ export default function SettingsPage() {
           </Card>
         </div>
 
-        <Card title={t('import.title')} subtitle={t('import.subtitle')}>
-          <div className="px-5 pb-5"><ImportStatement /></div>
-        </Card>
+        {canEdit(me) && (
+          <Card title={t('import.title')} subtitle={t('import.subtitle')}>
+            <div className="px-5 pb-5"><ImportStatement /></div>
+          </Card>
+        )}
       </div>
 
       <Card title={t('settings.history.title')}>

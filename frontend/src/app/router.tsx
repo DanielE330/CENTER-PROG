@@ -9,6 +9,8 @@ const TransactionsPage = lazy(() => import('../features/transactions/Transaction
 const ObligationsPage = lazy(() => import('../features/obligations/ObligationsPage'))
 const ScenariosPage = lazy(() => import('../features/scenarios/ScenariosPage'))
 const PlanVsActualPage = lazy(() => import('../features/plan-vs-actual/PlanVsActualPage'))
+const GoalsPage = lazy(() => import('../features/goals/GoalsPage'))
+const ActivityPage = lazy(() => import('../features/team/ActivityPage'))
 const AssistantPage = lazy(() => import('../features/assistant/AssistantPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
 
@@ -25,6 +27,8 @@ export const router = createBrowserRouter([
       { path: '/obligations', element: page(<ObligationsPage />) },
       { path: '/scenarios', element: page(<ScenariosPage />) },
       { path: '/plan-vs-actual', element: page(<PlanVsActualPage />) },
+      { path: '/goals', element: page(<GoalsPage />) },
+      { path: '/activity', element: page(<ActivityPage />) },
       { path: '/assistant', element: page(<AssistantPage />) },
       { path: '/settings', element: page(<SettingsPage />) },
       { path: '*', element: <Navigate to="/dashboard" replace /> },

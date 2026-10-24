@@ -5,3 +5,7 @@ node_modules/
 data/
 *.pyc
 frontend/dist/
+
+# локальные секреты (токены доступа) не коммитим
+git_token.md
+.env

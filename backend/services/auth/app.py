@@ -24,6 +24,9 @@ LOCK_SECONDS = 300
 MAX_SIGNATURES = 5
 MAX_TOKENS = 10
 TOKEN_PREFIX = "ckt_"
+INVITE_TTL = 7 * 24 * 3600
+MAX_MEMBERS = 20
+ROLE_RANK = {"observer": 1, "analyst": 2, "admin": 3, "owner": 4}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _lock = threading.Lock()
@@ -65,10 +68,29 @@ def db():
                 "CREATE TABLE IF NOT EXISTS api_tokens(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,"
                 " token_hash TEXT UNIQUE NOT NULL, prefix TEXT NOT NULL, created_at REAL NOT NULL, last_used REAL)"
             )
+            # команда компании: пользователь без записи — владелец собственной компании (tenant = его id);
+            # участник записан в чужой tenant с ролью. Компания в ledger ищется по tenant_id как по owner_id.
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS memberships(user_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, role TEXT NOT NULL,"
+                " created_at REAL NOT NULL)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS memberships_tenant ON memberships(tenant_id)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS invites(code_hash TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, role TEXT NOT NULL,"
+                " created_by TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL, email TEXT NOT NULL DEFAULT '')"
+            )
+            if "email" not in [r[1] for r in conn.execute("PRAGMA table_info(invites)")]:
+                conn.execute("ALTER TABLE invites ADD COLUMN email TEXT NOT NULL DEFAULT ''")
             yield conn
             conn.commit()
         finally:
             conn.close()
+
+
+def tenant_of(conn, uid: str) -> tuple[str, str]:
+    """(tenant_id, role): пользователь без членства — владелец собственной компании."""
+    row = conn.execute("SELECT tenant_id, role FROM memberships WHERE user_id=?", (uid,)).fetchone()
+    return (row[0], row[1]) if row else (uid, "owner")
 
 
 def hash_password(password: str, salt: bytes) -> bytes:
@@ -321,7 +343,8 @@ def token_verify(t: TokenIn):
         if not row:
             raise HTTPException(401, {"code": "invalid_token"})
         conn.execute("UPDATE api_tokens SET last_used=? WHERE id=?", (time.time(), row[0]))
-    return {"user_id": row[1], "email": row[2]}
+        tenant, role = tenant_of(conn, row[1])
+    return {"user_id": row[1], "email": row[2], "tenant_id": tenant, "role": role}
 
 
 @app.post("/internal/v1/sessions/issue")
@@ -345,9 +368,196 @@ def session(t: TokenIn):
             " WHERE s.token_hash=?",
             (token_hash(t.token),),
         ).fetchone()
+        if row and row[2] >= time.time():
+            tenant, role = tenant_of(conn, row[0])
     if not row or row[2] < time.time():
         raise HTTPException(401, {"code": "invalid_session"})
-    return {"user_id": row[0], "email": row[1], "has_email": bool(row[3])}
+    return {"user_id": row[0], "email": row[1], "has_email": bool(row[3]), "tenant_id": tenant, "role": role}
+
+
+class InviteIn(BaseModel):
+    role: str
+    actor: str
+    email: str = ""  # если задан, принять приглашение сможет только пользователь с этим email
+
+
+class TransferIn(BaseModel):
+    actor: str
+    new_owner: str
+
+
+class RoleIn(BaseModel):
+    role: str
+    actor: str
+
+
+class ActorIn(BaseModel):
+    actor: str
+
+
+class AcceptIn(BaseModel):
+    code: str
+    user_id: str
+
+
+def _actor_rank(conn, tid: str, actor: str) -> int:
+    t, role = tenant_of(conn, actor)
+    if t != tid:
+        raise HTTPException(403, {"code": "forbidden_role"})
+    return ROLE_RANK[role]
+
+
+@app.get("/internal/v1/users/{uid}/tenant")
+def user_tenant(uid: str):
+    with db() as conn:
+        _methods(conn, uid)
+        t, r = tenant_of(conn, uid)
+    return {"tenant_id": t, "role": r}
+
+
+def _label(conn, uid: str) -> tuple[str | None, str]:
+    row = conn.execute("SELECT email, has_email FROM users WHERE id=?", (uid,)).fetchone()
+    lab = conn.execute("SELECT label FROM identities WHERE user_id=? ORDER BY created_at LIMIT 1", (uid,)).fetchone()
+    return (row[0] if row and row[1] else None), (lab[0] if lab else "")
+
+
+@app.get("/internal/v1/tenants/{tid}/members")
+def members_list(tid: str):
+    with db() as conn:
+        rows = conn.execute("SELECT user_id, role, created_at FROM memberships WHERE tenant_id=? ORDER BY created_at", (tid,)).fetchall()
+        if not any(r[0] == tid for r in rows):
+            rows = [(tid, "owner", 0.0)] + rows  # исходный владелец без записи членства
+        rows.sort(key=lambda r: -ROLE_RANK[r[1]])
+        out = []
+        for uid, role, at in rows:
+            email, label = _label(conn, uid)
+            out.append({"user_id": uid, "email": email, "label": label, "role": role, "joined_at": at or None})
+    return {"items": out}
+
+
+@app.post("/internal/v1/tenants/{tid}/invites", status_code=201)
+def invite_create(tid: str, b: InviteIn):
+    if b.role not in ("admin", "analyst", "observer"):
+        raise HTTPException(422, {"code": "invalid_role"})
+    email = b.email.strip().lower()
+    if email and (not EMAIL_RE.match(email) or len(email) > 254):
+        raise HTTPException(422, {"code": "invalid_email"})
+    with db() as conn:
+        rank = _actor_rank(conn, tid, b.actor)
+        # приглашать на роль не выше своей: админа может позвать только владелец
+        if rank < ROLE_RANK["admin"] or ROLE_RANK[b.role] >= rank:
+            raise HTTPException(403, {"code": "forbidden_role"})
+        n = conn.execute("SELECT COUNT(*) FROM memberships WHERE tenant_id=?", (tid,)).fetchone()[0]
+        if n + 1 >= MAX_MEMBERS:
+            raise HTTPException(409, {"code": "too_many_members"})
+        code = secrets.token_urlsafe(24)
+        now = time.time()
+        conn.execute("DELETE FROM invites WHERE expires_at < ?", (now,))
+        conn.execute("INSERT INTO invites VALUES(?,?,?,?,?,?,?)", (token_hash(code), tid, b.role, b.actor, now, now + INVITE_TTL, email))
+    return {"code": code, "role": b.role, "email": email or None, "expires_at": now + INVITE_TTL}
+
+
+@app.get("/internal/v1/tenants/{tid}/invites")
+def invites_list(tid: str):
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT code_hash, role, created_at, expires_at, email FROM invites WHERE tenant_id=? AND expires_at>=? ORDER BY created_at",
+            (tid, time.time()),
+        ).fetchall()
+    return {"items": [{"id": r[0][:12], "role": r[1], "created_at": r[2], "expires_at": r[3], "email": r[4] or None} for r in rows]}
+
+
+@app.delete("/internal/v1/tenants/{tid}/invites/{iid}", status_code=204)
+def invite_delete(tid: str, iid: str):
+    with db() as conn:
+        n = conn.execute("DELETE FROM invites WHERE tenant_id=? AND substr(code_hash,1,12)=?", (tid, iid)).rowcount
+    if n != 1:
+        raise HTTPException(404, {"code": "invite_not_found"})
+
+
+@app.post("/internal/v1/invites/accept")
+def invite_accept(b: AcceptIn):
+    with db() as conn:
+        _methods(conn, b.user_id)
+        inv = conn.execute("SELECT tenant_id, role, expires_at, email FROM invites WHERE code_hash=?", (token_hash(b.code.strip()),)).fetchone()
+        if not inv or inv[2] < time.time():
+            raise HTTPException(404, {"code": "invite_invalid"})
+        tid, role = inv[0], inv[1]
+        if inv[3]:
+            email, _ = _label(conn, b.user_id)
+            if (email or "").lower() != inv[3]:
+                raise HTTPException(403, {"code": "invite_email_mismatch"})  # приглашение выписано на другой email
+        if b.user_id == tid or conn.execute("SELECT 1 FROM memberships WHERE user_id=?", (b.user_id,)).fetchone():
+            raise HTTPException(409, {"code": "already_member"})
+        if conn.execute("SELECT 1 FROM memberships WHERE tenant_id=? LIMIT 1", (b.user_id,)).fetchone():
+            raise HTTPException(409, {"code": "has_team"})  # у владельца есть своя команда: сначала её нужно распустить
+        conn.execute("DELETE FROM invites WHERE code_hash=?", (token_hash(b.code.strip()),))
+        conn.execute("INSERT INTO memberships VALUES(?,?,?,?)", (b.user_id, tid, role, time.time()))
+    return {"tenant_id": tid, "role": role}
+
+
+@app.patch("/internal/v1/tenants/{tid}/members/{uid}")
+def member_patch(tid: str, uid: str, b: RoleIn):
+    if b.role not in ("admin", "analyst", "observer"):
+        raise HTTPException(422, {"code": "invalid_role"})
+    with db() as conn:
+        rank = _actor_rank(conn, tid, b.actor)
+        cur = conn.execute("SELECT role FROM memberships WHERE user_id=? AND tenant_id=?", (uid, tid)).fetchone()
+        if (cur is None and uid == tid) or (cur and cur[0] == "owner"):
+            raise HTTPException(409, {"code": "owner_immutable"})
+        if not cur:
+            raise HTTPException(404, {"code": "member_not_found"})
+        if rank < ROLE_RANK["admin"] or ROLE_RANK[cur[0]] >= rank or ROLE_RANK[b.role] >= rank:
+            raise HTTPException(403, {"code": "forbidden_role"})
+        conn.execute("UPDATE memberships SET role=? WHERE user_id=?", (b.role, uid))
+    return {"user_id": uid, "role": b.role}
+
+
+@app.delete("/internal/v1/tenants/{tid}/members/{uid}", status_code=204)
+def member_delete(tid: str, uid: str, actor: str):
+    with db() as conn:
+        rank = _actor_rank(conn, tid, actor)
+        cur = conn.execute("SELECT role FROM memberships WHERE user_id=? AND tenant_id=?", (uid, tid)).fetchone()
+        if (cur is None and uid == tid) or (cur and cur[0] == "owner"):
+            raise HTTPException(409, {"code": "owner_immutable"})
+        if not cur:
+            raise HTTPException(404, {"code": "member_not_found"})
+        if uid == tid:
+            # бывший владелец: удаление вернуло бы ему права владельца, поэтому его можно только понизить
+            raise HTTPException(409, {"code": "former_owner"})
+        if rank < ROLE_RANK["admin"] or ROLE_RANK[cur[0]] >= rank:
+            raise HTTPException(403, {"code": "forbidden_role"})
+        conn.execute("DELETE FROM memberships WHERE user_id=?", (uid,))
+
+
+@app.post("/internal/v1/tenants/{tid}/transfer")
+def transfer_ownership(tid: str, b: TransferIn):
+    """Владелец передаёт владение участнику и сам становится администратором. id компании (tenant) не меняется."""
+    with db() as conn:
+        if tenant_of(conn, b.actor) != (tid, "owner"):
+            raise HTTPException(403, {"code": "forbidden_role"})
+        if b.new_owner == b.actor:
+            raise HTTPException(422, {"code": "same_owner"})
+        if not conn.execute("SELECT 1 FROM memberships WHERE user_id=? AND tenant_id=?", (b.new_owner, tid)).fetchone():
+            raise HTTPException(404, {"code": "member_not_found"})
+        now = time.time()
+        conn.execute("UPDATE memberships SET role='owner' WHERE user_id=?", (b.new_owner,))
+        conn.execute("INSERT OR REPLACE INTO memberships VALUES(?,?,?,?)", (b.actor, tid, "admin", now))
+    return {"owner": b.new_owner, "former_owner": b.actor}
+
+
+@app.post("/internal/v1/users/{uid}/leave", status_code=204)
+def user_leave(uid: str):
+    """Участник выходит из команды и возвращается в собственную (пустую или прежнюю) компанию."""
+    with db() as conn:
+        row = conn.execute("SELECT tenant_id, role FROM memberships WHERE user_id=?", (uid,)).fetchone()
+        if not row:
+            raise HTTPException(409, {"code": "not_member"})
+        if row[1] == "owner":
+            raise HTTPException(409, {"code": "owner_cannot_leave"})  # сначала передайте владение
+        if row[0] == uid:
+            raise HTTPException(409, {"code": "former_owner"})
+        conn.execute("DELETE FROM memberships WHERE user_id=?", (uid,))
 
 
 @app.post("/internal/v1/logout", status_code=204)

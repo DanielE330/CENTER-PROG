@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Build context: repo root. Targets: auth, parser, gov, ecp, onec, edo, bank, integrator, test.
+# Build context: repo root. Targets: auth, parser, gov, ecp, onec, edo, bank, integrator, notifier, test.
 ARG SVC=auth
 FROM python:3.12-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
@@ -54,6 +54,13 @@ FROM base AS integrator
 USER app
 EXPOSE 8008
 CMD ["uvicorn", "integrator.app:app", "--host", "0.0.0.0", "--port", "8008"]
+
+FROM base AS notifier
+# read_only-ФС и пользователь без домашнего каталога: кэш matplotlib кладём в tmpfs
+ENV NOTIFIER_DB=/data/notifier.db MPLCONFIGDIR=/tmp/mpl
+USER app
+EXPOSE 8009
+CMD ["uvicorn", "notifier.app:app", "--host", "0.0.0.0", "--port", "8009"]
 
 FROM base AS test
 RUN uv sync --frozen

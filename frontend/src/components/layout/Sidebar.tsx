@@ -2,6 +2,8 @@ import { NavLink } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { PanelLeftClose, PanelLeftOpen, Landmark, X } from 'lucide-react'
 import { navItems } from './nav'
+import { useMe } from '../../app/auth'
+import { atLeast } from '../../lib/roles'
 import { cn } from '../../lib/utils'
 
 interface Props {
@@ -15,6 +17,7 @@ interface Props {
 export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
   const { t } = useTranslation()
   const compact = collapsed && !mobile
+  const me = useMe()
   return (
     <aside
       className="sidebar flex h-full flex-col bg-surface border-r border-line"
@@ -39,7 +42,7 @@ export function Sidebar({ collapsed, onToggle, mobile, onNavigate }: Props) {
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3 flex flex-col gap-1">
-        {navItems.map(({ to, labelKey, icon: Icon }) => {
+        {navItems.filter((i) => !i.minRole || atLeast(me, i.minRole)).map(({ to, labelKey, icon: Icon }) => {
           const label = t(labelKey)
           return (
           <NavLink

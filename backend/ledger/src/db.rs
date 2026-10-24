@@ -37,7 +37,8 @@ pub fn open(path: &str) -> Db {
         CREATE UNIQUE INDEX IF NOT EXISTS events_external ON expected_events(company_id, external_id);
         CREATE TABLE IF NOT EXISTS audit_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
-            company_id TEXT, action TEXT NOT NULL, object_id TEXT, outcome TEXT NOT NULL, request_id TEXT);",
+            company_id TEXT, action TEXT NOT NULL, object_id TEXT, outcome TEXT NOT NULL, request_id TEXT);
+        CREATE INDEX IF NOT EXISTS audit_company ON audit_events(company_id, id);",
     )
     .expect("migrate");
     // реквизиты компании (из сертификата ЭЦП) добавлены позже
