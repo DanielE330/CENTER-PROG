@@ -81,8 +81,8 @@ struct ImportStats {
 async fn main() -> Result<()> {
     let config = CoreConfig::from_env()?;
     telemetry::init(&config.service);
-    if std::env::args().any(|a| a == "--healthcheck") {
-        return healthcheck(&config).await;
+    if server::healthcheck_requested() {
+        return server::run_healthcheck(&config).await;
     }
     let pool = db::connect_with_retry(
         CoreConfig::require(&config.database_url, "DATABASE_URL")?,
@@ -139,13 +139,6 @@ async fn main() -> Result<()> {
         .layer(Extension(verifier))
         .with_state(state);
     server::serve(&config, server::base_router(app, 25 * 1024 * 1024)).await
-}
-
-async fn healthcheck(config: &CoreConfig) -> Result<()> {
-    let client = MtlsClient::from_dir(&config.cert_dir)?;
-    let url = format!("https://{}:{}/healthz", config.service, config.listen.port());
-    client.get().get(url).send().await?.error_for_status()?;
-    Ok(())
 }
 
 async fn upload(

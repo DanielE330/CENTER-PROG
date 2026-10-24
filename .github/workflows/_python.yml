@@ -28,7 +28,7 @@ jobs:
       - name: Unit tests
         run: uv run pytest py/ci_common/tests services/categorizer/tests services/forecast/tests services/advisor/tests
       - name: Dependency audit
-        run: uv export --frozen --no-dev --all-packages --no-hashes > /tmp/requirements.txt && uvx pip-audit==2.9.0 -r /tmp/requirements.txt --strict
+        run: uv export --frozen --no-dev --all-packages --no-hashes --no-emit-workspace > /tmp/requirements.txt && uvx pip-audit==2.9.0 -r /tmp/requirements.txt --strict
       # The organizers' dataset is not in git: the quality gate runs on seeded synthetic data.
       - name: Forecast quality gate (synthetic)
         run: |

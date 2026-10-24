@@ -81,6 +81,24 @@ pub async fn serve_with(
     }
 }
 
+/// True when the binary was started as its own container healthcheck (`<svc> --healthcheck`).
+pub fn healthcheck_requested() -> bool {
+    // nosemgrep: rust.lang.security.args.args -- a mode switch for the healthcheck, not a security decision
+    std::env::args().any(|a| a == "--healthcheck")
+}
+
+/// Calls this service's own `/healthz` over mTLS with its own certificate.
+pub async fn run_healthcheck(config: &CoreConfig) -> Result<()> {
+    let client = crate::client::MtlsClient::from_dir(&config.cert_dir)?;
+    client
+        .get()
+        .get(format!("https://{}:{}/healthz", config.service, config.listen.port()))
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
 /// Health endpoint plus request tracing and body limits shared by all services.
 pub fn base_router(router: Router, body_limit: usize) -> Router {
     use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};

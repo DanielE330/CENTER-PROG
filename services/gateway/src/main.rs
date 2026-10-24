@@ -81,15 +81,8 @@ const ROUTES: &[(&str, &str)] = &[
 async fn main() -> Result<()> {
     let config = CoreConfig::from_env()?;
     telemetry::init(&config.service);
-    if std::env::args().any(|a| a == "--healthcheck") {
-        let client = MtlsClient::from_dir(&config.cert_dir)?;
-        client
-            .get()
-            .get(format!("https://{}:{}/healthz", config.service, config.listen.port()))
-            .send()
-            .await?
-            .error_for_status()?;
-        return Ok(());
+    if server::healthcheck_requested() {
+        return server::run_healthcheck(&config).await;
     }
     let public_url = std::env::var("PUBLIC_URL")
         .context("PUBLIC_URL")?
