@@ -651,6 +651,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tower",
  "uuid",
 ]
 
@@ -1210,6 +1211,7 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",

@@ -3,6 +3,8 @@
 
 mod db;
 mod routes;
+#[cfg(test)]
+mod tests;
 
 use axum::{
     Router,

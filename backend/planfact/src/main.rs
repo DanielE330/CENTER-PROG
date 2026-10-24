@@ -126,3 +126,157 @@ fn build(txs: &[Tx], events: &[common::Event], rules: &[Rule], as_of: NaiveDate,
         "note": "План по регулярным платежам построен по шаблонам, найденным во всей истории (in-sample); ручные события и счета — по введённым датам."
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::Event;
+
+    fn d(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    fn tx(date: &str, amount: i64, cp: &str, inn: &str) -> Tx {
+        Tx { date: d(date), amount, counterparty: cp.into(), inn: inn.into(), purpose: String::new(), category: "other_expense".into() }
+    }
+
+    fn event(date: &str, amount: i64, title: &str) -> Event {
+        Event { id: title.into(), date: d(date), amount, title: title.into(), source: "manual".into(), confidence: 0.9, counterparty: String::new() }
+    }
+
+    fn rule(key: &str, cp: &str, kind: &str, anchors: &[u32], amount: i64) -> Rule {
+        Rule { key: key.into(), counterparty: cp.into(), kind: kind.into(), anchors: anchors.to_vec(), amount }
+    }
+
+    // as_of = вторник 2026-03-31; окно 30 дней: с 2026-03-01 (воскресенье).
+    fn run(txs: &[Tx], events: &[Event], rules: &[Rule]) -> Value {
+        build(txs, events, rules, d("2026-03-31"), d("2026-03-01"), 30)
+    }
+
+    fn items(v: &Value) -> &Vec<Value> {
+        v["items"].as_array().unwrap()
+    }
+
+    #[test]
+    fn monthly_rule_paid_deviation_and_missed() {
+        let rules = [
+            rule("out:7701", "ООО Аренда", "monthly", &[5], -2_000_000),
+            rule("out:7702", "ООО Охрана", "monthly", &[10], -300_000),
+            rule("out:7703", "ООО Связь", "monthly", &[15], -100_000),
+        ];
+        let txs = [
+            tx("2026-03-06", -2_050_000, "ООО Аренда", "7701"), // +2.5%: в допуске 15%
+            tx("2026-03-11", -450_000, "ООО Охрана", "7702"),   // +50%: отклонение
+        ];
+        let v = run(&txs, &[], &rules);
+        let it = items(&v);
+        assert_eq!(it.len(), 3);
+        assert_eq!((it[0]["date"].as_str(), it[0]["status"].as_str(), it[0]["source"].as_str()), (Some("2026-03-05"), Some("paid"), Some("recurring")));
+        assert_eq!((it[0]["plan"].as_i64(), it[0]["fact"].as_i64(), it[0]["diff"].as_i64()), (Some(-2_000_000), Some(-2_050_000), Some(-50_000)));
+        assert_eq!(it[0]["fact_date"], "2026-03-06");
+        assert_eq!((it[1]["status"].as_str(), it[1]["diff"].as_i64()), (Some("deviation"), Some(-150_000)));
+        assert_eq!((it[2]["status"].as_str(), it[2]["fact"].is_null(), it[2]["diff"].is_null()), (Some("missed"), true, true));
+        assert_eq!(v["missed"], 1);
+        assert_eq!((v["as_of"].as_str(), v["days"].as_i64()), (Some("2026-03-31"), Some(30)));
+    }
+
+    #[test]
+    fn rule_matches_by_counterparty_name_when_key_differs_but_amount_close() {
+        let rules = [rule("out:7701", "ООО Аренда", "monthly", &[5], -1_000_000)];
+        // другой ИНН (ключ не совпал), но то же название и сумма в пределах 33%
+        let v = run(&[tx("2026-03-05", -1_200_000, "ООО Аренда", "9999")], &[], &rules);
+        assert_eq!(items(&v)[0]["status"], "deviation");
+        // другое название — не сопоставляется
+        let v = run(&[tx("2026-03-05", -1_000_000, "ООО Иное", "9999")], &[], &rules);
+        assert_eq!(items(&v)[0]["status"], "missed");
+    }
+
+    #[test]
+    fn match_window_is_five_days_and_sign_must_agree() {
+        let rules = [rule("out:7701", "ООО Аренда", "monthly", &[10], -1_000_000)];
+        let v = run(&[tx("2026-03-15", -1_000_000, "ООО Аренда", "7701")], &[], &rules);
+        assert_eq!(items(&v)[0]["status"], "paid"); // ровно 5 дней
+        let v = run(&[tx("2026-03-16", -1_000_000, "ООО Аренда", "7701")], &[], &rules);
+        assert_eq!(items(&v)[0]["status"], "missed"); // 6 дней
+        let v = run(&[tx("2026-03-10", 1_000_000, "ООО Аренда", "7701")], &[], &rules);
+        assert_eq!(items(&v)[0]["status"], "missed"); // противоположный знак
+    }
+
+    #[test]
+    fn events_match_by_amount_and_each_fact_is_used_once() {
+        let events = [event("2026-03-15", 1_000_000, "Оплата А"), event("2026-03-16", 1_000_000, "Оплата Б")];
+        let txs = [tx("2026-03-17", 1_100_000, "Клиент", "1")];
+        let v = run(&txs, &events, &[]);
+        let it = items(&v);
+        assert_eq!(it.len(), 2);
+        assert_eq!((it[0]["title"].as_str(), it[0]["status"].as_str(), it[0]["source"].as_str()), (Some("Оплата А"), Some("paid"), Some("event")));
+        // единственная операция уже занята первым событием
+        assert_eq!(it[1]["status"], "missed");
+        assert_eq!(v["missed"], 1);
+        // сумма вне 30% — не сопоставляется
+        let v = run(&[tx("2026-03-17", 1_400_000, "Клиент", "1")], &events[..1], &[]);
+        assert_eq!(items(&v)[0]["status"], "missed");
+    }
+
+    #[test]
+    fn recent_unmatched_plan_is_pending_not_missed() {
+        // as_of - 5 дней = 2026-03-26: позже этой даты — «ожидается»
+        let events = [event("2026-03-27", -500_000, "Свежий"), event("2026-03-26", -500_000, "Граница")];
+        let v = run(&[], &events, &[]);
+        let it = items(&v);
+        assert_eq!((it[0]["title"].as_str(), it[0]["status"].as_str()), (Some("Граница"), Some("missed")));
+        assert_eq!((it[1]["title"].as_str(), it[1]["status"].as_str()), (Some("Свежий"), Some("pending")));
+        assert_eq!(v["missed"], 1);
+    }
+
+    #[test]
+    fn events_outside_window_are_ignored() {
+        let events = [event("2026-02-28", -100, "До окна"), event("2026-04-01", -100, "После as_of"), event("2026-03-01", -100, "Первый день")];
+        let v = run(&[], &events, &[]);
+        assert_eq!(items(&v).len(), 1);
+        assert_eq!(items(&v)[0]["title"], "Первый день");
+    }
+
+    #[test]
+    fn weekly_rule_generates_plan_for_each_weekday_occurrence() {
+        // понедельники марта 2026: 2, 9, 16, 23, 30
+        let rules = [rule("out:7", "ООО Недельный", "weekly", &[0], -100_000)];
+        let v = run(&[tx("2026-03-09", -100_000, "ООО Недельный", "7")], &[], &rules);
+        let dates: Vec<_> = items(&v).iter().map(|i| i["date"].as_str().unwrap().to_string()).collect();
+        assert_eq!(dates, ["2026-03-02", "2026-03-09", "2026-03-16", "2026-03-23", "2026-03-30"]);
+        let st: Vec<_> = items(&v).iter().map(|i| i["status"].as_str().unwrap().to_string()).collect();
+        assert_eq!(st, ["missed", "paid", "missed", "missed", "pending"]);
+    }
+
+    #[test]
+    fn weekly_aggregation_splits_in_and_out_by_week() {
+        let events = [
+            event("2026-03-03", 1_000_000, "Приход"),   // неделя с 03-02
+            event("2026-03-04", -400_000, "Расход"),    // та же неделя
+            event("2026-03-10", -200_000, "Расход 2"),  // неделя с 03-09
+        ];
+        let txs = [tx("2026-03-03", 1_000_000, "К", "1"), tx("2026-03-04", -380_000, "П", "2")];
+        let v = run(&txs, &events, &[]);
+        let w = v["weeks"].as_array().unwrap();
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0], json!({"week_start": "2026-03-02", "plan_in": 1_000_000, "plan_out": 400_000, "fact_in": 1_000_000, "fact_out": 380_000}));
+        assert_eq!(w[1], json!({"week_start": "2026-03-09", "plan_in": 0, "plan_out": 200_000, "fact_in": 0, "fact_out": 0}));
+    }
+
+    #[test]
+    fn response_amounts_are_strings_after_money() {
+        let v = run(&[tx("2026-03-03", -1000, "П", "2")], &[event("2026-03-03", -1000, "Расход")], &[]);
+        let Json(out) = money(v);
+        assert_eq!(out["items"][0]["plan"], "-1000");
+        assert_eq!(out["items"][0]["fact"], "-1000");
+        assert_eq!(out["weeks"][0]["plan_out"], "1000");
+    }
+
+    #[test]
+    fn empty_input_gives_empty_report() {
+        let v = run(&[], &[], &[]);
+        assert!(items(&v).is_empty());
+        assert!(v["weeks"].as_array().unwrap().is_empty());
+        assert_eq!(v["missed"], 0);
+    }
+}
