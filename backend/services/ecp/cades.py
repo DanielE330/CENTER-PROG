@@ -24,6 +24,8 @@ MAX_SIGNATURE_BYTES = 256 * 1024
 REQUIRE_CHAIN = os.environ.get("ECP_REQUIRE_CHAIN") == "1"
 PREFIX = "ecp-login:"
 VERIFIER = os.environ.get("ECP_VERIFIER", "gost")
+# допустимое расхождение времени подписи (из атрибута signingTime) с часами сервера, секунды
+SIGNING_TIME_SKEW = int(os.environ.get("ECP_SIGNING_TIME_SKEW", "600"))
 
 
 class EcpError(Exception):
@@ -86,7 +88,7 @@ def _digits(v: str, lengths: tuple[int, ...]) -> str:
 
 
 def parse_signer(sig_der: bytes, now: float | None = None) -> Signer:
-    """Достаёт сертификат единственного подписанта и проверяет срок его действия (подпись здесь не проверяется)."""
+    """Достаёт сертификат единственного подписанта и проверяет срок действия сертификата и время подписи (сама подпись здесь не проверяется)."""
     try:
         ci = cms.ContentInfo.load(sig_der)
         sd = ci["content"]
@@ -111,9 +113,21 @@ def parse_signer(sig_der: bytes, now: float | None = None) -> Signer:
     except Exception:
         raise EcpError("bad_signature")
     t = now if now is not None else time.time()
-    tbs = cert["tbs_certificate"]["validity"]
-    if not (tbs["not_before"].native.timestamp() <= t <= tbs["not_after"].native.timestamp()):
+    validity = cert["tbs_certificate"]["validity"]
+    not_before, not_after = validity["not_before"].native.timestamp(), validity["not_after"].native.timestamp()
+    if t < not_before:
+        raise EcpError("certificate_not_yet_valid")
+    if t > not_after:
         raise EcpError("certificate_expired")
+    # время подписи (атрибут signingTime): внутри срока сертификата и близко к текущему (challenge и так одноразовый и живёт 5 минут)
+    try:
+        signing = next((a["values"][0].native for a in signers[0]["signed_attrs"] if a["type"].native == "signing_time"), None)
+    except Exception:
+        raise EcpError("bad_signature")
+    if signing is not None:
+        ts = signing.timestamp()
+        if not (not_before <= ts <= not_after) or abs(t - ts) > SIGNING_TIME_SKEW:
+            raise EcpError("signature_time_invalid")
     subj = _name(cert.subject)
     display = subj.get("organization_name") or subj.get("common_name") or ""
     oids = _subject_oids(cert.subject)

@@ -171,6 +171,8 @@
     "signature_invalid": "The signature failed verification",
     "invalid_challenge": "The signing request has expired, sign in again",
     "certificate_expired": "The certificate has expired",
+    "certificate_not_yet_valid": "The certificate is not valid yet",
+    "signature_time_invalid": "The signing time does not match the current time: check your computer clock",
     "bad_signature": "Could not parse the signature",
     "verifier_unavailable": "Server-side signature verification is unavailable",
     "bad_origin": "A request from another origin was rejected",

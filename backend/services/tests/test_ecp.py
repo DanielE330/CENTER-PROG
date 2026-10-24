@@ -143,3 +143,29 @@ def test_verify_does_not_create_user_and_burns_challenge(client, tmp_path):
     r = client.post(f"{P}/ecp/verify", json={"challenge": ch, "signature": sig})
     assert r.status_code == 200 and len(r.json()["external_id"]) == 64
     assert client.post(f"{P}/ecp/verify", json={"challenge": ch, "signature": sig}).status_code == 401
+
+
+def _signed(tmp_path):
+    import time
+    from ecp import cades
+    sig = base64.b64decode(make_cms(tmp_path, "ecp-login:x", days=30))
+    return cades, sig, time.time()
+
+
+def test_certificate_validity_period_is_checked(tmp_path):
+    cades, sig, now = _signed(tmp_path)
+    assert cades.parse_signer(sig, now=now).display_name == "Romashka"
+    with pytest.raises(cades.EcpError) as e:
+        cades.parse_signer(sig, now=now + 40 * 86400)  # сертификат на 30 дней
+    assert e.value.code == "certificate_expired"
+    with pytest.raises(cades.EcpError) as e:
+        cades.parse_signer(sig, now=now - 3600)
+    assert e.value.code == "certificate_not_yet_valid"
+
+
+def test_signing_time_must_be_recent(tmp_path):
+    cades, sig, now = _signed(tmp_path)
+    cades.parse_signer(sig, now=now + 120)  # небольшое расхождение часов допустимо
+    with pytest.raises(cades.EcpError) as e:
+        cades.parse_signer(sig, now=now + 3600)  # подпись «из прошлого» (повтор старой подписи)
+    assert e.value.code == "signature_time_invalid"
