@@ -1,11 +1,9 @@
-//! LLM providers behind one OpenAI-compatible interface. OpenAI, OpenRouter,
-//! Gemini (its OpenAI-compatible endpoint) and the local llama.cpp server share
-//! one adapter; Anthropic has its own; `template` answers without any model.
+//! Cloud LLM providers behind one OpenAI-compatible interface. OpenAI, OpenRouter
+//! and Gemini (its OpenAI-compatible endpoint) share one adapter; Anthropic has its
+//! own; `template` answers without any model when no provider is connected.
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
-
-use ci_core::client::MtlsClient;
 
 pub enum Provider {
     OpenAiCompatible {
@@ -13,7 +11,6 @@ pub enum Provider {
         base_url: String,
         api_key: Option<String>,
         model: String,
-        external: bool,
     },
     Anthropic {
         api_key: String,
@@ -24,8 +21,6 @@ pub enum Provider {
 
 pub struct Clients {
     pub external: reqwest::Client,
-    /// The local model sits behind an mTLS proxy like every other internal service.
-    pub internal: MtlsClient,
 }
 
 impl Provider {
@@ -39,8 +34,7 @@ impl Provider {
 
     pub fn is_external(&self) -> bool {
         match self {
-            Self::OpenAiCompatible { external, .. } => *external,
-            Self::Anthropic { .. } => true,
+            Self::OpenAiCompatible { .. } | Self::Anthropic { .. } => true,
             Self::Template => false,
         }
     }
@@ -51,18 +45,12 @@ impl Provider {
                 base_url,
                 api_key,
                 model,
-                external,
                 ..
             } => {
                 let mut body = request.clone();
                 body["model"] = json!(model);
                 body["stream"] = json!(false);
-                let http = if *external {
-                    clients.external.clone()
-                } else {
-                    clients.internal.get()
-                };
-                let mut req = http.post(format!("{base_url}/chat/completions")).json(&body);
+                let mut req = clients.external.post(format!("{base_url}/chat/completions")).json(&body);
                 if let Some(key) = api_key {
                     req = req.bearer_auth(key);
                 }

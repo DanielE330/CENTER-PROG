@@ -55,7 +55,7 @@ h2 { margin: 8px 0; font-size: 17px; }
 .headline.ok { background: color-mix(in srgb, var(--ok) 12%, var(--card)); }
 .headline.warn { background: color-mix(in srgb, var(--warn) 15%, var(--card)); }
 .headline.bad { background: color-mix(in srgb, var(--bad) 15%, var(--card)); }
-.warn-note { border-left: 4px solid var(--warn); }
+.warn-note { border-left: 4px solid var(--warn); padding-left: 8px; }
 .demo { border-left: 4px solid var(--accent); }
 .gap.warning { border-left: 4px solid var(--warn); }
 .gap.critical { border-left: 4px solid var(--bad); }

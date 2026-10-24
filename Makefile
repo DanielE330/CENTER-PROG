@@ -2,7 +2,7 @@
 COMPOSE := docker compose -f deploy/compose/compose.yaml
 PY := .venv-app/bin/python
 
-.PHONY: help secrets gen up seed down logs ps test lint backtest e2e clean-volumes model
+.PHONY: help secrets gen up seed down logs ps test lint backtest e2e clean-volumes
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -23,13 +23,6 @@ gen: ## Regenerate compose.yaml, nats.conf and Quadlet units from deploy/service
 up: secrets ## Build and start the whole stack (https://localhost:8443)
 	$(COMPOSE) up -d --build
 	@echo "open https://localhost:8443 (accept the local CA certificate)"
-
-model: ## Download the local model (Qwen3-4B Q4_K_M) and verify its sha256
-	@mkdir -p models
-	@[ -s models/model.gguf ] || (curl -fSL --retry 5 -o models/model.gguf.part \
-	  https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf && \
-	  echo "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5  models/model.gguf.part" | sha256sum -c && \
-	  mv models/model.gguf.part models/model.gguf)
 
 seed: ## Create the demo tenants from the dataset
 	$(COMPOSE) --profile seed run --rm seed

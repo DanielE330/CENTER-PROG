@@ -882,7 +882,6 @@ services:
       NATS_URL: tls://nats:4222
       RUST_LOG: info
       DATABASE_URL: postgres://llm-gateway@postgres:5432/ci1
-      LLM_LOCAL_URL: https://llm-local:8443/v1
     volumes:
     - certs-llm-gateway:/certs:ro
     secrets:
@@ -894,7 +893,6 @@ services:
     - app
     - data
     - egress
-    - llm
     depends_on:
       cert-llm-gateway:
         condition: service_healthy
@@ -1378,87 +1376,6 @@ services:
     tmpfs:
     - /tmp:size=256m,uid=10001,gid=10001
     mem_limit: 512m
-  cert-llm-local:
-    image: smallstep/step-cli:0.31.0
-    entrypoint:
-    - /bin/sh
-    - /agent/cert-agent.sh
-    environment:
-      NAME: llm-local
-      LIFETIME: 168h
-      PKCS8: 'false'
-    volumes:
-    - certs-llm-local:/certs
-    - ca-public:/ca-public:ro
-    - ../scripts:/agent:ro
-    secrets:
-    - provisioner_password
-    networks:
-    - app
-    depends_on:
-      step-ca:
-        condition: service_started
-    healthcheck:
-      test:
-      - CMD
-      - test
-      - -s
-      - /certs/cert.pem
-      interval: 3s
-      retries: 60
-    restart: unless-stopped
-    mem_limit: 32m
-    user: 65532:65532
-    cap_drop:
-    - ALL
-    security_opt:
-    - no-new-privileges:true
-    read_only: true
-    tmpfs:
-    - /tmp:size=64m
-    profiles:
-    - gpu
-  llm-local:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b11610@sha256:b0baccbe2e00b5d74e63f85f9f023c93d61d0f329475269e1e7002e87eb875ea
-    profiles:
-    - gpu
-    command:
-    - --host
-    - 127.0.0.1
-    - --port
-    - '8080'
-    - -m
-    - /models/model.gguf
-    - -c
-    - '8192'
-    - --cache-type-k
-    - q8_0
-    - --cache-type-v
-    - q8_0
-    - --flash-attn
-    - 'on'
-    - --reasoning-budget
-    - '0'
-    - -ngl
-    - '99'
-    - --jinja
-    - --alias
-    - local
-    volumes:
-    - "${MODELS_DIR:-../../models}:/models:ro"
-    network_mode: service:llm-local-tls
-    deploy:
-      resources:
-        reservations:
-          devices:
-          - driver: nvidia
-            count: all
-            capabilities:
-            - gpu
-    restart: unless-stopped
-    depends_on:
-      llm-local-tls:
-        condition: service_started
   seed:
     image: ci1/connectors:dev
     command:
@@ -1508,43 +1425,6 @@ services:
     tmpfs:
     - /tmp:size=64m
     mem_limit: 256m
-  llm-local-tls:
-    image: ghostunnel/ghostunnel:v1.11.3
-    profiles:
-    - gpu
-    command:
-    - server
-    - --listen
-    - 0.0.0.0:8443
-    - --target
-    - 127.0.0.1:8080
-    - --cert
-    - /certs/cert.pem
-    - --key
-    - /certs/key.pem
-    - --cacert
-    - /certs/ca.pem
-    - --allow-uri
-    - spiffe://ci1/svc/llm-gateway
-    volumes:
-    - certs-llm-local:/certs:ro
-    networks:
-      llm:
-        aliases:
-        - llm-local
-    depends_on:
-      cert-llm-local:
-        condition: service_healthy
-    restart: unless-stopped
-    user: 65532:65532
-    cap_drop:
-    - ALL
-    security_opt:
-    - no-new-privileges:true
-    read_only: true
-    tmpfs:
-    - /tmp:size=64m
-    mem_limit: 32m
 networks:
   edge: {}
   app:
@@ -1552,8 +1432,6 @@ networks:
   data:
     internal: true
   egress: {}
-  llm:
-    internal: true
 volumes:
   pgdata: {}
   natsdata: {}
@@ -1656,12 +1534,6 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: uid=10001,gid=10001,mode=0700,size=1m
-  certs-llm-local:
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: uid=65532,gid=65532,mode=0700,size=1m
 secrets:
   anthropic_api_key:
     file: ../dev-secrets/anthropic_api_key

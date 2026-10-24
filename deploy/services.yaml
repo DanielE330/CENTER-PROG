@@ -14,7 +14,7 @@ infra:
   step-ca:
     image: smallstep/step-ca:0.30.2
     uid: 1000
-    networks: [app, data, egress, llm]
+    networks: [app, data, egress]
   postgres:
     image: postgres:16.13-bookworm
     uid: 999
@@ -76,7 +76,7 @@ services:
     nats: {publish: ["ci.v1.alerts.>"]}
   llm-gateway:
     kind: rust
-    networks: [app, data, egress, llm]
+    networks: [app, data, egress]
     clients: [advisor]
     db: llm_gateway
     secrets: [openai_api_key, anthropic_api_key, gemini_api_key, openrouter_api_key]
@@ -113,9 +113,3 @@ services:
     networks: [app]
     clients: [gateway]
     memory: 512m
-  llm-local:
-    kind: llm
-    profile: gpu
-    networks: [llm]
-    clients: [llm-gateway]
-    memory: 8g

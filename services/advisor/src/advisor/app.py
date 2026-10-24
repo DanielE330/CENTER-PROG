@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 
 import httpx
-from advisor import grounded, proxy, runtime
+from advisor import proxy, runtime, template
 from ci_common.auth import User, Verifier
 from ci_common.config import Config
 from ci_common.tls import MtlsClient
@@ -21,7 +21,7 @@ class State:
     verifier: Verifier
     runtime: runtime.AgentRuntime
     fallback: runtime.AgentRuntime
-    grounded: runtime.AgentRuntime
+    template: runtime.AgentRuntime
     lock: asyncio.Lock
 
 
@@ -41,7 +41,7 @@ async def lifespan(_: FastAPI):
     )
     S.runtime = runtime.make_runtime()
     S.fallback = runtime.BuiltinRuntime()
-    S.grounded = grounded.GroundedRuntime()
+    S.template = template.TemplateRuntime()
     S.lock = asyncio.Lock()
     log.info("agent runtime: %s", S.runtime.name)
     yield
@@ -92,20 +92,33 @@ async def chat(body: ChatIn, user: User = Depends(current_user)) -> dict:
     async with S.lock:
         proxy.activate(proxy.Context(tenant_id=user.tenant_id, user_token=user.token))
         try:
-            primary = S.runtime
+            notice = ""
+            turn = None
             if not await uses_cloud_model(llm):
-                # Hermes needs a cloud model (64K+ context). The small local model gets the facts
-                # fetched for it and its answer is checked against them (grounded mode).
-                primary = S.grounded
-            try:
-                turn = await primary.run(body.message, history, llm, mcp)
-                if not turn.answer.strip():
-                    raise RuntimeError("empty answer")
-            except Exception as exc:  # noqa: BLE001 - the user still gets an answer from the built-in loop
-                if primary is S.fallback:
+                # Consulting runs only on cloud models; without one the facts come as a template.
+                notice = "not_connected"
+            else:
+                for agent in dict.fromkeys([S.runtime, S.fallback]):
+                    try:
+                        turn = await agent.run(body.message, history, llm, mcp)
+                        if turn.answer.strip():
+                            break
+                        turn = None
+                    except Exception as exc:  # noqa: BLE001 - the user still gets an answer
+                        log.warning("%s runtime failed: %s", agent.name, type(exc).__name__)
+                if turn is None:
+                    notice = "unavailable"
+            if turn is None:
+                try:
+                    turn = await S.template.run(body.message, history, llm, mcp)
+                except Exception as exc:  # noqa: BLE001
                     raise HTTPException(502, "advisor unavailable") from exc
-                log.warning("primary runtime failed, falling back: %s", type(exc).__name__)
-                turn = await S.fallback.run(body.message, history, llm, mcp)
         finally:
             proxy.activate(None)
-    return {"answer": turn.answer, "tools_used": turn.tools_used, "proposals": turn.proposals, "runtime": turn.runtime}
+    return {
+        "answer": turn.answer,
+        "tools_used": turn.tools_used,
+        "proposals": turn.proposals,
+        "runtime": turn.runtime,
+        "notice": notice,
+    }
