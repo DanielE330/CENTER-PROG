@@ -20,6 +20,8 @@ const RESIDUAL_MAX_CAL_DAYS: i64 = 300;
 const GAP_MIN_SPAN_DAYS: i64 = 5;
 const DEFAULT_PAY_DELAY: [i64; 7] = [0, 0, 1, 2, 3, 5, 7];
 const OVERDUE_IN_DELAY: [i64; 6] = [1, 2, 3, 5, 7, 10];
+/// Максимальная длина «моста» от конца выписки до сегодняшнего дня; дальше выписка считается слишком старой.
+pub const MAX_BRIDGE_DAYS: i64 = 60;
 
 pub use common::{Event, Tx};
 
@@ -137,7 +139,10 @@ pub struct Quality {
 #[derive(Clone, Debug, Serialize)]
 pub struct ForecastResult {
     pub as_of: NaiveDate,
+    /// запрошенный горизонт в днях от сегодняшнего дня (или от конца выписки, если моста нет); в `days` ещё `bridge_days` точек впереди
     pub horizon: usize,
+    /// дни между концом выписки и сегодняшним днём, оценённые моделью (первые `bridge_days` точек `days`)
+    pub bridge_days: usize,
     pub opening_balance: i64,
     pub model_version: &'static str,
     pub seed: u64,
@@ -198,11 +203,14 @@ pub struct Params {
     pub revert: f64,
     /// Калибровать вероятность разрыва (см. `calibrate_risk`); false — отдавать долю траекторий как есть.
     pub calibrate: bool,
+    /// Сегодняшняя дата: если выписка заканчивается раньше, прогноз продлевается «мостом» до этой даты
+    /// (не более `MAX_BRIDGE_DAYS`), а `horizon` отсчитывается уже от неё. `None` — без моста (backtest, тесты).
+    pub today: Option<NaiveDate>,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { horizon: 30, seed: 42, n_paths: N_PATHS, residual: ResidualMode::Block, drift_keep: 0.0, drift_tau: 0.0, shape_keep: 0.5, revert: 0.015, calibrate: true }
+        Params { horizon: 30, seed: 42, n_paths: N_PATHS, residual: ResidualMode::Block, drift_keep: 0.0, drift_tau: 0.0, shape_keep: 0.5, revert: 0.015, calibrate: true, today: None }
     }
 }
 
@@ -653,7 +661,8 @@ pub fn forecast(
     let as_of = txs.iter().map(|t| t.date).max().ok_or(ForecastError::NoData)?;
     let first = txs.iter().map(|t| t.date).min().unwrap();
     let opening = *balances.range(..=as_of).next_back().ok_or(ForecastError::NoBalance)?.1;
-    let h = p.horizon;
+    let bridge = p.today.map_or(0, |t| (t - as_of).num_days().clamp(0, MAX_BRIDGE_DAYS) as usize);
+    let h = p.horizon + bridge;
     let history_days = (as_of - first).num_days() + 1;
 
     let rules = detect_rules(txs, as_of);
@@ -1047,7 +1056,7 @@ pub fn forecast(
             date: when,
             message: format!(
                 "Вероятность кассового разрыва в ближайшие {} дн.: {:.0}%",
-                h,
+                p.horizon,
                 shortfall_probability * 100.0
             ),
             reasons,
@@ -1098,13 +1107,17 @@ pub fn forecast(
     if !use_blocks {
         notes.push("Мало данных для остаточного потока: использовано среднее".to_string());
     }
-    if as_of < chrono::Local::now().date_naive() - Duration::days(7) {
-        notes.push(format!("Данные выписки актуальны на {as_of}, а не на сегодня"));
+    if bridge > 0 {
+        notes.push(format!("Выписка заканчивается {as_of}: {bridge} дн. до сегодняшнего дня оценены моделью, загрузите свежую выписку"));
+    }
+    if p.today.is_some_and(|t| (t - as_of).num_days() > MAX_BRIDGE_DAYS) {
+        notes.push(format!("Данные выписки актуальны на {as_of}, это более {MAX_BRIDGE_DAYS} дн. назад: прогноз ненадёжен"));
     }
 
     Ok(ForecastResult {
         as_of,
-        horizon: h,
+        horizon: p.horizon,
+        bridge_days: bridge,
         opening_balance: opening,
         model_version: MODEL_VERSION,
         seed: p.seed,
@@ -1568,6 +1581,23 @@ mod tests {
             assert!(fc.risk.shortfall_probability > 0.5, "overdraft opening means high risk");
             assert!(fc.quality.notes.iter().any(|n| n.contains("овердрафт")));
         }
+    }
+
+    #[test]
+    fn bridge_extends_horizon_to_today_and_is_capped() {
+        let (v, b) = sample();
+        let as_of = v.iter().map(|t| t.date).max().unwrap();
+        let mk = |today: Option<NaiveDate>| forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 14, seed: 1, n_paths: 50, today, ..Default::default() }).unwrap();
+        let none = mk(None);
+        assert_eq!((none.bridge_days, none.horizon), (0, 14));
+        let br = mk(Some(as_of + Duration::days(10)));
+        assert_eq!((br.bridge_days, br.horizon, br.days.len()), (10, 14, 24));
+        assert_eq!(br.days[0].date, as_of + Duration::days(1));
+        assert!(br.quality.notes.iter().any(|n| n.contains("оценены моделью")));
+        let old = mk(Some(as_of + Duration::days(400)));
+        assert_eq!(old.bridge_days as i64, MAX_BRIDGE_DAYS);
+        let same = mk(Some(as_of));
+        assert_eq!(same.bridge_days, 0);
     }
 
     #[test]

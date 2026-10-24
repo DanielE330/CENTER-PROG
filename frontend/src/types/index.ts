@@ -8,9 +8,12 @@ export type Kop = string
 
 // ---------- auth ----------
 export interface Me {
-  email: string
+  /** null when the account signs in only with an electronic signature. */
+  email: string | null
   company_id: string
   company_name: string
+  company_inn?: string
+  company_ogrn?: string
   ecp?: boolean
 }
 
@@ -73,7 +76,10 @@ export type QualityLevel = 'good' | 'medium' | 'low'
 
 export interface ForecastResult {
   as_of: string
+  /** Requested horizon in days from today. */
   horizon: number
+  /** Days between the statement end and today, estimated by the model (the first points of `days`). */
+  bridge_days?: number
   opening_balance: Kop
   model_version: string
   seed: number
@@ -180,6 +186,15 @@ export interface TaxCalendarResult {
   source: string
   amount_kop: Kop
   amount_estimated: boolean
+  kind?: TaxKind
+}
+
+export type TaxKind = 'enp' | 'usn' | 'vat'
+
+export interface TaxCalendarRequest {
+  kind: TaxKind
+  amountKop?: string
+  usnObject?: 'income' | 'income_expenses'
 }
 
 export interface SyncResult {
@@ -309,4 +324,29 @@ export interface AssistantMessage {
   text?: string
   /** Assistant answers are keys + neutral params so they re-translate on language change. */
   parts?: Array<{ key: string; params?: import('../i18n/helpers').MsgParams }>
+}
+
+export interface AccountSignature {
+  id: string
+  label: string
+  created_at: number
+}
+
+/** Ways to sign in. At least one is always left. */
+export interface AccountMethods {
+  email: string | null
+  signatures: AccountSignature[]
+}
+
+export interface ApiTokenInfo {
+  id: string
+  name: string
+  prefix: string
+  created_at: number
+  last_used: number | null
+}
+
+/** `token` is returned once, at creation. */
+export interface NewApiToken extends ApiTokenInfo {
+  token: string
 }

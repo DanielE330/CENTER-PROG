@@ -40,5 +40,16 @@ pub fn open(path: &str) -> Db {
             company_id TEXT, action TEXT NOT NULL, object_id TEXT, outcome TEXT NOT NULL, request_id TEXT);",
     )
     .expect("migrate");
+    // реквизиты компании (из сертификата ЭЦП) добавлены позже
+    let cols: Vec<String> = {
+        let mut q = conn.prepare("PRAGMA table_info(companies)").expect("table_info");
+        let rows = q.query_map([], |r| r.get::<_, String>(1)).expect("table_info");
+        rows.collect::<Result<_, _>>().expect("table_info")
+    };
+    for col in ["inn", "ogrn"] {
+        if !cols.iter().any(|c| c == col) {
+            conn.execute(&format!("ALTER TABLE companies ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"), []).expect("add column");
+        }
+    }
     Arc::new(Mutex::new(conn))
 }

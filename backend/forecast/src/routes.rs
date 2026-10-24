@@ -42,7 +42,7 @@ async fn compute(snap: Snapshot, horizon: usize, scenario: Scenario) -> R<model:
         let balances = model::daily_balances(&hist);
         // внутренние переводы не являются выручкой или расходом бизнеса
         let txs: Vec<Tx> = hist.into_iter().map(|h| h.0).filter(|t| t.category != "transfers").collect();
-        model::forecast(&txs, &balances, &snap.events, &scenario, &Params { horizon, ..Default::default() })
+        model::forecast(&txs, &balances, &snap.events, &scenario, &Params { horizon, today: Some(chrono::Local::now().date_naive()), ..Default::default() })
     })
     .await
     .map_err(internal)?
@@ -70,7 +70,7 @@ fn run_json(id: &str, at: &str, rev: i64, stale: bool, res: &model::ForecastResu
 }
 
 fn horizon_of(h: Option<i64>) -> R<usize> {
-    let h = h.unwrap_or(30);
+    let h = h.unwrap_or(90);
     if !(7..=90).contains(&h) {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_horizon", "Горизонт от 7 до 90 дней"));
     }

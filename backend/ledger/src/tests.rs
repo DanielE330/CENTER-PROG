@@ -90,6 +90,19 @@ async fn company(app: &Router, owner: &str) -> String {
     v["company_id"].as_str().unwrap().to_string()
 }
 
+#[tokio::test]
+async fn company_requisites_from_certificate_are_stored_and_not_overwritten() {
+    let e = env().await;
+    let (_, v) = call(&e.app, "POST", "/internal/v1/companies/ensure", Some(json!({"owner_id": "o1", "name": "Ромашка", "inn": "7707083893", "ogrn": "bad"}))).await;
+    assert_eq!((v["inn"].as_str(), v["ogrn"].as_str()), (Some("7707083893"), Some("")));
+    // повторный вход: пустое дополняется, заполненное сохраняется
+    let (_, v) = call(&e.app, "POST", "/internal/v1/companies/ensure", Some(json!({"owner_id": "o1", "inn": "1234567890", "ogrn": "1027700132195"}))).await;
+    assert_eq!((v["inn"].as_str(), v["ogrn"].as_str()), (Some("7707083893"), Some("1027700132195")));
+    let cid = v["company_id"].as_str().unwrap();
+    let (_, got) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}"), None).await;
+    assert_eq!(got["inn"], "7707083893");
+}
+
 async fn revision(app: &Router, cid: &str) -> i64 {
     let (s, v) = call(app, "GET", &format!("/internal/v1/companies/{cid}"), None).await;
     assert_eq!(s, StatusCode::OK);

@@ -32,7 +32,7 @@ export default function DashboardPage() {
   const [days, setDays] = useState<number | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const view = forecast.view
-  const horizon = view?.r.horizon ?? 30
+  const horizon = view?.r.horizon ?? 90
   const shown = Math.min(days ?? 30, horizon)
   const windows = WINDOWS.filter((d) => d <= horizon)
 
@@ -101,7 +101,7 @@ function DashboardBody({ v, days }: { v: ForecastView; days: number }) {
   const { r, run } = v
   const risk = r.risk
   const deficit = BigInt(v.minDay.p50) < 0n
-  const chartPoints = sliceWindow(v.points, r.as_of, 0, days)
+  const chartPoints = sliceWindow(v.points, r.as_of, 0, days + (r.bridge_days ?? 0))
   const riskTone = risk.level === 'high' ? 'danger' : risk.level === 'medium' ? 'warning' : 'default'
 
   return (

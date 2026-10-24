@@ -200,3 +200,70 @@ def test_external_id_migration_of_old_db(db_path):
     assert c.post(f"{P}/users/external", json={"external_id": "z"}).json()["created"] is True
     cols = [r[1] for r in sqlite3.connect(db_path).execute("PRAGMA table_info(users)")]
     assert "external_id" in cols
+
+
+def _uid(c, ext="sig-1"):
+    return c.post(f"{P}/users/external", json={"external_id": ext, "display_name": "ООО Ромашка"}).json()["user_id"]
+
+
+def test_methods_email_user_and_add_signature(client):
+    uid = reg(client).json()["user_id"]
+    m = client.get(f"{P}/users/{uid}/methods").json()
+    assert m == {"email": "user@example.com", "signatures": []}
+    m = client.post(f"{P}/users/{uid}/signatures", json={"external_id": "sig-9", "label": "ЭЦП"}).json()
+    assert [s["id"] for s in m["signatures"]] == ["sig-9"]
+    # повтор идемпотентен; чужую подпись привязать нельзя
+    assert client.post(f"{P}/users/{uid}/signatures", json={"external_id": "sig-9"}).status_code == 200
+    other = reg(client, "o@example.com").json()["user_id"]
+    r = client.post(f"{P}/users/{other}/signatures", json={"external_id": "sig-9"})
+    assert (r.status_code, r.json()["detail"]["code"]) == (409, "signature_taken")
+    # вход по подписи теперь ведёт к этому же пользователю
+    assert client.post(f"{P}/users/external", json={"external_id": "sig-9"}).json()["user_id"] == uid
+
+
+def test_cannot_remove_last_method(client):
+    uid = reg(client).json()["user_id"]
+    r = client.delete(f"{P}/users/{uid}/email")
+    assert (r.status_code, r.json()["detail"]["code"]) == (409, "last_method")
+    client.post(f"{P}/users/{uid}/signatures", json={"external_id": "s1"})
+    assert client.delete(f"{P}/users/{uid}/email").json() == {"email": None, "signatures": [{"id": "s1", "label": "", "created_at": pytest.approx(time.time(), abs=60)}]}
+    assert login(client).status_code == 401  # пароля больше нет
+    r = client.delete(f"{P}/users/{uid}/signatures/s1")
+    assert (r.status_code, r.json()["detail"]["code"]) == (409, "last_method")
+
+
+def test_ecp_user_can_add_email_then_remove_signature(client):
+    uid = _uid(client)
+    assert client.get(f"{P}/users/{uid}/methods").json()["email"] is None
+    assert login(client, "ecp@x.invalid").status_code == 401
+    r = client.post(f"{P}/users/{uid}/email", json={"email": "New@Example.com", "password": PWD})
+    assert r.json()["email"] == "new@example.com"
+    assert login(client, "new@example.com").status_code == 200
+    assert client.post(f"{P}/users/{uid}/email", json={"email": "z@example.com", "password": PWD}).status_code == 409
+    assert client.delete(f"{P}/users/{uid}/signatures/sig-1").json()["signatures"] == []
+    assert client.get(f"{P}/users/{uid}/methods").json()["email"] == "new@example.com"
+
+
+def test_add_email_taken_and_validation(client):
+    reg(client)
+    uid = _uid(client)
+    r = client.post(f"{P}/users/{uid}/email", json={"email": "user@example.com", "password": PWD})
+    assert (r.status_code, r.json()["detail"]["code"]) == (409, "email_taken")
+    assert client.post(f"{P}/users/{uid}/email", json={"email": "bad", "password": PWD}).status_code == 422
+    assert client.post(f"{P}/users/{uid}/email", json={"email": "a@b.co", "password": "short"}).status_code == 422
+
+
+def test_api_tokens_lifecycle(client):
+    uid = reg(client).json()["user_id"]
+    t = client.post(f"{P}/users/{uid}/tokens", json={"name": "1С"}).json()
+    assert t["token"].startswith("ckt_") and t["prefix"] == t["token"][:8]
+    items = client.get(f"{P}/users/{uid}/tokens").json()["items"]
+    assert len(items) == 1 and "token" not in items[0] and items[0]["last_used"] is None
+    v = client.post(f"{P}/tokens/verify", json={"token": t["token"]})
+    assert v.status_code == 200 and v.json()["user_id"] == uid
+    assert client.get(f"{P}/users/{uid}/tokens").json()["items"][0]["last_used"] is not None
+    assert client.post(f"{P}/tokens/verify", json={"token": "ckt_wrong"}).status_code == 401
+    assert client.post(f"{P}/tokens/verify", json={"token": "other"}).status_code == 401
+    assert client.delete(f"{P}/users/{uid}/tokens/{t['id']}").status_code == 204
+    assert client.post(f"{P}/tokens/verify", json={"token": t["token"]}).status_code == 401
+    assert client.delete(f"{P}/users/{uid}/tokens/{t['id']}").status_code == 404

@@ -86,8 +86,8 @@ def ecp_challenge():
     return {"challenge": cades.challenge_text(nonce), "ttl": cades.CHALLENGE_TTL}
 
 
-@app.post("/internal/v1/ecp/login")
-def ecp_login(c: EcpLoginIn):
+def _check_signature(c: EcpLoginIn) -> "cades.Signer":
+    """Гасит challenge, разбирает сертификат и проверяет подпись. Бросает HTTPException с кодом ЭЦП."""
     try:
         if not c.challenge.startswith(cades.PREFIX):
             raise cades.EcpError("invalid_challenge")
@@ -101,8 +101,25 @@ def ecp_login(c: EcpLoginIn):
         sig = cades.decode_signature(c.signature)
         signer = cades.parse_signer(sig)
         cades.verify_detached(c.challenge.encode(), sig)
+        return signer
     except cades.EcpError as e:
         raise HTTPException(ECP_STATUS.get(e.code, 401), {"code": e.code})
+
+
+def _company(signer: "cades.Signer") -> dict:
+    return {"name": signer.display_name, "inn": signer.inn, "ogrn": signer.ogrn}
+
+
+@app.post("/internal/v1/ecp/verify")
+def ecp_verify(c: EcpLoginIn):
+    """Проверяет подпись без входа: для привязки сертификата к уже существующему аккаунту."""
+    signer = _check_signature(c)
+    return {"external_id": signer.fingerprint, "display_name": signer.display_name, "company": _company(signer)}
+
+
+@app.post("/internal/v1/ecp/login")
+def ecp_login(c: EcpLoginIn):
+    signer = _check_signature(c)
     u = call_auth("/internal/v1/users/external",
                   {"external_id": signer.fingerprint, "display_name": signer.display_name})
     if u["created"]:
@@ -112,5 +129,5 @@ def ecp_login(c: EcpLoginIn):
                 (signer.fingerprint, u["user_id"], signer.subject, signer.issuer, signer.serial, time.time()),
             )
     s = call_auth("/internal/v1/sessions/issue", {"user_id": u["user_id"]})
-    return {"token": s["token"], "user_id": s["user_id"], "email": s["email"], "ttl": s["ttl"],
-            "display_name": signer.display_name, "new": u["created"]}
+    return {"token": s["token"], "user_id": s["user_id"], "email": s["email"], "has_email": s.get("has_email", False), "ttl": s["ttl"],
+            "display_name": signer.display_name, "new": u["created"], "company": _company(signer)}

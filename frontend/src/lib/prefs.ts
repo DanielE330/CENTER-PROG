@@ -10,9 +10,9 @@ export interface Prefs {
 export function loadPrefs(): Prefs {
   try {
     const p = JSON.parse(localStorage.getItem(KEY) ?? '{}')
-    return { horizon: (HORIZONS as readonly number[]).includes(p.horizon) ? p.horizon : 30 }
+    return { horizon: (HORIZONS as readonly number[]).includes(p.horizon) ? p.horizon : 90 }
   } catch {
-    return { horizon: 30 }
+    return { horizon: 90 }
   }
 }
 

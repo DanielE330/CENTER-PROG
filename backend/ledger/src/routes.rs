@@ -47,32 +47,48 @@ pub struct EnsureBody {
     email: String,
     #[serde(default)]
     name: Option<String>,
+    /// реквизиты из сертификата ЭЦП: только цифры, иначе игнорируются
+    #[serde(default)]
+    inn: Option<String>,
+    #[serde(default)]
+    ogrn: Option<String>,
+}
+
+fn digits(v: &Option<String>, lens: &[usize]) -> String {
+    let d: String = v.as_deref().unwrap_or("").chars().filter(|c| c.is_ascii_digit()).collect();
+    if lens.contains(&d.len()) { d } else { String::new() }
 }
 
 /// Компания пользователя: создаётся при первом обращении.
 pub async fn ensure_company(State(st): State<AppState>, Json(b): Json<EnsureBody>) -> R<Json<Value>> {
     let c = lock(&st);
-    if let Some((id, name)) = c
-        .query_row("SELECT id, name FROM companies WHERE owner_id=?", [&b.owner_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+    let (inn, ogrn) = (digits(&b.inn, &[10, 12]), digits(&b.ogrn, &[13, 15]));
+    if let Some((id, name, cur_inn, cur_ogrn)) = c
+        .query_row("SELECT id, name, inn, ogrn FROM companies WHERE owner_id=?", [&b.owner_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))
         .optional()
         .map_err(internal)?
     {
-        return Ok(Json(json!({"company_id": id, "company_name": name})));
+        // реквизиты, которых ещё не было, дополняем из сертификата; введённые раньше не затираем
+        let (inn, ogrn) = (if cur_inn.is_empty() { inn } else { cur_inn.clone() }, if cur_ogrn.is_empty() { ogrn } else { cur_ogrn.clone() });
+        if (inn.as_str(), ogrn.as_str()) != (cur_inn.as_str(), cur_ogrn.as_str()) {
+            c.execute("UPDATE companies SET inn=?, ogrn=? WHERE id=?", params![inn, ogrn, id]).map_err(internal)?;
+        }
+        return Ok(Json(json!({"company_id": id, "company_name": name, "inn": inn, "ogrn": ogrn})));
     }
     let id = uuid::Uuid::new_v4().to_string();
     let name = b.name.unwrap_or_else(|| format!("Компания {}", b.email.split('@').next().unwrap_or("")));
-    c.execute("INSERT INTO companies(id, owner_id, name, created_at) VALUES(?,?,?,?)", params![id, b.owner_id, name, now()]).map_err(internal)?;
-    Ok(Json(json!({"company_id": id, "company_name": name})))
+    c.execute("INSERT INTO companies(id, owner_id, name, created_at, inn, ogrn) VALUES(?,?,?,?,?,?)", params![id, b.owner_id, name, now(), inn, ogrn]).map_err(internal)?;
+    Ok(Json(json!({"company_id": id, "company_name": name, "inn": inn, "ogrn": ogrn})))
 }
 
 pub async fn get_company(State(st): State<AppState>, Path(cid): Path<String>) -> R<Json<Value>> {
     let c = lock(&st);
-    let row: Option<(String, i64)> = c
-        .query_row("SELECT name, data_revision FROM companies WHERE id=?", [&cid], |r| Ok((r.get(0)?, r.get(1)?)))
+    let row: Option<(String, i64, String, String)> = c
+        .query_row("SELECT name, data_revision, inn, ogrn FROM companies WHERE id=?", [&cid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
         .optional()
         .map_err(internal)?;
-    let (name, rev) = row.ok_or_else(not_found)?;
-    Ok(Json(json!({"company_id": cid, "company_name": name, "data_revision": rev})))
+    let (name, rev, inn, ogrn) = row.ok_or_else(not_found)?;
+    Ok(Json(json!({"company_id": cid, "company_name": name, "data_revision": rev, "inn": inn, "ogrn": ogrn})))
 }
 
 #[derive(Deserialize)]

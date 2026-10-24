@@ -33,7 +33,8 @@ export function RiskAlert({ risk, showLinks = true }: { risk: Risk; showLinks?: 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-semibold">{t(titleKey)}</h2>
-            <RiskBadge level={risk.level} />
+            {/* для none/low заголовок уже называет уровень риска */}
+            {(risk.level === 'medium' || risk.level === 'high') && <RiskBadge level={risk.level} />}
           </div>
         </div>
       </div>
