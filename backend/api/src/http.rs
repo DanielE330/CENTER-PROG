@@ -1459,8 +1459,10 @@ pub fn obligation_to_event(it: &Value) -> Option<Value> {
     };
     let title: String = it["title"].as_str().filter(|t| !t.trim().is_empty()).unwrap_or("Обязательство из интеграции").chars().take(200).collect();
     let confidence = it["confidence"].as_f64().unwrap_or(0.8).clamp(0.0, 1.0);
+    // ИНН контрагента (у 1С настоящий): по нему контрагент проверяется в ФНС
+    let inn = it["inn"].as_str().map(str::trim).filter(|s| (s.len() == 10 || s.len() == 12) && s.bytes().all(|b| b.is_ascii_digit())).unwrap_or("");
     Some(json!({"external_id": external_id, "date": date, "amount_kop": signed, "title": title.trim(),
-        "counterparty": it["counterparty"].as_str().unwrap_or("").trim(), "source": source, "confidence": confidence}))
+        "counterparty": it["counterparty"].as_str().unwrap_or("").trim(), "source": source, "confidence": confidence, "inn": inn}))
 }
 
 /// Забирает счета и договоры из integrator (1С, ЭДО, банк) и идемпотентно создаёт ожидаемые события в ledger.
@@ -1482,7 +1484,22 @@ pub async fn integrations_sync(axum::extract::State(st): axum::extract::State<Ap
         skipped += r["skipped"].as_u64().unwrap_or(0) as usize;
     }
     audit(&st, &ctx, &p, "integrations.sync", &ext).await;
-    Ok(Json(json!({"created": created, "skipped": skipped, "sources": v["sources"]})))
+    // контрагенты с ИНН сразу проверяются в ФНС: флаги риска попадают в ledger, и прогноз учитывает их без лишнего шага.
+    // Без ИНН компании или при недоступном сервисе ФНС синхронизация всё равно успешна.
+    let fns = if events.iter().any(|e| e["inn"].as_str().is_some_and(|s| !s.is_empty())) {
+        match crate::fns::counterparties_view(&st, &actx, &p, 20).await {
+            Ok(view) => {
+                let items = view["items"].as_array().cloned().unwrap_or_default();
+                let checked = items.iter().filter(|i| i["checked"] == json!(true)).count();
+                let flagged = items.iter().filter(|i| matches!(i["risk_level"].as_str(), Some("medium" | "high"))).count();
+                json!({"checked": checked, "flagged": flagged, "saved": view["saved"]})
+            }
+            Err(e) => json!({"checked": 0, "error": e.1}),
+        }
+    } else {
+        Value::Null
+    };
+    Ok(Json(json!({"created": created, "skipped": skipped, "sources": v["sources"], "fns": fns})))
 }
 
 #[cfg(test)]
@@ -1551,6 +1568,11 @@ mod tests {
         let order = json!({"external_id": "pp1", "source": "onec", "kind": "payment_order", "direction": "out", "date": "2026-10-24", "amount_kop": "15000000", "title": "Платёжное поручение № 101", "counterparty": "ЦТСК ООО", "confidence": 0.97});
         let e = obligation_to_event(&order).unwrap();
         assert_eq!((e["source"].as_str(), e["amount_kop"].as_i64(), e["confidence"].as_f64()), (Some("onec"), Some(-15_000_000), Some(0.97)));
+        assert_eq!(e["inn"], "", "ИНН не передан");
+        let with_inn = json!({"external_id": "bs1", "source": "onec", "kind": "invoice", "direction": "in", "date": "2026-09-30", "amount_kop": "45000000", "inn": "6166065050"});
+        assert_eq!(obligation_to_event(&with_inn).unwrap()["inn"], "6166065050");
+        let bad_inn = json!({"external_id": "bs2", "source": "onec", "kind": "invoice", "direction": "in", "date": "2026-09-30", "amount_kop": "1", "inn": "61660-65050"});
+        assert_eq!(obligation_to_event(&bad_inn).unwrap()["inn"], "");
         assert!(obligation_to_event(&json!({"direction": "in"})).is_none());
         assert!(obligation_to_event(&json!({"external_id": "a", "direction": "up", "date": "2026-10-05", "amount_kop": "1"})).is_none());
     }

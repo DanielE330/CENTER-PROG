@@ -147,6 +147,8 @@ services:
       FNS_CONTACT: ${FNS_CONTACT:-https://github.com/DanielE330/CI-hack}
       FNS_MIN_INTERVAL: ${FNS_MIN_INTERVAL:-1.0}
       FNS_CACHE_TTL: ${FNS_CACHE_TTL:-86400}
+      # live/auto: индекс задолженности (открытые данные ФНС) строится при старте, а не при первой проверке
+      FNS_DEBT_PRELOAD: ${FNS_DEBT_PRELOAD:-1}
     volumes: [fns-data:/data]
     networks: [internal]
     depends_on:

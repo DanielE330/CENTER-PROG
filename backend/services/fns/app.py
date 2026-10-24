@@ -2,7 +2,7 @@
 uvicorn fns.app:app --host 127.0.0.1 --port 8015
 
 Режим FNS_MODE=sim (по умолчанию) — имитатор fns_sim; live — реальные открытые источники, выключен, пока владелец
-не включит его флагом (docs/fns.md). ЕНС в режиме live берётся только из загруженной справки: в личный кабинет не входим.
+не включит его флагом (docs/fns.md); auto — имитатор для ИНН датасета, реестры для настоящих ИНН (контрагенты из 1С). ЕНС в режиме live берётся только из загруженной справки: в личный кабинет не входим.
 """
 import time
 
@@ -23,6 +23,16 @@ def deps(request: Request) -> Deps:
     if request.app.state.deps is None:
         request.app.state.deps = Deps()
     return request.app.state.deps
+
+
+@app.on_event("startup")
+def preload_debt_index():
+    """live/auto: индекс задолженности (открытые данные ФНС, ~70 МБ) строится в фоне сразу, а не при первой проверке —
+    иначе первая проверка контрагента вернёт сведения без долга. Включается FNS_DEBT_PRELOAD=1 (в compose)."""
+    if config.mode() in ("live", "auto") and config.env("FNS_DEBT_PRELOAD", "0") == "1":
+        if app.state.deps is None:
+            app.state.deps = Deps()
+        app.state.deps.debt.ensure()
 
 
 def fail(status: int, code: str, message: str):
@@ -85,6 +95,9 @@ def ens(request: Request, inn: str):
     except SourceUnavailable as e:
         fail(503, "fns_unavailable", e.detail)
     if data is None:
+        if config.mode() == "auto":  # настоящая компания: ЕНС только из справки, как в live
+            fail(404, "fns_ens_not_imported",
+                 "ЕНС настоящей компании берётся из справки о состоянии расчётов: выгрузите её из личного кабинета и загрузите")
         fail(404, "fns_unknown_taxpayer", "Налогоплательщик не найден в источнике")
     return {**data, "checked_at": ens_import.iso_utc(time.time()), "source": "fns_sim", "mode": "sim"}
 
@@ -109,9 +122,7 @@ def ens_import_route(request: Request, body: ImportBody, inn: str):
 @app.get("/internal/v1/fns/counterparty")
 def counterparty_one(request: Request, inn: str, force: bool = False):
     need_inn(inn)
-    rec = counterparty.check(deps(request), inn, force)
-    rec["mode"] = config.mode()
-    return rec
+    return counterparty.check(deps(request), inn, force)
 
 
 class BatchBody(BaseModel):
@@ -124,7 +135,4 @@ def counterparties_batch(request: Request, body: BatchBody):
     bad = [i for i in body.inns if not counterparty.INN_RE.match(i)]
     if bad:
         fail(422, "invalid_inn", "ИНН: 10 или 12 цифр")
-    out = counterparty.batch(deps(request), body.inns, body.force)
-    for it in out["items"]:
-        it["mode"] = config.mode()
-    return out
+    return counterparty.batch(deps(request), body.inns, body.force)

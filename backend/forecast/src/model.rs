@@ -668,6 +668,8 @@ struct Occurrence {
     counterparty: String,
     /// для просроченных: сколько рабочих дней платёж уже ждём
     age: i64,
+    /// индекс ожидаемого события в `events` (название и источник в плане берутся из него, а не по совпадению суммы)
+    event_ix: Option<usize>,
 }
 
 /// Сколько операций с каждым ключом (`rule_key` и `rule_key2`) было в месяце `as_of`.
@@ -697,10 +699,10 @@ fn expand_rules(rules: &[Rule], cur_counts: &HashMap<String, usize>, as_of: Naiv
                         let day = a.min(days_in_month(y, m0 + 1));
                         let d = roll_forward(NaiveDate::from_ymd_opt(y, m0 + 1, day).unwrap());
                         if d > as_of && d <= end {
-                            out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone(), age: 0 });
+                            out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone(), age: 0, event_ix: None });
                         } else if mi == cur_m && d <= as_of && k >= this_month_cnt && (as_of - d).num_days() <= 20 {
                             // ожидался в этом месяце, но не пришёл
-                            out.push(Occurrence { base: as_of + Duration::days(1), rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: if r.direction == "in" { 0.75 } else { 1.0 }, overdue: true, income_delay: r.direction == "in", counterparty: r.counterparty.clone(), age: bd_diff(d, as_of).max(1) });
+                            out.push(Occurrence { base: as_of + Duration::days(1), rule_ix: Some(ri), anchor_ix: k, fixed_amount: 0, p_include: if r.direction == "in" { 0.75 } else { 1.0 }, overdue: true, income_delay: r.direction == "in", counterparty: r.counterparty.clone(), age: bd_diff(d, as_of).max(1), event_ix: None });
                         }
                     }
                     mi += 1;
@@ -710,7 +712,7 @@ fn expand_rules(rules: &[Rule], cur_counts: &HashMap<String, usize>, as_of: Naiv
                 let mut d = as_of + Duration::days(1);
                 while d <= end {
                     if d.weekday().num_days_from_monday() == r.anchors[0] {
-                        out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: 0, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone(), age: 0 });
+                        out.push(Occurrence { base: d, rule_ix: Some(ri), anchor_ix: 0, fixed_amount: 0, p_include: 1.0, overdue: false, income_delay: false, counterparty: r.counterparty.clone(), age: 0, event_ix: None });
                     }
                     d += Duration::days(1);
                 }
@@ -740,7 +742,8 @@ fn expand_events(events: &[Event], as_of: NaiveDate, horizon: usize) -> Vec<Occu
     let end = as_of + Duration::days(horizon as i64 + 7);
     events
         .iter()
-        .filter_map(|e| {
+        .enumerate()
+        .filter_map(|(i, e)| {
             if e.date > end {
                 return None;
             }
@@ -755,6 +758,7 @@ fn expand_events(events: &[Event], as_of: NaiveDate, horizon: usize) -> Vec<Occu
                 income_delay: e.amount > 0 && e.source != "tax",
                 counterparty: e.counterparty.clone(),
                 age: if overdue { bd_diff(e.date, as_of).max(1) } else { 0 },
+                event_ix: Some(i),
             })
         })
         .collect()
@@ -1190,7 +1194,7 @@ pub fn simulate_with_risk(f: &Fitted, events: &[Event], scenario: &Scenario, p: 
                 let (amount, title, source) = match o.rule_ix {
                     Some(ri) => (median_i64(&rules[ri].amounts[o.anchor_ix]), o.counterparty.clone(), "recurring".to_string()),
                     None => {
-                        let e = events.iter().find(|e| e.amount == o.fixed_amount && e.counterparty == o.counterparty);
+                        let e = o.event_ix.and_then(|i| events.get(i));
                         (o.fixed_amount, e.map_or_else(|| o.counterparty.clone(), |e| e.title.clone()), e.map_or("manual".to_string(), |e| e.source.clone()))
                     }
                 };
@@ -1202,10 +1206,10 @@ pub fn simulate_with_risk(f: &Fitted, events: &[Event], scenario: &Scenario, p: 
     }
     let km: Option<DelayModel> = if p.km_delays { fit_delays(&rules, &occs) } else { None };
     if let (Some(a), Some(d)) = (scenario.extra_expense_kop, scenario.extra_expense_date) {
-        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: -a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: String::new(), age: 0 });
+        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: -a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: String::new(), age: 0, event_ix: None });
     }
     if let (Some(a), Some(d)) = (scenario.extra_income_kop, scenario.extra_income_date) {
-        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: "\u{0}scenario-income".into(), age: 0 });
+        occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: "\u{0}scenario-income".into(), age: 0, event_ix: None });
     }
 
     // риск клиента: ниже уверенность в поступлении и больше задержка оплаты (только поступления)
@@ -1239,7 +1243,7 @@ pub fn simulate_with_risk(f: &Fitted, events: &[Event], scenario: &Scenario, p: 
                     (median_i64(&r.amounts[o.anchor_ix]), if r.counterparty.is_empty() { r.key.clone() } else { r.counterparty.clone() }, "recurring".to_string())
                 }
                 None => {
-                    let e = events.iter().find(|e| e.amount == o.fixed_amount && e.counterparty == o.counterparty);
+                    let e = o.event_ix.and_then(|i| events.get(i));
                     (o.fixed_amount, e.map_or(if o.fixed_amount > 0 { "Дополнительное поступление".to_string() } else { "Внеплановый расход".to_string() }, |e| e.title.clone()), e.map_or("scenario".to_string(), |e| e.source.clone()))
                 }
             };
@@ -2553,5 +2557,17 @@ mod tests {
         assert_eq!(named.scenario_client.as_ref().unwrap().reason, "explicit");
         // без задержки в сценарии клиент не выбирается
         assert!(run_risk(&v, &b, &Scenario::default(), &[]).scenario_client.is_none());
+    }
+
+    #[test]
+    fn equal_invoices_of_one_client_keep_their_own_titles() {
+        // два счёта одному клиенту на одну сумму (BS-0905 и BS-1005 из 1С): в плане у каждого своё название
+        let (v, b) = sample();
+        let ev = |id: &str, date: NaiveDate, title: &str| Event { id: id.into(), date, amount: 45_000_000, title: title.into(), source: "onec".into(), confidence: 0.65, counterparty: "ДОНАГРО ООО".into() };
+        let events = [ev("1", d(2026, 8, 25), "Счёт BS-0905"), ev("2", d(2026, 8, 28), "Счёт BS-1005")];
+        let r = forecast(&v, &b, &events, &Scenario::default(), &Params { horizon: 30, seed: 3, n_paths: 50, ..Default::default() }).unwrap();
+        let mut titles: Vec<&str> = r.planned.iter().filter(|p| p.source == "onec").map(|p| p.title.as_str()).collect();
+        titles.sort_unstable();
+        assert_eq!(titles, ["Счёт BS-0905", "Счёт BS-1005"]);
     }
 }

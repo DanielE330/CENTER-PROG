@@ -546,7 +546,7 @@
     },
     "cp": {
       "title": "Counterparties and risks",
-      "subtitle": "Largest customers and suppliers in the open tax registries",
+      "subtitle": "Customers and suppliers from the statement and 1C in the open tax registries",
       "name": "Counterparty",
       "share": "Share of receipts",
       "status": "Status",
@@ -557,10 +557,18 @@
       "riskyText": "This customer has signs that may delay or stop its payments:",
       "riskyScenario": "Check the «customer does not pay» scenario",
       "emptyTitle": "No counterparties yet",
-      "emptyText": "They will appear after a statement is uploaded.",
+      "emptyText": "They will appear after a statement is uploaded or 1C is synced.",
       "source": "Source: {{source}}",
+      "sourceMixed": "Sources: business registry and tax open data for real TINs (1C counterparties), tax service simulator for dataset TINs",
       "checked": "checked {{date}}",
-      "notSaved": "risk flags were not saved, the forecast will not use them"
+      "notSaved": "risk flags were not saved, the forecast will not use them",
+      "fromOnec": "from 1C",
+      "expectedIn": "expecting {{amount}}",
+      "expectedOut": "paying {{amount}}",
+      "expectedMark": "exp.",
+      "expectedShareHint": "Share of expected receipts (1C invoices)",
+      "debtAsOf": "as of {{date}}",
+      "inn": "TIN {{inn}}"
     }
   },
   "obligations": {
@@ -654,7 +662,9 @@
     "run": "Sync",
     "running": "Syncing…",
     "doneTitle": "Sync finished",
-    "doneText": "Events created: {{created}}, skipped (already present or invalid): {{skipped}}."
+    "doneText": "Events created: {{created}}, skipped (already present or invalid): {{skipped}}.",
+    "fnsChecked": "Counterparties checked with the tax service: {{checked}}, with risk signs: {{flagged}}; the forecast takes them into account.",
+    "fnsNoInn": "Add the company TIN in settings to check counterparties with the tax service."
   },
   "scenarios": {
     "title": "Scenarios",

@@ -11,8 +11,10 @@ def env(name: str, default: str = "") -> str:
 
 
 def mode() -> str:
+    """sim — имитатор; live — открытые реестры; auto — имитатор для ИНН из датасета (они выдуманные), реестры для остальных
+    (настоящие ИНН, например контрагенты из 1С). У каждого результата свой `mode`: sim или live."""
     m = env("FNS_MODE", "sim").lower()
-    return m if m in ("sim", "live") else "sim"
+    return m if m in ("sim", "live", "auto") else "sim"
 
 
 def cache_ttl() -> float:

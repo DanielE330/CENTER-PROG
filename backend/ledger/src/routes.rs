@@ -717,6 +717,14 @@ pub struct BulkItem {
     counterparty: String,
     source: String,
     confidence: f64,
+    /// ИНН контрагента (10 или 12 цифр); иначе не сохраняется
+    #[serde(default)]
+    inn: String,
+}
+
+fn event_inn(s: &str) -> &str {
+    let s = s.trim();
+    if (s.len() == 10 || s.len() == 12) && s.bytes().all(|b| b.is_ascii_digit()) { s } else { "" }
 }
 
 #[derive(Deserialize)]
@@ -736,18 +744,30 @@ pub async fn bulk_events(State(st): State<AppState>, _ctx: Ctx, Path(cid): Path<
     {
         let mut ins = tx
             .prepare(
-                "INSERT OR IGNORE INTO expected_events(id, company_id, date, amount_kop, title, counterparty, source, confidence, created_at, external_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO expected_events(id, company_id, date, amount_kop, title, counterparty, source, confidence, created_at, external_id, inn) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             )
+            .map_err(internal)?;
+        // событие, созданное до появления ИНН, при повторной синхронизации получает ИНН (не считается созданным)
+        let mut fill = tx
+            .prepare("UPDATE expected_events SET inn=? WHERE company_id=? AND external_id=? AND inn='' AND ?<>''")
             .map_err(internal)?;
         for e in &b.events {
             if e.amount_kop == 0 || !["manual", "invoice", "contract", "tax", "onec"].contains(&e.source.as_str()) || !(0.0..=1.0).contains(&e.confidence) {
                 return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_event", "Некорректное событие"));
             }
             let id = uuid::Uuid::new_v4().to_string();
+            let inn = event_inn(&e.inn);
             let n = ins
-                .execute(params![id, cid, e.date.to_string(), e.amount_kop, e.title, e.counterparty, e.source, e.confidence, now(), e.external_id])
+                .execute(params![id, cid, e.date.to_string(), e.amount_kop, e.title, e.counterparty, e.source, e.confidence, now(), e.external_id, inn])
                 .map_err(internal)?;
-            if n == 1 { ids.push(id) } else { skipped += 1 }
+            if n == 1 {
+                ids.push(id)
+            } else {
+                skipped += 1;
+                if let Some(ext) = &e.external_id {
+                    fill.execute(params![inn, cid, ext, inn]).map_err(internal)?;
+                }
+            }
         }
     }
     if !ids.is_empty() {

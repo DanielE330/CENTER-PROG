@@ -1,9 +1,11 @@
 # Режим live для сведений ФНС: реальные запросы к открытым источникам (ЕГРЮЛ/ЕГРИП, открытые данные ФНС, ЕФРСБ).
 # По умолчанию ВЫКЛЮЧЕН. Условия использования источников перед включением проверьте сами (docs/fns.md).
 #   docker compose -f infra/docker-compose.yml -f infra/docker-compose.fns-live.yml up -d fns
+# Файл включает live; для auto задайте FNS_LIVE_MODE=auto в infra/.env.
 # Сервис вежливо ходит наружу: честный User-Agent, robots.txt, не чаще FNS_MIN_INTERVAL секунд на хост, капчи не обходит.
 services:
   fns:
     environment:
-      FNS_MODE: live
+      # FNS_LIVE_MODE=auto в infra/.env: по реестрам проверяются только настоящие ИНН (1С), ИНН датасета — в имитаторе
+      FNS_MODE: ${FNS_LIVE_MODE:-live}
     networks: [internal, edge]

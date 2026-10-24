@@ -217,3 +217,67 @@ def test_logs_do_not_contain_inn(client, caplog):
 def test_info_and_live(client):
     assert client.get("/live").json()["status"] == "ok"
     assert client.get("/internal/v1/fns/info").json()["mode"] == config.mode()
+
+
+# --- режим auto: имитатор для ИНН датасета, открытые реестры для настоящих ИНН (контрагенты 1С) ---
+
+REAL_INN = make_inn("6166")  # вне датасета: «настоящий» ИНН
+DEBT_XML = (f'<Файл><Документ ИдДок="1" ДатаДок="25.09.2026" ДатаСост="01.09.2026"><СведНП НаимОрг="ООО" ИННЮЛ="{REAL_INN}"/>'
+            '<СведНедоим НаимНалог="НДС" СумНедНалог="4000000.00" СумПени="969978.38" СумШтраф="0" ОбщСумНедоим="4969978.38"/>'
+            '</Документ></Файл>')
+
+
+def registries(calls: list):
+    """Открытые реестры в памяти: robots.txt нет, ЕГРЮЛ находит ИНН, набор debtam — один документ (ответы сжаты gzip)."""
+    import gzip
+    import io
+    import json
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("VO_debt_0001.xml", DEBT_XML)
+
+    def handler(req: httpx.Request):
+        calls.append(f"{req.method} {req.url.host}{req.url.path}")
+        if req.url.path == "/robots.txt":
+            return httpx.Response(404)
+        if req.url.host == "egrul.nalog.ru" and req.method == "POST":
+            body = gzip.compress(json.dumps({"t": "abcdef1234", "captchaRequired": False}).encode())
+            return httpx.Response(200, content=body, headers={"content-encoding": "gzip", "content-type": "application/json"})
+        if req.url.host == "egrul.nalog.ru":
+            return httpx.Response(200, json={"rows": [{"i": REAL_INN, "k": "ul", "r": "07.11.2003", "e": ""}]})
+        if req.url.path.endswith(".zip"):
+            return httpx.Response(200, content=buf.getvalue())
+        return httpx.Response(404)
+    return httpx.MockTransport(handler)
+
+
+def test_auto_mode_routes_dataset_inns_to_sim_and_real_inns_to_registries(deps, client, monkeypatch):
+    calls: list = []
+    monkeypatch.setenv("FNS_MODE", "auto")
+    monkeypatch.setenv("FNS_DEBT_URL", "https://file.nalog.ru/opendata/7707329152-debtam/data-20260925-structure-20181201.zip")
+    deps.public_transport = registries(calls)
+    deps.debt.ensure(block=True)
+    assert deps.debt.state()["state"] == "ready" and deps.debt.state()["as_of"] == "2026-09-01"
+
+    body = client.post("/internal/v1/fns/counterparties/batch", json={"inns": [DEBT_INN, REAL_INN]}).json()
+    sim_rec, real = body["items"]
+    assert (sim_rec["mode"], sim_rec["source"]) == ("sim", "fns_sim"), "ИНН датасета — имитатор"
+    assert (real["mode"], real["source"], real["status"]) == ("live", "egrul", "active"), "настоящий ИНН — ЕГРЮЛ"
+    assert real["tax_debt"] == {"has": True, "amount_kop": 496997838, "as_of": "2026-09-01"}
+    assert real["risk_level"] == "medium" and real["risk_reasons"] == ["tax_debt_large"]
+    assert real["registered_at"] == "2003-11-07"
+    assert not any("fns-sim" in c or c.startswith("POST egrul") and DEBT_INN in c for c in calls)
+
+    # ЕНС настоящей компании: только из справки
+    r = client.get("/internal/v1/fns/ens", params={"inn": REAL_INN})
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "fns_ens_not_imported"
+
+
+def test_polite_http_streams_and_decodes_gzip_once():
+    import gzip
+    from fns.http import PoliteHttp
+    t = httpx.MockTransport(lambda req: httpx.Response(200, content=gzip.compress(b'{"ok": true}'), headers={"content-encoding": "gzip"})
+                            if req.url.path != "/robots.txt" else httpx.Response(404))
+    r = PoliteHttp(transport=t, min_interval=0).request("GET", "https://example.ru/x")
+    assert r.status_code == 200 and r.json() == {"ok": True}

@@ -349,6 +349,8 @@ export interface SyncResult {
   created: number
   skipped: number
   sources?: unknown
+  /** проверка контрагентов с ИНН (счета 1С) в ФНС сразу после синхронизации; null — проверять было некого */
+  fns?: { checked: number; flagged?: number; saved?: boolean; error?: string } | null
 }
 
 export interface ImportStats {
@@ -698,10 +700,18 @@ export interface FnsCounterparty {
   mass_address?: boolean
   disqualified?: boolean
   registered_at?: string | null
+  /** дата, на которую ФНС опубликовала сведения о задолженности */
+  tax_debt_as_of?: string | null
   checked_at: string | null
   source: string | null
   mode?: FnsMode
   stale?: boolean
+  /** откуда контрагент: выписка и/или ожидаемые события (счета и платёжки 1С) */
+  origin?: ('statement' | 'expected' | 'onec')[]
+  expected_in_kop?: Kop
+  expected_out_kop?: Kop
+  /** доля в ожидаемых поступлениях */
+  expected_share?: number
 }
 
 export interface FnsCounterparties {

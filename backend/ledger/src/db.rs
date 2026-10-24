@@ -78,6 +78,15 @@ pub fn open(path: &str) -> Db {
     if !cols.iter().any(|c| c == "tx_reset_rev") {
         conn.execute("ALTER TABLE companies ADD COLUMN tx_reset_rev INTEGER NOT NULL DEFAULT 0", []).expect("add column");
     }
+    // ИНН контрагента ожидаемого события (счета из 1С): по нему контрагент проверяется в ФНС, как и по выписке
+    let ev_cols: Vec<String> = {
+        let mut q = conn.prepare("PRAGMA table_info(expected_events)").expect("table_info");
+        let rows = q.query_map([], |r| r.get::<_, String>(1)).expect("table_info");
+        rows.collect::<Result<_, _>>().expect("table_info")
+    };
+    if !ev_cols.iter().any(|c| c == "inn") {
+        conn.execute("ALTER TABLE expected_events ADD COLUMN inn TEXT NOT NULL DEFAULT ''", []).expect("add column");
+    }
     // блокировка компании оператором платформы (метаданные; данные компании не затрагиваются)
     for col in ["banned_at", "ban_reason"] {
         if !cols.iter().any(|c| c == col) {

@@ -56,7 +56,13 @@ pub(crate) fn load_risks(c: &Connection, cid: &str, with_names: bool) -> R<Vec<C
         .filter_map(|x| x.ok())
         .collect();
     if with_names && !out.is_empty() {
-        let mut q = c.prepare("SELECT DISTINCT counterparty FROM transactions WHERE company_id=? AND inn=? AND counterparty<>'' LIMIT 8").map_err(internal)?;
+        // названия из выписки и из ожидаемых событий (счета 1С): по ним forecast сопоставляет флаг с поступлением
+        let mut q = c
+            .prepare(
+                "SELECT counterparty FROM transactions WHERE company_id=?1 AND inn=?2 AND counterparty<>''
+                 UNION SELECT counterparty FROM expected_events WHERE company_id=?1 AND inn=?2 AND counterparty<>'' LIMIT 8",
+            )
+            .map_err(internal)?;
         for r in out.iter_mut() {
             r.names = q.query_map(params![cid, r.inn], |x| x.get::<_, String>(0)).map_err(internal)?.filter_map(|x| x.ok()).collect();
         }
@@ -191,6 +197,32 @@ pub async fn top(State(st): State<AppState>, Path(cid): Path<String>, Query(q): 
     let total_income: i64 = c
         .query_row(&format!("SELECT COALESCE(SUM(CASE WHEN amount_kop>0 THEN amount_kop ELSE 0 END),0) {base}"), [&cid], |r| r.get(0))
         .map_err(internal)?;
+    // ожидаемые события с ИНН (счета и платёжки из 1С): контрагенты, от которых ждём денег или которым платим
+    let ev_cond = match dir {
+        "in" => "AND amount_kop>0",
+        "out" => "AND amount_kop<0",
+        _ => "",
+    };
+    let ev_base = format!(
+        "FROM expected_events WHERE company_id=?1 AND length(inn) IN (10,12) AND inn NOT GLOB '*[^0-9]*'
+         AND inn <> COALESCE((SELECT inn FROM companies WHERE id=?1), '') {ev_cond}"
+    );
+    let total_expected_in: i64 = c
+        .query_row(&format!("SELECT COALESCE(SUM(CASE WHEN amount_kop>0 THEN amount_kop ELSE 0 END),0) {ev_base}"), [&cid], |r| r.get(0))
+        .map_err(internal)?;
+    let mut s = c
+        .prepare(&format!(
+            "SELECT inn, SUM(CASE WHEN amount_kop>0 THEN amount_kop ELSE 0 END), SUM(CASE WHEN amount_kop<0 THEN -amount_kop ELSE 0 END), COUNT(*),
+                    (SELECT counterparty FROM expected_events e2 WHERE e2.company_id=?1 AND e2.inn=expected_events.inn ORDER BY e2.date DESC LIMIT 1),
+                    MAX(source='onec')
+             {ev_base} GROUP BY inn ORDER BY SUM(ABS(amount_kop)) DESC, inn LIMIT ?2"
+        ))
+        .map_err(internal)?;
+    let expected: Vec<(String, i64, i64, i64, String, bool)> = s
+        .query_map(params![cid, limit], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, i64>(5)? != 0)))
+        .map_err(internal)?
+        .filter_map(|x| x.ok())
+        .collect();
     let mut s = c
         .prepare(&format!(
             "SELECT inn, SUM(ABS(amount_kop)) AS turnover, SUM(CASE WHEN amount_kop>0 THEN amount_kop ELSE 0 END), SUM(CASE WHEN amount_kop<0 THEN -amount_kop ELSE 0 END), COUNT(*), MAX(date)
@@ -203,20 +235,56 @@ pub async fn top(State(st): State<AppState>, Path(cid): Path<String>, Query(q): 
         .filter_map(|x| x.ok())
         .collect();
     let risks: BTreeMap<String, CounterpartyRisk> = load_risks(&c, &cid, false)?.into_iter().map(|r| (r.inn.clone(), r)).collect();
+    let stmt: BTreeMap<&str, &(String, i64, i64, i64, i64, String)> = rows.iter().map(|r| (r.0.as_str(), r)).collect();
+    let share = |part: i64, total: i64| if total > 0 { part as f64 / total as f64 } else { 0.0 };
     let mut items = vec![];
-    for (inn, turnover, income, expense, n, last) in rows {
-        let name: String = c
-            .query_row(
-                "SELECT counterparty FROM transactions WHERE company_id=? AND inn=? GROUP BY counterparty ORDER BY COUNT(*) DESC, counterparty LIMIT 1",
-                params![cid, inn],
-                |r| r.get(0),
-            )
-            .map_err(internal)?;
+    let mut seen = std::collections::HashSet::new();
+    // сначала контрагенты ожидаемых событий, затем остальные по обороту выписки
+    for (inn, exp_in, exp_out, n_ev, ev_name, from_onec) in &expected {
+        seen.insert(inn.clone());
+        let st_row = stmt.get(inn.as_str());
+        let name = match st_row {
+            Some(_) => statement_name(&c, &cid, inn)?,
+            None => ev_name.clone(),
+        };
+        let (turnover, income, expense, n, last) = st_row.map_or((0, 0, 0, 0, None), |r| (r.1, r.2, r.3, r.4, Some(r.5.clone())));
+        // expected — есть ожидаемые события (1С, ЭДО, ручной ввод); onec — среди них документы 1С
+        let mut origin = vec!["expected"];
+        if *from_onec {
+            origin.push("onec");
+        }
+        if st_row.is_some() {
+            origin.push("statement");
+        }
         items.push(json!({
             "inn": inn, "name": name, "turnover_kop": turnover, "income_kop": income, "expense_kop": expense, "tx_count": n, "last_date": last,
-            "income_share": if total_income > 0 { income as f64 / total_income as f64 } else { 0.0 },
-            "risk": risks.get(&inn).map(risk_json),
+            "income_share": share(income, total_income), "origin": origin,
+            "expected_in_kop": exp_in, "expected_out_kop": exp_out, "events_count": n_ev, "expected_share": share(*exp_in, total_expected_in),
+            "risk": risks.get(inn).map(risk_json),
         }));
     }
-    Ok(Json(json!({"items": items, "total_income_kop": total_income})))
+    for (inn, turnover, income, expense, n, last) in &rows {
+        if items.len() >= limit as usize {
+            break;
+        }
+        if seen.contains(inn) {
+            continue;
+        }
+        let name = statement_name(&c, &cid, inn)?;
+        items.push(json!({
+            "inn": inn, "name": name, "turnover_kop": turnover, "income_kop": income, "expense_kop": expense, "tx_count": n, "last_date": last,
+            "income_share": share(*income, total_income), "origin": ["statement"],
+            "risk": risks.get(inn).map(risk_json),
+        }));
+    }
+    Ok(Json(json!({"items": items, "total_income_kop": total_income, "total_expected_in_kop": total_expected_in})))
+}
+
+fn statement_name(c: &Connection, cid: &str, inn: &str) -> R<String> {
+    c.query_row(
+        "SELECT counterparty FROM transactions WHERE company_id=? AND inn=? GROUP BY counterparty ORDER BY COUNT(*) DESC, counterparty LIMIT 1",
+        params![cid, inn],
+        |r| r.get(0),
+    )
+    .map_err(internal)
 }

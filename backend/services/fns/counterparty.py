@@ -128,7 +128,9 @@ def check_sim(deps: Deps, inn: str, force=False) -> dict:
             rec.update(status=d["status"], registered_at=d["registered_at"], mass_address=d["mass_address"],
                        unreliable=d["unreliable"], disqualified=d["disqualified"],
                        tax_debt=dict(d["tax_debt"]), bankruptcy=dict(d["bankruptcy"]))
-    return _finish(rec, [res], "fns_sim")
+    out = _finish(rec, [res], "fns_sim")
+    out["mode"] = "sim"
+    return out
 
 
 def check_live(deps: Deps, inn: str, force=False) -> dict:
@@ -136,7 +138,7 @@ def check_live(deps: Deps, inn: str, force=False) -> dict:
     if not valid_inn_checksum(inn):
         rec["status"] = "invalid_inn"
         out = _finish(rec, [], "unavailable")
-        out.update(reason="inn_checksum_invalid", message="контрольное число ИНН неверно: в реестры не обращаемся",
+        out.update(mode="live", reason="inn_checksum_invalid", message="контрольное число ИНН неверно: в реестры не обращаемся",
                    sources={})
         return out
     results = []
@@ -165,13 +167,20 @@ def check_live(deps: Deps, inn: str, force=False) -> dict:
     pbr = Res("pb_nalog", reason="captcha_required", detail="автоматический доступ не используется")
     results.append(pbr)
     primary = "egrul" if eg.ok else "data_nalog"
-    return _finish(rec, results, primary)
+    out = _finish(rec, results, primary)
+    out["mode"] = "live"
+    return out
 
 
 def check(deps: Deps, inn: str, force=False) -> dict:
-    if config.mode() == "live":
+    m = config.mode()
+    if m == "live":
         return check_live(deps, inn, force)
-    return check_sim(deps, inn, force)
+    rec = check_sim(deps, inn, force)
+    # auto: имитатор знает только ИНН датасета; ИНН вне его — настоящий, проверяем по открытым реестрам
+    if m == "auto" and rec["status"] == "not_found":
+        return check_live(deps, inn, force)
+    return rec
 
 
 def batch(deps: Deps, inns: list[str], force=False, workers: int = 4, timeout: float | None = None) -> dict:

@@ -187,6 +187,8 @@ struct Cp {
     mass_address: bool,
     disqualified: bool,
     registered_at: Option<String>,
+    /// дата, на которую опубликованы сведения о задолженности (открытые данные ФНС)
+    tax_debt_as_of: Option<String>,
     checked_at: Option<String>,
     source: String,
     mode: String,
@@ -232,6 +234,7 @@ fn parse_cp(v: &Value, fallback_inn: Option<&str>) -> Option<Cp> {
     Some(Cp {
         inn, status, risk_level, tax_debt, bankruptcy, unreliable, mass_address, disqualified,
         registered_at: str_of(v, &["registered_at", "registration_date"]).map(str::to_string),
+        tax_debt_as_of: str_of(&v["tax_debt"], &["as_of"]).map(str::to_string),
         checked_at: str_of(v, &["checked_at"]).map(str::to_string),
         source, mode, stale: flag(&v["stale"]), usable,
     })
@@ -501,7 +504,7 @@ fn parse_top(q: &TopQuery) -> R<usize> {
 }
 
 /// Топ контрагентов компании (ledger) -> проверка в fns (пакетом, кэш на стороне fns) -> флаги в ledger -> ответ с источником и временем проверки.
-async fn counterparties_view(st: &AppState, ctx: &Ctx, p: &Principal, top: usize) -> R<Value> {
+pub(crate) async fn counterparties_view(st: &AppState, ctx: &Ctx, p: &Principal, top: usize) -> R<Value> {
     company_inn(p)?; // компания без ИНН не может пользоваться ФНС-функциями: единое сообщение для всех маршрутов
     let cid = &p.company_id;
     let t = st.ledger.get(&format!("/internal/v1/companies/{cid}/counterparties/top?limit={top}"), ctx).await?;
@@ -536,6 +539,13 @@ async fn counterparties_view(st: &AppState, ctx: &Ctx, p: &Principal, top: usize
             }
             o.insert("income_share".into(), r["income_share"].clone());
             o.insert("tx_count".into(), r["tx_count"].clone());
+            // откуда контрагент: выписка и/или ожидаемые события (счета 1С)
+            o.insert("origin".into(), if r["origin"].is_array() { r["origin"].clone() } else { json!(["statement"]) });
+            if r["origin"].as_array().is_some_and(|a| a.iter().any(|x| x == "expected")) {
+                o.insert("expected_in_kop".into(), stringify(kop_of(&r["expected_in_kop"])));
+                o.insert("expected_out_kop".into(), stringify(kop_of(&r["expected_out_kop"])));
+                o.insert("expected_share".into(), r["expected_share"].clone());
+            }
             match checked.get(inn) {
                 Some(c) => {
                     o.insert("checked".into(), json!(true));
@@ -548,6 +558,7 @@ async fn counterparties_view(st: &AppState, ctx: &Ctx, p: &Principal, top: usize
                     o.insert("mass_address".into(), json!(c.mass_address));
                     o.insert("disqualified".into(), json!(c.disqualified));
                     o.insert("registered_at".into(), json!(c.registered_at));
+                    o.insert("tax_debt_as_of".into(), json!(c.tax_debt_as_of));
                     o.insert("checked_at".into(), json!(c.checked_at.clone().unwrap_or_else(|| now.clone())));
                     o.insert("source".into(), json!(c.source));
                     o.insert("mode".into(), json!(c.mode));

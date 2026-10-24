@@ -1196,3 +1196,36 @@ async fn company_requisites_can_be_edited_validated_and_cleared() {
     let (_, v) = call(&e.app, "GET", &uri, None).await;
     assert_eq!((v["inn"].as_str(), v["company_name"].as_str()), (Some(""), Some("Новая")));
 }
+
+fn onec_item(ext: &str, amount: i64, cp: &str, inn: &str) -> Value {
+    json!({"external_id": ext, "date": in_days(5), "amount_kop": amount, "title": "Счёт из 1С", "counterparty": cp, "source": "onec", "confidence": 0.9, "inn": inn})
+}
+
+#[tokio::test]
+async fn expected_events_with_inn_join_fns_checks_and_risk_names() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    import_confirmed(&e.app, &cid, "a.csv", vec![tx_inn(1, 9_000_000, "ООО Большой клиент", "7701234567", "revenue")]).await;
+    let bulk = format!("/internal/v1/companies/{cid}/expected-events/bulk");
+    // событие без ИНН (создано до появления ИНН) при повторной синхронизации получает ИНН и не считается новым
+    call(&e.app, "POST", &bulk, Some(json!({"events": [onec_item("bs-1", 45_000_000, "ДОНАГРО ООО", "")]}))).await;
+    let (_, v) = call(&e.app, "POST", &bulk, Some(json!({"events": [onec_item("bs-1", 45_000_000, "ДОНАГРО ООО", "6166065050"), onec_item("bs-2", 12_000_000, "ДОНАГРО ООО", "6166065050"), onec_item("pp-1", -15_000_000, "ЦТСК ООО", "6165235781"), onec_item("x", 1, "Кривой", "61660-65050")]}))).await;
+    assert_eq!((v["created"].as_i64(), v["skipped"].as_i64()), (Some(3), Some(1)));
+
+    let (_, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/counterparties/top?limit=20"), None).await;
+    let items = v["items"].as_array().unwrap();
+    let inns: Vec<_> = items.iter().map(|i| i["inn"].as_str().unwrap()).collect();
+    assert_eq!(inns, ["6166065050", "6165235781", "7701234567"], "сначала контрагенты ожидаемых событий, неверный ИНН не проверяется");
+    let don = &items[0];
+    assert_eq!((don["name"].as_str(), don["expected_in_kop"].as_i64(), don["events_count"].as_i64(), don["tx_count"].as_i64()), (Some("ДОНАГРО ООО"), Some(57_000_000), Some(2), Some(0)));
+    assert_eq!(don["origin"], json!(["expected", "onec"]));
+    assert!((don["expected_share"].as_f64().unwrap() - 1.0).abs() < 1e-9, "все ожидаемые поступления — от ДОНАГРО (и 1 коп. кривого)");
+    assert_eq!(items[1]["expected_out_kop"], 15_000_000);
+    assert_eq!(items[2]["origin"], json!(["statement"]));
+
+    // флаг по ИНН из 1С приходит в снимок с названием из события: forecast сопоставит его с поступлением
+    call(&e.app, "PUT", &format!("/internal/v1/companies/{cid}/counterparty-risk"), Some(json!({"items": [risk_item("6166065050", "medium", "active", 496_997_838)]}))).await;
+    let (_, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/snapshot"), None).await;
+    let r = &v["counterparty_risks"][0];
+    assert_eq!((r["inn"].as_str(), r["names"].clone(), r["risk_level"].as_str()), (Some("6166065050"), json!(["ДОНАГРО ООО"]), Some("medium")));
+}
