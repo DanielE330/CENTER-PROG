@@ -9,7 +9,7 @@
 Формат дат: (месяц, день). Если срок выпадает на нерабочий день, он переносится на ближайший рабочий (ст. 6.1 НК РФ).
 """
 
-REGIMES = ("usn_income", "usn_income_expense", "osno", "eshn", "ausn", "npd")
+REGIMES = ("usn_income", "usn_income_expense", "osno", "eshn", "ausn", "npd", "patent")
 
 
 def _year(fixed_kop: int, status: str, checked_at: str | None = None, note: str = "") -> dict:

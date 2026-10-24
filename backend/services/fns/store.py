@@ -36,12 +36,12 @@ class Store:
             if not self._ready:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 with closing(sqlite3.connect(self.path, timeout=15)) as c:
+                    c.execute("PRAGMA journal_mode=WAL")  # режим журнала один раз: смена на лету из потоков даёт «database is locked»
                     c.executescript(SCHEMA)
                     c.commit()
                 self._ready = True
         c = sqlite3.connect(self.path, timeout=15)
         try:
-            c.execute("PRAGMA journal_mode=WAL")
             yield c
             c.commit()
         finally:
@@ -71,3 +71,22 @@ class Store:
     def meta_put(self, k: str, v):
         with self.conn() as c:
             c.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (k, json.dumps(v, ensure_ascii=False)))
+
+    # --- снимки ЕНС (загруженные справки) ---
+    def ens_put(self, inn: str, snap: dict, label: str | None = None, now: float | None = None):
+        with self.conn() as c:
+            c.execute("INSERT OR REPLACE INTO ens_snapshots VALUES(?,?,?,?,?,?,?,?,?)",
+                      (inn_key(inn), snap["as_of"], snap["balance_kop"], snap["debt_kop"], snap["overpayment_kop"],
+                       snap.get("penalty_kop"), json.dumps(snap.get("upcoming") or [], ensure_ascii=False),
+                       now if now is not None else time.time(), label))
+
+    def ens_latest(self, inn: str):
+        """Последний загруженный снимок: по дате справки, при равенстве по времени загрузки."""
+        with self.conn() as c:
+            r = c.execute("SELECT as_of, balance_kop, debt_kop, overpayment_kop, penalty_kop, upcoming, imported_at, label "
+                          "FROM ens_snapshots WHERE inn_key=? ORDER BY as_of DESC, imported_at DESC LIMIT 1",
+                          (inn_key(inn),)).fetchone()
+        if not r:
+            return None
+        return {"as_of": r[0], "balance_kop": r[1], "debt_kop": r[2], "overpayment_kop": r[3], "penalty_kop": r[4],
+                "upcoming": json.loads(r[5]), "imported_at": r[6], "label": r[7]}

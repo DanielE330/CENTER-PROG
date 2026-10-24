@@ -23,6 +23,8 @@ import { buildHistory, buildUpcoming } from './model'
 import { sourceLabel } from './labels'
 import { AddEventModal } from './AddEventModal'
 import { SyncModal } from './SyncModal'
+import { FnsEnsCard } from '../fns/FnsEnsCard'
+import { FnsCounterparties } from '../fns/FnsCounterparties'
 
 export default function ObligationsPage() {
   const { t } = useTranslation()
@@ -57,6 +59,9 @@ export default function ObligationsPage() {
   const failed = forecast.isError ? forecast.error : events.isError ? events.error : null
   const noData = !loading && !run && (!pf.data) && (events.data?.items.length ?? 0) === 0
 
+  // налоговые события из ФНС хранятся с источником tax, но подписаны «· ФНС» в названии: показываем источник «ФНС»
+  const srcLabel = (o: Obligation) => (o.source === 'tax' && o.title.includes('· ФНС') ? t('source.fns') : sourceLabel(t, o.source))
+
   const columns = (withFact: boolean): Column<Obligation>[] => [
     {
       key: 'name', header: t('obligations.col.name'), sortValue: (o) => o.title,
@@ -68,7 +73,7 @@ export default function ObligationsPage() {
       ),
     },
     { key: 'date', header: t('obligations.col.date'), sortValue: (o) => o.date, render: (o) => <span className="whitespace-nowrap">{formatDate(o.date)}</span> },
-    { key: 'source', header: t('obligations.col.source'), sortValue: (o) => o.source, render: (o) => <Badge>{sourceLabel(t, o.source)}</Badge> },
+    { key: 'source', header: t('obligations.col.source'), sortValue: (o) => o.source, render: (o) => <Badge>{srcLabel(o)}</Badge> },
     { key: 'status', header: t('obligations.col.status'), sortValue: (o) => o.status, render: (o) => <ObligationStatusBadge status={o.status} /> },
     ...(withFact
       ? [{
@@ -152,6 +157,8 @@ export default function ObligationsPage() {
                 )}
               </Card>
 
+              <FnsCounterparties />
+
               <Card title={t('obligations.history', { count: hi.length })} subtitle={t('obligations.historySubtitle')}>
                 {pf.isPending ? <LoadingState height={120} /> : pf.isError && !isNoData(pf.error) ? (
                   <ErrorState message={errorText(t, pf.error)} onRetry={() => void pf.refetch()} />
@@ -173,7 +180,7 @@ export default function ObligationsPage() {
                       <li key={o.id} className="flex items-center justify-between gap-3 py-2.5">
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate">{o.title}</p>
-                          <p className="text-xs text-muted">{formatDate(o.date, 'dayMonth')} · {sourceLabel(t, o.source)}</p>
+                          <p className="text-xs text-muted">{formatDate(o.date, 'dayMonth')} · {srcLabel(o)}</p>
                         </div>
                         <span className={'tnum text-sm font-semibold shrink-0 ' + (o.kind === 'receipt' ? 'text-primary' : '')}>{formatKop(o.amount, { sign: true })}</span>
                       </li>
@@ -181,6 +188,8 @@ export default function ObligationsPage() {
                   </ul>
                 )}
               </Card>
+
+              <FnsEnsCard />
 
               <Card title={t('obligations.manual')} subtitle={t('obligations.manualSubtitle')}>
                 {events.isPending ? <LoadingState height={100} /> : (events.data?.items.length ?? 0) === 0 ? (

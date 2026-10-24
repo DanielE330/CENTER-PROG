@@ -168,6 +168,7 @@ pub fn tenant_routes() -> Router<AppState> {
         // сведения ФНС: налоговые события на год, ЕНС, проверка контрагентов (fns.rs)
         .route(&format!("{co}/integrations/fns/sync"), post(fns::sync))
         .route(&format!("{co}/fns/ens"), get(fns::ens))
+        .route(&format!("{co}/fns/ens/import"), post(fns::ens_import))
         .route(&format!("{co}/fns/counterparties"), get(fns::counterparties))
         .route(&format!("{co}/advisor/ask"), post(advisor::ask))
         .route(&format!("{co}/advisor/suggestions/apply"), post(advisor::apply))

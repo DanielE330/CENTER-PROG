@@ -104,6 +104,9 @@
 | `POST /api/v1/companies/{cid}/expected-events`, `DELETE …/expected-events/{eid}` | edit | |
 | `POST /api/v1/companies/{cid}/expected-events/tax-calendar` | edit | |
 | `POST /api/v1/companies/{cid}/integrations/sync` | edit | |
+| `POST /api/v1/companies/{cid}/integrations/fns/sync` | edit | налоговые события на год из ФНС (docs/fns.md) |
+| `GET /api/v1/companies/{cid}/fns/ens`, `/fns/counterparties` | read | ЕНС и проверка контрагентов |
+| `POST /api/v1/companies/{cid}/fns/ens/import` | edit | загрузка справки о состоянии расчётов (XML КНД 1160080 или CSV) |
 | `POST /api/v1/companies/{cid}/advisor/ask` | read | вычисляющий POST |
 | `POST /api/v1/companies/{cid}/advisor/suggestions/apply` | edit | |
 | `GET /api/v1/companies/{cid}/demo/status` | read | |

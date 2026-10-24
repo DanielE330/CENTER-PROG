@@ -20,6 +20,7 @@ struct FnsFake {
     obligations: Value,
     ens: Value,
     batch: Value,
+    import: Value,
     /// все запросы: (метод, путь с query, тело)
     calls: Vec<(String, String, Value)>,
     /// принудительный ответ на любой запрос
@@ -41,6 +42,7 @@ async fn fns_handler(State(s): State<Fns>, req: Request) -> Response {
         "/internal/v1/fns/obligations" => g.obligations.clone(),
         "/internal/v1/fns/ens" => g.ens.clone(),
         "/internal/v1/fns/counterparties/batch" => g.batch.clone(),
+        "/internal/v1/fns/ens/import" => g.import.clone(),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     axum::Json(v).into_response()
@@ -255,6 +257,38 @@ async fn ens_returns_balance_debt_upcoming_and_source() {
     let (s, _) = e.t.call("GET", "/api/v1/companies/c-foreign/fns/ens", &e.toks[0], None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(e.fns_calls().len(), n);
+}
+
+#[tokio::test]
+async fn ens_import_passes_the_file_to_fns_and_returns_the_snapshot_with_the_import_label() {
+    let e = env_with(Some(INN)).await;
+    e.fns.lock().unwrap().import = json!({"source": "import", "mode": "live", "format": "knd_1160080", "warnings": ["в файле нет КНД"],
+        "balance_kop": -4_500_000, "debt_kop": 4_500_000, "as_of": "2026-10-21", "checked_at": "2026-10-24T10:00:00Z", "upcoming": []});
+    let body = json!({"filename": "spravka.xml", "content_b64": "PHg+"});
+    // наблюдатель не загружает справки, отказ раньше обращения к fns
+    let (s, v) = e.t.call("POST", &e.uri("fns/ens/import"), &e.toks[2], Some(body.clone())).await;
+    assert_eq!((s, code(&v)), (StatusCode::FORBIDDEN, "forbidden"));
+    assert!(e.fns_calls().is_empty());
+    let (s, v) = e.t.call("POST", &e.uri("fns/ens/import"), &e.toks[1], Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["debt_kop"].as_str(), v["format"].as_str(), v["source"].as_str(), v["mode"].as_str()), (Some("4500000"), Some("knd_1160080"), Some("import"), Some("live")));
+    assert_eq!(v["warnings"][0], "в файле нет КНД");
+    let call = &e.fns_calls()[0];
+    assert_eq!(call.1, format!("/internal/v1/fns/ens/import?inn={INN}"));
+    assert_eq!((call.2["filename"].as_str(), call.2["content_b64"].as_str()), (Some("spravka.xml"), Some("PHg+")));
+    // пустой файл не уходит в fns
+    let n = e.fns_calls().len();
+    let (s, v) = e.t.call("POST", &e.uri("fns/ens/import"), &e.toks[0], Some(json!({"content_b64": " "}))).await;
+    assert_eq!((s, code(&v)), (StatusCode::UNPROCESSABLE_ENTITY, "fns_import_bad_file"));
+    assert_eq!(e.fns_calls().len(), n);
+}
+
+#[tokio::test]
+async fn ens_import_errors_from_fns_are_passed_through() {
+    let e = env_with(Some(INN)).await;
+    e.fns.lock().unwrap().fail = Some((StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": {"code": "fns_import_inn_mismatch", "message": "ИНН в справке не совпадает с ИНН компании"}})));
+    let (s, v) = e.t.call("POST", &e.uri("fns/ens/import"), &e.toks[0], Some(json!({"content_b64": "PHg+"}))).await;
+    assert_eq!((s, code(&v)), (StatusCode::UNPROCESSABLE_ENTITY, "fns_import_inn_mismatch"), "{v}");
 }
 
 fn top_rows() -> Value {

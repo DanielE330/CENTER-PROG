@@ -16,7 +16,8 @@ class MaskInn(logging.Filter):
     def filter(self, record):
         try:
             if record.args:
-                record.args = tuple(mask(a) if isinstance(a, str) else a for a in record.args)
+                # аргументы бывают не строками (httpx.URL): строку подставляем, только если в ней нашёлся ИНН
+                record.args = tuple(m if (m := mask(str(a))) != str(a) else a for a in record.args)
             if isinstance(record.msg, str):
                 record.msg = mask(record.msg)
         except Exception:  # noqa: BLE001
@@ -25,7 +26,8 @@ class MaskInn(logging.Filter):
 
 
 def install():
-    for name in ("uvicorn.access", "fns"):
+    # httpx пишет полный URL запроса (с ИНН) на уровне INFO: маскируем и его
+    for name in ("uvicorn.access", "fns", "httpx", "httpcore"):
         lg = logging.getLogger(name)
         if not any(isinstance(f, MaskInn) for f in lg.filters):
             lg.addFilter(MaskInn())

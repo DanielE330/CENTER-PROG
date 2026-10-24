@@ -11,6 +11,10 @@ import type {
   Backtest,
   Department,
   ExpectedEvent,
+  FnsCounterparties,
+  FnsEns,
+  FnsEnsImportResult,
+  FnsSyncResult,
   Goal,
   GoalStatus,
   ForecastRun,
@@ -232,6 +236,13 @@ export const api = {
     }),
   syncIntegrations: (externalCompany: string) =>
     request<SyncResult>('POST', co('/integrations/sync'), { body: { external_company: externalCompany } }),
+
+  // ----- ФНС -----
+  fnsEns: () => request<FnsEns>('GET', co('/fns/ens')),
+  fnsCounterparties: (top = 20) => request<FnsCounterparties>('GET', co(`/fns/counterparties?top=${top}`)),
+  fnsSync: (b: { year?: number; regime?: string } = {}) => request<FnsSyncResult>('POST', co('/integrations/fns/sync'), { body: b }),
+  fnsImportEns: (filename: string, contentB64: string) =>
+    request<FnsEnsImportResult>('POST', co('/fns/ens/import'), { body: { filename, content_b64: contentB64 } }),
 
   // ----- imports -----
   imports: () => request<{ items: ImportRow[] }>('GET', co('/imports')),

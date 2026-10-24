@@ -70,6 +70,18 @@ req GET "/api/v1/companies/$CID/expected-events"; expect "список собы�
 req POST "/api/v1/companies/$CID/expected-events/tax-calendar" '{}'
 case "$CODE" in 201) ok "налоговый календарь: $(echo "$BODY" | jq_ source)";; 422) ok "налоговый календарь: нет налоговых платежей в выписке (422)";; *) bad "налоговый календарь $CODE: ${BODY:0:200}";; esac
 
+# сведения ФНС: налоги на год, ЕНС, контрагенты (только если fns отвечает; нужен ИНН компании в реквизитах)
+if curl -fsS -m 3 "${FNS_URL:-http://127.0.0.1:8015}/live" >/dev/null 2>&1; then
+  req POST "/api/v1/companies/$CID/integrations/fns/sync" '{}'
+  case "$CODE" in 200) ok "ФНС: налоги на год (создано $(echo "$BODY" | jq_ created), источник $(echo "$BODY" | jq_ source))";; 422) ok "ФНС: у компании нет ИНН (422 inn_required)";; *) bad "ФНС sync $CODE: ${BODY:0:200}";; esac
+  req GET "/api/v1/companies/$CID/fns/counterparties?top=5"
+  case "$CODE" in 200|422) ok "ФНС: контрагенты ($CODE)";; *) bad "ФНС контрагенты $CODE: ${BODY:0:200}";; esac
+  req GET "/api/v1/companies/$CID/fns/ens"
+  case "$CODE" in 200|404|422) ok "ФНС: ЕНС ($CODE)";; *) bad "ФНС ЕНС $CODE: ${BODY:0:200}";; esac
+else
+  echo "skip ФНС: сервис fns недоступен"
+fi
+
 # синхронизация интеграций: только если integrator отвечает
 if curl -fsS -m 3 "${INTEGRATOR_URL:-http://127.0.0.1:8008}/live" >/dev/null 2>&1; then
   req POST "/api/v1/companies/$CID/integrations/sync" '{"external_company":"C001"}'; expect "sync интеграций" 200

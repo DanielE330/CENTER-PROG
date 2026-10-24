@@ -460,6 +460,32 @@ pub async fn ext_ens(State(st): State<AppState>, TokenPrincipal(p): TokenPrincip
     Ok(Json(ens_view(&st, &with_actor(&ctx, &p), &p).await?))
 }
 
+#[derive(Deserialize)]
+pub struct ImportBody {
+    #[serde(default)]
+    filename: Option<String>,
+    /// содержимое файла справки (XML КНД 1160080 или CSV) в base64: кодировка XML бывает windows-1251
+    content_b64: String,
+}
+
+/// POST /api/v1/companies/{cid}/fns/ens/import {filename?, content_b64} -> ЕНС из справки + {format, warnings}.
+/// Справку владелец выгружает из личного кабинета сам; вход в кабинет по ЭЦП мы не автоматизируем (docs/fns.md).
+pub async fn ens_import(State(st): State<AppState>, Editor(p): Editor, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<ImportBody>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let inn = company_inn(&p)?;
+    if b.content_b64.trim().is_empty() {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "fns_import_bad_file", "Выберите файл справки"));
+    }
+    let actx = with_actor(&ctx, &p);
+    let body = json!({"filename": b.filename.unwrap_or_default().chars().take(200).collect::<String>(), "content_b64": b.content_b64});
+    let v = fns_call(&st.fns, Method::POST, &format!("/internal/v1/fns/ens/import?inn={inn}"), &actx, Some(&body)).await?;
+    audit(&st, &ctx, &p, "integrations.fns.ens_import", v["format"].as_str().unwrap_or("")).await;
+    let mut out = ens_json(&parse_ens(&v));
+    out["format"] = v["format"].clone();
+    out["warnings"] = v["warnings"].clone();
+    Ok(Json(out))
+}
+
 // ---------- контрагенты ----------
 #[derive(Deserialize)]
 pub struct TopQuery {

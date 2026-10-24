@@ -164,6 +164,7 @@
     "txAuto": "Auto category"
   },
   "source": {
+    "fns": "Tax service",
     "recurring": "Recurring",
     "manual": "Manual",
     "invoice": "Invoice",
@@ -194,6 +195,16 @@
     "unknown": "Unknown error"
   },
   "apiErrors": {
+    "inn_required": "Enter the TIN in the company details: tax service data is requested by TIN",
+    "fns_unavailable": "The tax service is unavailable right now, try again later",
+    "fns_unknown_taxpayer": "The taxpayer was not found in the tax service source",
+    "fns_ens_not_imported": "The account comes from a statement: upload the statement of settlements",
+    "fns_import_bad_file": "The file could not be read. Use the KND 1160080 statement (XML) or a CSV",
+    "fns_import_unrecognized": "No account balance or arrears found in the file. Upload the KND 1160080 statement or a CSV",
+    "fns_import_wrong_form": "This is not a statement of settlements (KND 1160080)",
+    "fns_import_inn_mismatch": "The TIN in the statement does not match the company TIN",
+    "fns_import_too_large": "The file is larger than 1 MB",
+    "invalid_top": "Number of counterparties: 1 to 50",
     "invalid_credentials": "Wrong email or password",
     "invalid_mfa_code": "Wrong code. Check your phone clock or use a backup code",
     "mfa_session_expired": "The code entry timed out, please sign in again",
@@ -457,6 +468,94 @@
       "category": "Category",
       "status": "Category status",
       "amount": "Amount"
+    }
+  },
+  "fns": {
+    "modeSim": "simulation",
+    "sync": "Update taxes from the Federal Tax Service",
+    "importOpen": "Upload the unified account statement",
+    "checkedAt": "checked {{at}}",
+    "noInnTitle": "Company TIN is not set",
+    "noInnText": "Tax service data is requested by TIN. Enter it in the company details.",
+    "toSettings": "Open settings",
+    "syncDoneTitle": "Taxes from the Federal Tax Service added",
+    "syncDoneText": "Tax events for {{year}}: {{created}} created, {{skipped}} already existed.",
+    "syncEstimated": "For {{count}} payments the amount is estimated from the statement.",
+    "syncNoAmount": "For {{count}} payments the amount cannot be estimated (annual taxes, income-based contributions): add it manually.",
+    "syncSim": "Simulated tax service data, not real.",
+    "sourceName": {
+      "fns_sim": "Tax service simulator",
+      "import": "Tax service statement",
+      "egrul": "Business registry",
+      "data_nalog": "Tax open data",
+      "fedresurs": "Bankruptcy registry",
+      "unavailable": "unavailable"
+    },
+    "ens": {
+      "title": "Unified tax account",
+      "subtitle": "Balance, arrears and upcoming payments",
+      "balance": "Account balance",
+      "debt": "Arrears",
+      "noDebt": "none",
+      "debtNote": "The tax account has arrears: they are in the forecast as an overdue payment.",
+      "payment": "Payment",
+      "notImportedTitle": "No statement uploaded yet",
+      "notImportedText": "The account is only available in the taxpayer's personal cabinet. Upload the statement of settlements and the balance will appear here."
+    },
+    "import": {
+      "title": "Statement of settlements",
+      "step1": "In the taxpayer's personal cabinet open «Unified tax account».",
+      "step2": "Order the «Statement of settlements» (KND 1160080) and download it as XML.",
+      "step3": "Choose the downloaded file below. We never sign in to the cabinet for you: you upload the file.",
+      "csv": "If XML does not work, a CSV with columns as_of;balance;debt;penalty;due_date;due_amount will do (amounts in roubles, e.g. 12500.50).",
+      "file": "Statement file",
+      "checking": "Checking the file…",
+      "tooBig": "The file is larger than 1 MB: a statement is never that big.",
+      "doneTitle": "Statement uploaded",
+      "doneText": "Arrears {{debt}}, balance {{balance}}.",
+      "asOf": "Uploaded {{date}}."
+    },
+    "status": {
+      "active": "Active",
+      "liquidating": "Being liquidated",
+      "liquidated": "Liquidated",
+      "bankrupt": "Bankruptcy",
+      "not_found": "Not in the registry",
+      "invalid_inn": "Invalid TIN",
+      "unknown": "No data"
+    },
+    "risk": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "unknown": "Not checked"
+    },
+    "reason": {
+      "bankruptcy": "signs of bankruptcy",
+      "liquidating": "the company is being liquidated",
+      "liquidated": "the company is liquidated",
+      "taxDebt": "owes the tax office",
+      "unreliable": "unreliable registry data",
+      "disqualified": "disqualified director",
+      "massAddress": "mass registration address"
+    },
+    "cp": {
+      "title": "Counterparties and risks",
+      "subtitle": "Largest customers and suppliers in the open tax registries",
+      "name": "Counterparty",
+      "share": "Share of receipts",
+      "status": "Status",
+      "debt": "Tax debt",
+      "risk": "Risk",
+      "noDebt": "none",
+      "riskyTitle": "Large customer at risk: «{{name}}», {{share}} of receipts",
+      "riskyText": "This customer has signs that may delay or stop its payments:",
+      "riskyScenario": "Check the «customer does not pay» scenario",
+      "emptyTitle": "No counterparties yet",
+      "emptyText": "They will appear after a statement is uploaded.",
+      "source": "Source: {{source}}",
+      "checked": "checked {{date}}",
+      "notSaved": "risk flags were not saved, the forecast will not use them"
     }
   },
   "obligations": {

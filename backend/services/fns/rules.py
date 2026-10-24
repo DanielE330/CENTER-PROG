@@ -40,8 +40,8 @@ def normalize(inn: str | None, regime: str, year: int, entity: str | None, emplo
         entity = "ip" if inn and len(inn) == 12 else "org"
     if entity not in ("org", "ip"):
         raise BadParams("entity: org или ip")
-    if regime == "npd":
-        entity = "ip"
+    if regime in ("npd", "patent"):
+        entity = "ip"  # патент и НПД доступны только ИП
     return entity, True if employees is None else employees
 
 
@@ -102,6 +102,7 @@ def build_events(wd: Workdays, regime: str, year: int, entity: str, employees: b
     elif regime == "npd":
         for m in range(1, 13):
             add("npd_monthly", m, rules["npd"]["day"], period=f"{year - 1}-12" if m == 1 else f"{year}-{m - 1:02d}")
+    # патент: сроки оплаты зависят от срока действия патента, которого у нас нет; в календарь идут только взносы
     if entity == "ip" and regime != "npd":
         ins = rules["insurance_ip"]
         add("ip_fixed_contributions", *ins["fixed_due"], period=str(year), amount_kop=ins["fixed_kop"],

@@ -99,6 +99,28 @@ export function useSyncIntegrations() {
   return useMutation({ mutationFn: (ext: string) => api.syncIntegrations(ext), onSuccess: () => void all() })
 }
 
+/** ЕНС и контрагенты: без повторов при ошибке (нет ИНН, сервис ФНС недоступен), экран покажет причину. */
+export function useFnsEns() {
+  const key = useKey()
+  return useQuery({ queryKey: key('fns', 'ens'), queryFn: api.fnsEns, retry: false })
+}
+
+export function useFnsCounterparties(top = 20) {
+  const key = useKey()
+  return useQuery({ queryKey: key('fns', 'counterparties', top), queryFn: () => api.fnsCounterparties(top), retry: false })
+}
+
+/** Налоги на год из ФНС создают ожидаемые события, поэтому обновляются все экраны. */
+export function useFnsSync() {
+  const all = useInvalidateAll()
+  return useMutation({ mutationFn: (b: { year?: number; regime?: string }) => api.fnsSync(b), onSuccess: () => void all() })
+}
+
+export function useFnsImportEns() {
+  const all = useInvalidateAll()
+  return useMutation({ mutationFn: (v: { filename: string; contentB64: string }) => api.fnsImportEns(v.filename, v.contentB64), onSuccess: () => void all() })
+}
+
 export function useAdvisorAsk() {
   return useMutation({ mutationFn: (v: { question: string; history: AdvisorHistoryItem[]; lang: string }) => api.advisorAsk(v.question, v.history, v.lang) })
 }
