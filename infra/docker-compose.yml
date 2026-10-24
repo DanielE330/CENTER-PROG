@@ -172,6 +172,29 @@ services:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8011/live', timeout=2)"]
 
+  backoffice:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: backoffice}
+    # панель оператора платформы: операторы, сессии, журнал действий и прокси к ledger/forecast/auth. Только внутренняя сеть.
+    # Первый оператор создаётся из OPERATOR_EMAIL/OPERATOR_PASSWORD (infra/.env, не коммитится) или командой
+    # docker compose -f infra/docker-compose.yml exec backoffice python -m backoffice.create_operator <email>
+    environment:
+      BACKOFFICE_DB: /data/backoffice.db
+      LEDGER_URL: http://ledger:3002
+      FORECAST_URL: http://forecast:3003
+      AUTH_URL: http://auth:8001
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL:-}
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:-}
+    volumes: [backoffice-data:/data]
+    networks: [internal]
+    depends_on:
+      auth: {condition: service_healthy}
+      ledger: {condition: service_healthy}
+      forecast: {condition: service_healthy}
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8013/live', timeout=2)"]
+
   ledger:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/rust.Dockerfile, target: ledger}
@@ -234,6 +257,7 @@ services:
       INTEGRATOR_URL: http://integrator:8008
       ADVISOR_URL: http://advisor:8011
       DEMO_FEED_URL: http://demo-feed:8012
+      BACKOFFICE_URL: http://backoffice:8013
       DEMO_FEED_ENABLED: ${DEMO_FEED_ENABLED:-${DEMO_SEED:-1}}  # демо «Прошла неделя» только для demo@example.com
       WEB_DIR: /app/frontend/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
@@ -244,6 +268,7 @@ services:
       ledger: {condition: service_healthy}
       forecast: {condition: service_healthy}
       planfact: {condition: service_healthy}
+      backoffice: {condition: service_started}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/live"]
       interval: 10s
@@ -273,3 +298,4 @@ volumes:
   ledger-data:
   forecast-data:
   llm-gateway-data:
+  backoffice-data:

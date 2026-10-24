@@ -6,10 +6,10 @@
 |---|---|---|---|
 | gateway | Caddy, 3000 | Входная точка: TLS, заголовки, раздача SPA, маршрутизация `/api/*` | — |
 | api | Rust, 3000 (+ internal 3100) | Публичный API для SPA (BFF): сессия через auth, CSRF, заголовки, раздача SPA, проксирование и оркестрация (налоговый календарь, sync интеграций, вход по ЭЦП, ключевая ставка) | — |
-| auth | Python, 8001 | Пароли, пользователи, серверные сессии | `auth.db` |
-| ecp | Python, 8007 | Вход по ЭЦП: challenge, проверка подписи CAdES, привязка сертификата к пользователю | `ecp.db` |
+| auth | Python, 8001 | Пароли, пользователи, серверные сессии, API-токены, сотрудники (создание с заданным или сгенерированным паролем, смена и сброс пароля, закрытие сессий, удаление) | `auth.db` |
+| ecp | Python, 8007 | Вход по ЭЦП: challenge, проверка подписи CAdES, привязка сертификата к пользователю; директор по ЭЦП создаётся без пароля (пароль обязателен, см. [roles.md](roles.md)) | `ecp.db` |
 | parser | Python, 8002 | Разбор файла выписки (CSV/XLSX) и категоризация операций | — |
-| ledger | Rust, 3002 | Компании, импорты (staging + вызов parser), операции, ожидаемые события, `data_revision`, аудит | `ledger.db` |
+| ledger | Rust, 3002 | Компании, участники и роли (`company_members`), блокировка компании оператором, метаданные и агрегаты для оператора (`admin/*`), импорты (staging + вызов parser), операции, ожидаемые события, `data_revision`, аудит | `ledger.db` |
 | forecast | Rust, 3003 | Расчёт прогноза остатка, риска разрыва, сценариев и backtest; авто-пересчёт устаревшего базового прогноза | `forecast.db` (`forecast_runs`) |
 | planfact | Rust, 3004 | Сравнение плана и факта (история и события из ledger, регулярные платежи из forecast) | — |
 | gov | Python, 8003 | Получение публичных данных госсайтов: ключевая ставка ЦБ, календари, налоговый календарь ФНС | кэш |
@@ -17,6 +17,7 @@
 | llm_gateway | Python, 8010 | Единственный выход к облачным LLM (Anthropic, OpenAI, Gemini, OpenRouter через httpx): маскирование ИНН/счетов/карт/контрагентов/ФИО перед отправкой и обратная подстановка в ответе, суточный бюджет токенов на пользователя, аудит обращений без содержимого, таймауты | `llm_gateway.db` (расход токенов, аудит) |
 | advisor | Python, 8011 | Консультант: агентный цикл с инструментами (прогноз и риск, ближайшие платежи и просрочки, план-факт, сценарий «что если», операции по категориям) поверх forecast/ledger/planfact и llm_gateway; только предлагает действия; без провайдера отвечает шаблоном из прогноза | — |
 | demo_feed | Python, 8012 | Лента демо «Прошла неделя»: по курсору (дате последней операции) отдаёт операции следующей недели демо-компании из датасета | — |
+| backoffice | Python, 8013 | Панель оператора платформы: операторы, сессии, журнал действий; список компаний (только метаданные и агрегаты), статистика, блокировка/разблокировка компании с отзывом сессий участников; прокси к ledger/forecast/auth. См. `docs/backoffice.md` | `backoffice.db` (операторы, сессии, аудит) |
 | onec | Python, 8004 | Имитация 1С (OData) | — |
 | edo | Python, 8005 | Имитация ЭДО | — |
 | bank | Python, 8006 | Имитация банковского API выписок | — |
@@ -29,14 +30,14 @@ Cargo workspace в `backend/` (общие `Cargo.lock`, `rust-toolchain.toml`): 
 
 | Сервис | Env (по умолчанию) | Эндпоинты `/internal/v1/...` |
 |---|---|---|
-| ledger :3002 | `INTERNAL_ADDR=127.0.0.1:3002`, `DB_PATH=data/run/ledger.db`, `PARSER_URL` | `companies/ensure`, `companies/{cid}` (GET, PATCH), `companies/{cid}/snapshot`, `.../imports` (GET, POST multipart), `.../imports/{iid}` (+`/confirm`), `.../transactions`, `.../transactions/{id}/category`, `.../expected-events` (GET, POST), `.../expected-events/{eid}` (DELETE), `.../expected-events/bulk` (идемпотентно по `external_id`), `.../audit`, `health`, `/live` |
+| ledger :3002 | `INTERNAL_ADDR=127.0.0.1:3002`, `DB_PATH=data/run/ledger.db`, `PARSER_URL` | `companies/ensure`, `members/by-user/{uid}`, `companies/{cid}/members` (GET, POST), `.../members/{uid}` (PATCH, DELETE), `admin/companies` (GET), `admin/companies/{cid}` (GET), `.../ban`, `.../unban`, `admin/stats`, `companies/{cid}` (GET, PATCH), `companies/{cid}/snapshot`, `.../imports` (GET, POST multipart), `.../imports/{iid}` (+`/confirm`), `.../transactions`, `.../transactions/{id}/category`, `.../expected-events` (GET, POST), `.../expected-events/{eid}` (DELETE), `.../expected-events/bulk` (идемпотентно по `external_id`), `.../audit`, `health`, `/live` |
 | forecast :3003 | `INTERNAL_ADDR=127.0.0.1:3003`, `DB_PATH=data/run/forecast.db`, `LEDGER_URL` | `companies/{cid}/forecasts` (POST), `.../forecasts/latest`, `.../forecasts/{rid}`, `.../scenarios`, `.../backtest`, `.../summary`, `.../rules?as_of=` |
 | planfact :3004 | `INTERNAL_ADDR=127.0.0.1:3004`, `LEDGER_URL`, `FORECAST_URL` | `companies/{cid}/plan-fact?days=` |
-| api :3000/:3100 | `PUBLIC_ADDR`, `INTERNAL_ADDR`, `AUTH_URL`, `ECP_URL`, `GOV_URL`, `LEDGER_URL`, `FORECAST_URL`, `PLANFACT_URL`, `INTEGRATOR_URL`, `WEB_DIR`, `COOKIE_SECURE` | публичные `/api/v1/...` (контракт для SPA не менялся); внутренний :3100: `health`, `companies/{cid}/summary` |
+| api :3000/:3100 | `PUBLIC_ADDR`, `INTERNAL_ADDR`, `AUTH_URL`, `BACKOFFICE_URL`, `ECP_URL`, `GOV_URL`, `LEDGER_URL`, `FORECAST_URL`, `PLANFACT_URL`, `INTEGRATOR_URL`, `WEB_DIR`, `COOKIE_SECURE` | публичные `/api/v1/...` (контракт для SPA не менялся), операторские `/api/admin/v1/...` (`admin.rs`, cookie `op_session`); внутренний :3100: `health`, `companies/{cid}/summary` |
 
-Внутренние сервисы доверяют api: проверка сессии и принадлежности компании выполняется только в api (чужая компания -> 404), ответы ledger/forecast/planfact передаются в SPA без изменений. Сервисы ledger/forecast/planfact слушают только адреса из env (в Docker — только внутренняя сеть); Caddy отдаёт 404 на `/internal/*`.
+Внутренние сервисы доверяют api: проверка сессии, роли и прав (`read`/`edit`/`manage`, 403 `forbidden`), блокировки компании (403 `company_banned`) и принадлежности компании выполняется только в api (чужая компания -> 404; модель ролей и таблица «маршрут -> право» — [roles.md](roles.md)), ответы ledger/forecast/planfact передаются в SPA без изменений. Сервисы ledger/forecast/planfact слушают только адреса из env (в Docker — только внутренняя сеть); Caddy отдаёт 404 на `/internal/*`.
 
-Запуск: `infra/scripts/dev.sh` (собирает workspace, поднимает всё; `dev.sh stop`). Проверка: `cd backend && cargo test`, `infra/scripts/smoke.sh`. Docker: `make -C infra up`; образы — `infra/docker/rust.Dockerfile` (targets `ledger`, `forecast`, `planfact`, `api`) и `infra/docker/python.Dockerfile` (`auth`, `parser`, `gov`, `ecp`, `onec`, `edo`, `bank`, `integrator`, `demo_feed`, `llm_gateway`, `advisor`). Сеть `edge` у gateway, api, gov и llm_gateway (выход к провайдерам); имитаторы, integrator и все Rust-сервисы кроме api — только `internal`.
+Запуск: `infra/scripts/dev.sh` (собирает workspace, поднимает всё; `dev.sh stop`). Проверка: `cd backend && cargo test`, `infra/scripts/smoke.sh`. Docker: `make -C infra up`; образы — `infra/docker/rust.Dockerfile` (targets `ledger`, `forecast`, `planfact`, `api`) и `infra/docker/python.Dockerfile` (`auth`, `parser`, `gov`, `ecp`, `onec`, `edo`, `bank`, `integrator`, `demo_feed`, `llm_gateway`, `advisor`, `backoffice`). Сеть `edge` у gateway, api, gov и llm_gateway (выход к провайдерам); имитаторы, integrator и все Rust-сервисы кроме api — только `internal`.
 
 `POST /api/v1/companies/{cid}/integrations/sync` `{"external_company":"C001"}`: api запрашивает у integrator `GET /internal/v1/obligations?company=...` (`INTEGRATOR_URL`, `http://127.0.0.1:8008`), превращает обязательства в ожидаемые события (`source`: `contract` для kind=contract, иначе `invoice`) и записывает их в ledger через `expected-events/bulk`; ключ идемпотентности — уникальный индекс `(company_id, external_id)`. Ответ `{created, skipped, sources}`.
 

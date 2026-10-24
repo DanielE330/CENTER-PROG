@@ -129,5 +129,10 @@ def ecp_login(c: EcpLoginIn):
                 (signer.fingerprint, u["user_id"], signer.subject, signer.issuer, signer.serial, time.time()),
             )
     s = call_auth("/internal/v1/sessions/issue", {"user_id": u["user_id"]})
-    return {"token": s["token"], "user_id": s["user_id"], "email": s["email"], "has_email": s.get("has_email", False), "ttl": s["ttl"],
-            "display_name": signer.display_name, "new": u["created"], "company": _company(signer)}
+    has_email = s.get("has_email", False)
+    # у директора, зарегистрированного по ЭЦП, пароля нет: api до установки email+пароля (users/{uid}/email-password
+    # в auth) закрывает всё, кроме me, logout и set-credentials (403 password_required)
+    return {"token": s["token"], "user_id": s["user_id"], "email": s["email"], "has_email": has_email, "ttl": s["ttl"],
+            "display_name": signer.display_name, "new": u["created"], "company": _company(signer),
+            "password_required": not has_email, "must_change_password": s.get("must_change_password", False),
+            "password_generated": s.get("password_generated", False)}

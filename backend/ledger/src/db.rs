@@ -51,5 +51,23 @@ pub fn open(path: &str) -> Db {
             conn.execute(&format!("ALTER TABLE companies ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"), []).expect("add column");
         }
     }
+    // блокировка компании оператором платформы (метаданные; данные компании не затрагиваются)
+    for col in ["banned_at", "ban_reason"] {
+        if !cols.iter().any(|c| c == col) {
+            conn.execute(&format!("ALTER TABLE companies ADD COLUMN {col} TEXT"), []).expect("add column");
+        }
+    }
+    // роли: участники компании. Директор — владелец (owner_id); у баз до появления ролей запись директора создаётся здесь.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS company_members(
+            company_id TEXT NOT NULL REFERENCES companies(id), user_id TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL DEFAULT '', role TEXT NOT NULL CHECK(role IN ('director','editor','viewer')),
+            created_at TEXT NOT NULL, created_by TEXT NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS members_company ON company_members(company_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS members_one_director ON company_members(company_id) WHERE role='director';
+        INSERT OR IGNORE INTO company_members(company_id, user_id, email, role, created_at, created_by)
+            SELECT id, owner_id, '', 'director', created_at, '' FROM companies;",
+    )
+    .expect("migrate members");
     Arc::new(Mutex::new(conn))
 }

@@ -267,3 +267,211 @@ def test_api_tokens_lifecycle(client):
     assert client.delete(f"{P}/users/{uid}/tokens/{t['id']}").status_code == 204
     assert client.post(f"{P}/tokens/verify", json={"token": t["token"]}).status_code == 401
     assert client.delete(f"{P}/users/{uid}/tokens/{t['id']}").status_code == 404
+
+
+# ---------- роли: сотрудники, пароли, сессии ----------
+def create(c, email="emp@example.com", **kw):
+    return c.post(f"{P}/users/create", json={"email": email, **kw})
+
+
+def test_create_user_with_given_password_requires_change_but_no_password_in_reply(client):
+    r = create(client, password="given-pass-1")
+    assert r.status_code == 201
+    v = r.json()
+    assert v["email"] == "emp@example.com" and v["user_id"] and "password" not in v
+    assert v["must_change_password"] is True and v["password_generated"] is False
+    s = login(client, "emp@example.com", "given-pass-1")
+    assert s.status_code == 200
+    assert s.json()["must_change_password"] is True and s.json()["password_generated"] is False
+
+
+def test_create_user_generated_password_shown_once_and_strong(client):
+    v = create(client, generate=True).json()
+    pw = v["password"]
+    assert len(pw) == 14 and any(ch.isdigit() for ch in pw) and any(ch.isupper() for ch in pw) and any(ch.islower() for ch in pw)
+    assert not set(pw) & set("0O1lI")
+    assert v["password_generated"] is True
+    s = login(client, "emp@example.com", pw).json()
+    assert s["must_change_password"] is True and s["password_generated"] is True
+    # повторно пароль не отдаётся ни login, ни session, ни methods
+    sess = client.post(f"{P}/session", json={"token": s["token"]}).json()
+    assert "password" not in sess and sess["must_change_password"] is True
+    assert pw not in str(client.get(f"{P}/users/{v['user_id']}/methods").json())
+    # разные вызовы дают разные пароли
+    assert create(client, "emp2@example.com", generate=True).json()["password"] != pw
+
+
+def test_generated_password_not_stored_plain(client, db_path):
+    pw = create(client, generate=True).json()["password"]
+    dump = "\n".join(sqlite3.connect(db_path).iterdump())
+    assert pw not in dump
+
+
+def test_create_user_validation_and_conflicts(client):
+    assert create(client).status_code == 422  # ни пароля, ни generate
+    assert create(client, password="short").status_code == 422
+    assert create(client, password="long-enough-1", generate=True).status_code == 422
+    assert create(client, "bad").json()["detail"]["code"] == "invalid_email"
+    assert create(client, password="long-enough-1").status_code == 201
+    r = create(client, "EMP@example.com", generate=True)
+    assert (r.status_code, r.json()["detail"]["code"]) == (409, "email_taken")
+
+
+def test_normal_user_not_forced_to_change_password(client):
+    reg(client)
+    v = login(client).json()
+    assert v["must_change_password"] is False and v["password_generated"] is False
+
+
+def test_change_password_clears_flags_and_keeps_current_session_only(client):
+    uid = create(client, generate=True).json()["user_id"]
+    pw = create(client, "x@example.com", generate=True)  # посторонний пользователь не затрагивается
+    other = login(client, "x@example.com", pw.json()["password"]).json()["token"]
+    pw1 = client.post(f"{P}/users/{uid}/reset-password").json()["password"]
+    t1 = login(client, "emp@example.com", pw1).json()["token"]
+    t2 = login(client, "emp@example.com", pw1).json()["token"]
+    # при must_change_password текущий пароль не обязателен
+    r = client.post(f"{P}/users/{uid}/password", json={"new": "brand-new-pass-1", "keep_token": t1})
+    assert r.status_code == 200 and r.json()["must_change_password"] is False
+    assert client.post(f"{P}/session", json={"token": t1}).status_code == 200
+    assert client.post(f"{P}/session", json={"token": t2}).status_code == 401
+    assert client.post(f"{P}/session", json={"token": other}).status_code == 200
+    s = login(client, "emp@example.com", "brand-new-pass-1").json()
+    assert s["must_change_password"] is False and s["password_generated"] is False
+    assert login(client, "emp@example.com", pw1).status_code == 401
+
+
+def test_change_password_requires_current_when_not_forced(client):
+    uid = reg(client).json()["user_id"]
+    r = client.post(f"{P}/users/{uid}/password", json={"new": "another-pass-1"})
+    assert (r.status_code, r.json()["detail"]["code"]) == (403, "invalid_current_password")
+    r = client.post(f"{P}/users/{uid}/password", json={"current": "wrong-pass-1", "new": "another-pass-1"})
+    assert r.status_code == 403
+    assert client.post(f"{P}/users/{uid}/password", json={"current": PWD, "new": "short"}).status_code == 422
+    assert client.post(f"{P}/users/{uid}/password", json={"current": PWD, "new": "another-pass-1"}).status_code == 200
+    assert login(client, pwd="another-pass-1").status_code == 200
+    assert login(client).status_code == 401
+
+
+def test_change_password_lockout(client):
+    uid = reg(client).json()["user_id"]
+    for _ in range(5):
+        assert client.post(f"{P}/users/{uid}/password", json={"current": "bad-pass-123", "new": "another-pass-1"}).status_code == 403
+    r = client.post(f"{P}/users/{uid}/password", json={"current": PWD, "new": "another-pass-1"})
+    assert r.status_code == 429
+
+
+def test_change_password_unknown_and_ecp_only_user(client):
+    assert client.post(f"{P}/users/nope/password", json={"current": PWD, "new": "another-pass-1"}).status_code == 404
+    uid = _uid(client)
+    r = client.post(f"{P}/users/{uid}/password", json={"current": PWD, "new": "another-pass-1"})
+    assert (r.status_code, r.json()["detail"]["code"]) == (409, "no_email")
+
+
+def test_reset_password_generates_new_forces_change_and_revokes_sessions(client):
+    uid = reg(client).json()["user_id"]
+    tok = login(client).json()["token"]
+    r = client.post(f"{P}/users/{uid}/reset-password")
+    assert r.status_code == 200
+    pw = r.json()["password"]
+    assert len(pw) == 14 and pw != PWD
+    assert client.post(f"{P}/session", json={"token": tok}).status_code == 401
+    assert login(client).status_code == 401  # старый пароль не работает
+    s = login(client, pwd=pw).json()
+    assert s["must_change_password"] is True and s["password_generated"] is True
+    assert client.post(f"{P}/users/nope/reset-password").status_code == 404
+
+
+def test_revoke_sessions_keeps_tokens(client):
+    uid = reg(client).json()["user_id"]
+    a, b = login(client).json()["token"], login(client).json()["token"]
+    t = client.post(f"{P}/users/{uid}/tokens", json={"name": "k"}).json()["token"]
+    r = client.post(f"{P}/users/{uid}/revoke-sessions")
+    assert r.status_code == 200 and r.json()["revoked"] == 2
+    assert client.post(f"{P}/session", json={"token": a}).status_code == 401
+    assert client.post(f"{P}/session", json={"token": b}).status_code == 401
+    assert client.post(f"{P}/tokens/verify", json={"token": t}).status_code == 200
+    assert login(client).status_code == 200  # пользователь может войти снова
+    assert client.post(f"{P}/users/nope/revoke-sessions").status_code == 404
+
+
+def test_delete_user_removes_sessions_tokens_and_login(client):
+    uid = reg(client).json()["user_id"]
+    tok = login(client).json()["token"]
+    t = client.post(f"{P}/users/{uid}/tokens", json={"name": "k"}).json()["token"]
+    client.post(f"{P}/users/{uid}/signatures", json={"external_id": "sig-del"})
+    assert client.delete(f"{P}/users/{uid}").status_code == 204
+    assert client.post(f"{P}/session", json={"token": tok}).status_code == 401
+    assert client.post(f"{P}/tokens/verify", json={"token": t}).status_code == 401
+    assert login(client).status_code == 401
+    assert client.get(f"{P}/users/{uid}/methods").status_code == 404
+    assert client.delete(f"{P}/users/{uid}").status_code == 404
+    # email можно занять заново, подпись освободилась
+    assert reg(client).status_code == 201
+    assert client.post(f"{P}/users/external", json={"external_id": "sig-del"}).json()["created"] is True
+
+
+def test_email_password_for_ecp_director(client):
+    uid = _uid(client)
+    r = client.post(f"{P}/users/{uid}/email-password", json={"email": "Dir@Example.com", "password": PWD})
+    assert r.status_code == 200 and r.json()["email"] == "dir@example.com"
+    assert [s["id"] for s in r.json()["signatures"]] == ["sig-1"]  # сертификат остаётся
+    s = login(client, "dir@example.com").json()
+    assert s["must_change_password"] is False
+    again = client.post(f"{P}/users/{uid}/email-password", json={"email": "z@example.com", "password": PWD})
+    assert (again.status_code, again.json()["detail"]["code"]) == (409, "email_exists")
+
+
+def test_email_password_validation_and_taken(client):
+    reg(client)
+    uid = _uid(client)
+    assert client.post(f"{P}/users/{uid}/email-password", json={"email": "bad", "password": PWD}).status_code == 422
+    assert client.post(f"{P}/users/{uid}/email-password", json={"email": "a@b.co", "password": "x"}).status_code == 422
+    r = client.post(f"{P}/users/{uid}/email-password", json={"email": "user@example.com", "password": PWD})
+    assert (r.status_code, r.json()["detail"]["code"]) == (409, "email_taken")
+    assert client.post(f"{P}/users/nope/email-password", json={"email": "a@b.co", "password": PWD}).status_code == 404
+
+
+def test_sessions_issue_and_session_include_flags(client):
+    uid = create(client, generate=True).json()["user_id"]
+    v = client.post(f"{P}/sessions/issue", json={"user_id": uid}).json()
+    assert v["must_change_password"] is True and v["password_generated"] is True
+    s = client.post(f"{P}/session", json={"token": v["token"]}).json()
+    assert s["has_email"] is True and s["must_change_password"] is True
+
+
+def test_tokens_of_several_users(client):
+    a = reg(client).json()["user_id"]
+    b = reg(client, "b@example.com").json()["user_id"]
+    c = reg(client, "c@example.com").json()["user_id"]
+    ta = client.post(f"{P}/users/{a}/tokens", json={"name": "A"}).json()
+    client.post(f"{P}/users/{b}/tokens", json={"name": "B"})
+    client.post(f"{P}/users/{c}/tokens", json={"name": "C"})
+    items = client.get(f"{P}/tokens", params={"user_ids": f"{a},{b}"}).json()["items"]
+    assert sorted(i["name"] for i in items) == ["A", "B"]
+    assert all("token" not in i and i["user_id"] in (a, b) for i in items)
+    assert next(i for i in items if i["id"] == ta["id"])["prefix"] == ta["prefix"]
+    assert client.get(f"{P}/tokens", params={"user_ids": ""}).json() == {"items": []}
+
+
+def test_migration_adds_role_columns(db_path):
+    import os
+    os.makedirs(os.path.dirname(db_path))
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE users(id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,"
+                 " salt BLOB NOT NULL, pwd_hash BLOB NOT NULL, created_at REAL NOT NULL)")
+    salt = b"s" * 16
+    conn.execute("INSERT INTO users VALUES('u1','old@example.com',?,?,0)", (salt, auth_app.hash_password(PWD, salt)))
+    conn.commit(); conn.close()
+    c = TestClient(auth_app.app)
+    v = login(c, "old@example.com").json()
+    assert v["must_change_password"] is False and v["password_generated"] is False
+    cols = [r[1] for r in sqlite3.connect(db_path).execute("PRAGMA table_info(users)")]
+    assert "must_change_password" in cols and "password_generated" in cols
+
+
+def test_generate_password_properties():
+    seen = {auth_app.generate_password() for _ in range(200)}
+    assert len(seen) == 200
+    for pw in seen:
+        assert len(pw) == 14 and any(c.isdigit() for c in pw) and any(c.isupper() for c in pw) and any(c.islower() for c in pw)

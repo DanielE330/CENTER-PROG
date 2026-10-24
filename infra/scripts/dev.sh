@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Запуск без Docker: auth :8001, parser :8002, gov :8003, ecp :8007, onec :8004, edo :8005, bank :8006, integrator :8008, demo_feed :8012, llm_gateway :8010, advisor :8011,
+# Запуск без Docker: auth :8001, parser :8002, gov :8003, ecp :8007, onec :8004, edo :8005, bank :8006, integrator :8008, demo_feed :8012, llm_gateway :8010, advisor :8011, backoffice :8013,
 # Rust: ledger :3002, forecast :3003, planfact :3004, api :3000 (+ internal :3100). Остановка: infra/scripts/dev.sh stop
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -7,7 +7,7 @@ RUN=data/run; mkdir -p "$RUN"
 if [ "${1:-}" = "stop" ]; then
   for f in "$RUN"/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true; rm -f "$f"; done
   # uv запускает uvicorn дочерним процессом: добиваем сервисы по портам
-  for port in 3000 3100 3002 3003 3004 8001 8002 8003 8004 8005 8006 8007 8008 8010 8011 8012; do
+  for port in 3000 3100 3002 3003 3004 8001 8002 8003 8004 8005 8006 8007 8008 8010 8011 8012 8013; do
     pid=$(ss -ltnp 2>/dev/null | grep ":$port " | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2 || true)
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   done
@@ -46,10 +46,14 @@ echo $! >$RUN/planfact.pid
  echo $! >$ROOT/$RUN/llm_gateway.pid)
 (cd backend/services && LLM_GATEWAY_URL=http://127.0.0.1:8010 LEDGER_URL=$LEDGER_URL FORECAST_URL=$FORECAST_URL PLANFACT_URL=$PLANFACT_URL setsid nohup uv run uvicorn advisor.app:app --host 127.0.0.1 --port 8011 >$ROOT/$RUN/advisor.log 2>&1 < /dev/null &
  echo $! >$ROOT/$RUN/advisor.pid)
+# backoffice (:8013): панель оператора платформы (/operator). Первый оператор: OPERATOR_EMAIL и OPERATOR_PASSWORD в окружении оболочки
+# (создаётся при старте, если такого email ещё нет) или `cd backend/services && BACKOFFICE_DB=../../data/run/backoffice.db uv run python -m backoffice.create_operator <email>`.
+(cd backend/services && BACKOFFICE_DB=$ROOT/$RUN/backoffice.db AUTH_URL=http://127.0.0.1:8001 LEDGER_URL=$LEDGER_URL FORECAST_URL=$FORECAST_URL setsid nohup uv run uvicorn backoffice.app:app --host 127.0.0.1 --port 8013 >$ROOT/$RUN/backoffice.log 2>&1 < /dev/null &
+ echo $! >$ROOT/$RUN/backoffice.pid)
 sleep 1
 WEB_DIR=frontend/dist LEDGER_URL=$LEDGER_URL FORECAST_URL=$FORECAST_URL PLANFACT_URL=$PLANFACT_URL \
   AUTH_URL=http://127.0.0.1:8001 PARSER_URL=http://127.0.0.1:8002 GOV_URL=http://127.0.0.1:8003 ECP_URL=http://127.0.0.1:8007 INTEGRATOR_URL=http://127.0.0.1:8008 \
-  ADVISOR_URL=http://127.0.0.1:8011 DEMO_FEED_URL=http://127.0.0.1:8012 DEMO_FEED_ENABLED=${DEMO_FEED_ENABLED:-1} \
+  ADVISOR_URL=http://127.0.0.1:8011 DEMO_FEED_URL=http://127.0.0.1:8012 DEMO_FEED_ENABLED=${DEMO_FEED_ENABLED:-1} BACKOFFICE_URL=http://127.0.0.1:8013 \
   setsid nohup $BIN/api >$RUN/api.log 2>&1 < /dev/null &
 echo $! >$RUN/api.pid
 sleep 3; curl -fsS localhost:3000/live && echo " -> http://localhost:3000  (demo@example.com / demo12345)"

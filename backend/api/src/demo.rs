@@ -9,7 +9,7 @@
 //! Для всех остальных `status` отвечает `{"enabled": false}`, а `advance-week` — 403 `demo_disabled`.
 
 use crate::AppState;
-use crate::http::Principal;
+use crate::http::{Editor, Principal, Reader};
 use axum::{
     Json,
     extract::{Path, State},
@@ -90,7 +90,7 @@ fn feed_path(kind: &str, ext: &str, after: Option<NaiveDate>) -> String {
 }
 
 /// GET .../demo/status
-pub async fn status(State(st): State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>) -> R<Json<Value>> {
+pub async fn status(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(cid): Path<String>) -> R<Json<Value>> {
     if p.company_id != cid {
         return Err(err(StatusCode::NOT_FOUND, "not_found", "Не найдено"));
     }
@@ -113,7 +113,7 @@ pub async fn status(State(st): State<AppState>, p: Principal, ctx: Ctx, Path(cid
 static STEP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// POST .../demo/advance-week -> {added, from, to, new_as_of, ...}
-pub async fn advance_week(State(st): State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>) -> R<(StatusCode, Json<Value>)> {
+pub async fn advance_week(State(st): State<AppState>, Editor(p): Editor, ctx: Ctx, Path(cid): Path<String>) -> R<(StatusCode, Json<Value>)> {
     guard(&st, &p, &cid)?;
     let actx = actor_ctx(&ctx, &p);
     let _one_at_a_time = STEP.lock().await;

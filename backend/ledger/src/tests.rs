@@ -482,3 +482,269 @@ async fn bulk_events_validation_and_unknown_company() {
     let (s, _) = call(&e.app, "POST", "/internal/v1/companies/no-such/expected-events/bulk", Some(json!({"events": [bulk_item("a", 1)]}))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+// ---------- роли: участники компании ----------
+async fn ensure_full(app: &Router, owner: &str, name: &str) -> Value {
+    let (s, v) = call(app, "POST", "/internal/v1/companies/ensure", Some(json!({"owner_id": owner, "email": format!("{owner}@x.ru"), "name": name}))).await;
+    assert_eq!(s, StatusCode::OK);
+    v
+}
+
+async fn add_member(app: &Router, cid: &str, uid: &str, role: &str) -> (StatusCode, Value) {
+    call(app, "POST", &format!("/internal/v1/companies/{cid}/members"), Some(json!({"user_id": uid, "email": format!("{uid}@x.ru"), "role": role}))).await
+}
+
+#[tokio::test]
+async fn ensure_creates_director_membership() {
+    let e = env().await;
+    let v = ensure_full(&e.app, "dir1", "Ромашка").await;
+    assert_eq!((v["role"].as_str(), v["banned"].as_bool()), (Some("director"), Some(false)));
+    let cid = v["company_id"].as_str().unwrap();
+    let (s, m) = call(&e.app, "GET", "/internal/v1/members/by-user/dir1", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!((m["company_id"].as_str(), m["company_name"].as_str(), m["role"].as_str(), m["banned"].as_bool()), (Some(cid), Some("Ромашка"), Some("director"), Some(false)));
+    let (_, l) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/members"), None).await;
+    assert_eq!(l["items"].as_array().unwrap().len(), 1);
+    assert_eq!((l["items"][0]["user_id"].as_str(), l["items"][0]["role"].as_str(), l["items"][0]["email"].as_str()), (Some("dir1"), Some("director"), Some("dir1@x.ru")));
+    // повторный ensure идемпотентен
+    assert_eq!(ensure_full(&e.app, "dir1", "Другое имя").await["company_id"], cid);
+    let (s, _) = call(&e.app, "GET", "/internal/v1/members/by-user/ghost", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn members_crud_and_ensure_does_not_create_company_for_employee() {
+    let e = env().await;
+    let cid = ensure_full(&e.app, "dir1", "Ромашка").await["company_id"].as_str().unwrap().to_string();
+    let (s, v) = add_member(&e.app, &cid, "emp1", "editor").await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["role"], "editor");
+    add_member(&e.app, &cid, "emp2", "viewer").await;
+
+    // сотрудник при входе попадает в компанию директора, новая не создаётся
+    let v = ensure_full(&e.app, "emp1", "Своя компания").await;
+    assert_eq!((v["company_id"].as_str(), v["role"].as_str(), v["company_name"].as_str()), (Some(cid.as_str()), Some("editor"), Some("Ромашка")));
+    let (_, all) = call(&e.app, "GET", "/internal/v1/admin/companies", None).await;
+    assert_eq!(all["total"], 1);
+
+    let (_, l) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/members"), None).await;
+    let roles: Vec<_> = l["items"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["director", "editor", "viewer"]);
+
+    let (s, p) = call(&e.app, "PATCH", &format!("/internal/v1/companies/{cid}/members/emp1"), Some(json!({"role": "viewer"}))).await;
+    assert_eq!((s, p["role"].as_str()), (StatusCode::OK, Some("viewer")));
+    assert_eq!(call(&e.app, "GET", "/internal/v1/members/by-user/emp1", None).await.1["role"], "viewer");
+
+    let (s, _) = call(&e.app, "DELETE", &format!("/internal/v1/companies/{cid}/members/emp2"), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(call(&e.app, "GET", "/internal/v1/members/by-user/emp2", None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&e.app, "DELETE", &format!("/internal/v1/companies/{cid}/members/emp2"), None).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn director_cannot_be_removed_or_demoted_and_validation() {
+    let e = env().await;
+    let cid = ensure_full(&e.app, "dir1", "К").await["company_id"].as_str().unwrap().to_string();
+    let (s, v) = call(&e.app, "DELETE", &format!("/internal/v1/companies/{cid}/members/dir1"), None).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::CONFLICT, Some("cannot_remove_director")));
+    for role in ["viewer", "editor", "director"] {
+        let (s, v) = call(&e.app, "PATCH", &format!("/internal/v1/companies/{cid}/members/dir1"), Some(json!({"role": role}))).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::CONFLICT, Some("cannot_change_director")), "{role}");
+    }
+    // второго директора добавить нельзя; неизвестная роль отвергается
+    for role in ["director", "admin", ""] {
+        let (s, v) = add_member(&e.app, &cid, "x1", role).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_role")), "{role}");
+    }
+    assert_eq!(add_member(&e.app, &cid, "emp", "viewer").await.0, StatusCode::CREATED);
+    let (s, v) = add_member(&e.app, &cid, "emp", "editor").await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::CONFLICT, Some("member_exists")));
+    // директор уже состоит в компании: добавить его как сотрудника нельзя
+    assert_eq!(add_member(&e.app, &cid, "dir1", "viewer").await.0, StatusCode::CONFLICT);
+    let (s, v) = call(&e.app, "PATCH", &format!("/internal/v1/companies/{cid}/members/emp"), Some(json!({"role": "director"}))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_role")));
+    // неизвестная компания и чужой участник
+    assert_eq!(add_member(&e.app, "nope", "z", "viewer").await.0, StatusCode::NOT_FOUND);
+    let other = ensure_full(&e.app, "dir2", "Другая").await["company_id"].as_str().unwrap().to_string();
+    assert_eq!(call(&e.app, "PATCH", &format!("/internal/v1/companies/{other}/members/emp"), Some(json!({"role": "editor"}))).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&e.app, "DELETE", &format!("/internal/v1/companies/{other}/members/emp"), None).await.0, StatusCode::NOT_FOUND);
+    // email директора можно обновить (после установки пароля), роль остаётся
+    let (s, v) = call(&e.app, "PATCH", &format!("/internal/v1/companies/{cid}/members/dir1"), Some(json!({"email": "New@X.ru"}))).await;
+    assert_eq!((s, v["email"].as_str(), v["role"].as_str()), (StatusCode::OK, Some("new@x.ru"), Some("director")));
+}
+
+#[tokio::test]
+async fn members_limit() {
+    let e = env().await;
+    let cid = ensure_full(&e.app, "dir1", "К").await["company_id"].as_str().unwrap().to_string();
+    for i in 1..crate::members::MAX_MEMBERS {
+        assert_eq!(add_member(&e.app, &cid, &format!("e{i}"), "viewer").await.0, StatusCode::CREATED);
+    }
+    let (s, v) = add_member(&e.app, &cid, "one-more", "viewer").await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::CONFLICT, Some("too_many_members")));
+}
+
+#[test]
+fn old_database_gets_director_members_and_ban_columns() {
+    let dir = std::env::temp_dir().join(format!("ledger-old-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("old.db");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        // схема до ролей: ни inn/ogrn, ни company_members, ни banned_*
+        c.execute_batch(
+            "CREATE TABLE companies(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, data_revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+             INSERT INTO companies(id, owner_id, name, created_at) VALUES('c1','owner-1','Старая','2026-01-01T00:00:00+00:00');
+             INSERT INTO companies(id, owner_id, name, created_at) VALUES('c2','owner-2','Вторая','2026-02-01T00:00:00+00:00');",
+        )
+        .unwrap();
+    }
+    let db = db::open(path.to_str().unwrap());
+    {
+        let c = db.lock().unwrap();
+        let rows: Vec<(String, String, String)> = c
+            .prepare("SELECT company_id, user_id, role FROM company_members ORDER BY company_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(rows, vec![("c1".into(), "owner-1".into(), "director".into()), ("c2".into(), "owner-2".into(), "director".into())]);
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM companies WHERE banned_at IS NULL AND ban_reason IS NULL", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+    }
+    drop(db);
+    // повторное открытие ничего не ломает и не дублирует
+    let db = db::open(path.to_str().unwrap());
+    assert_eq!(db.lock().unwrap().query_row("SELECT COUNT(*) FROM company_members", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn old_director_is_found_by_user_and_email_is_filled_on_ensure() {
+    let dir = std::env::temp_dir().join(format!("ledger-old2-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("old.db");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE companies(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, data_revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+             INSERT INTO companies(id, owner_id, name, created_at) VALUES('c1','owner-1','Старая','2026-01-01T00:00:00+00:00');",
+        )
+        .unwrap();
+    }
+    let st = AppState { db: db::open(path.to_str().unwrap()), parser: Upstream::new("parser", "p", "http://127.0.0.1:1", 1) };
+    let app = build(st);
+    let (s, m) = call(&app, "GET", "/internal/v1/members/by-user/owner-1", None).await;
+    assert_eq!((s, m["company_id"].as_str(), m["role"].as_str()), (StatusCode::OK, Some("c1"), Some("director")));
+    let (_, l) = call(&app, "GET", "/internal/v1/companies/c1/members", None).await;
+    assert_eq!(l["items"][0]["email"], "");
+    ensure_full(&app, "owner-1", "x").await;
+    let (_, l) = call(&app, "GET", "/internal/v1/companies/c1/members", None).await;
+    assert_eq!(l["items"][0]["email"], "owner-1@x.ru");
+    drop(app);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---------- оператор: метаданные, блокировка ----------
+#[tokio::test]
+async fn admin_list_has_aggregates_filters_and_no_company_data() {
+    let e = env().await;
+    let a = ensure_full(&e.app, "dir1", "Ромашка").await["company_id"].as_str().unwrap().to_string();
+    let b = ensure_full(&e.app, "dir2", "Василёк").await["company_id"].as_str().unwrap().to_string();
+    add_member(&e.app, &a, "emp1", "editor").await;
+    import_confirmed(&e.app, &a, "a.csv", base_txs()).await;
+    call(&e.app, "POST", &format!("/internal/v1/companies/{a}/expected-events"), Some(json!({"date": Local::now().date_naive().to_string(), "amount_kop": "1000", "direction": "in", "title": "Секретный платёж"}))).await;
+
+    let (s, l) = call(&e.app, "GET", "/internal/v1/admin/companies", None).await;
+    assert_eq!((s, l["total"].as_i64()), (StatusCode::OK, Some(2)));
+    let item = l["items"].as_array().unwrap().iter().find(|c| c["id"] == a.as_str()).unwrap();
+    assert_eq!((item["name"].as_str(), item["members_count"].as_i64(), item["transactions_count"].as_i64(), item["events_count"].as_i64()), (Some("Ромашка"), Some(2), Some(4), Some(1)));
+    assert_eq!((item["last_transaction_date"].as_str(), item["banned"].as_bool(), item["director_email"].as_str()), (Some("2026-03-04"), Some(false), Some("dir1@x.ru")));
+    assert!(item["last_import_at"].as_str().is_some() && item["created_at"].as_str().is_some());
+    let empty = l["items"].as_array().unwrap().iter().find(|c| c["id"] == b.as_str()).unwrap();
+    assert_eq!((empty["transactions_count"].as_i64(), empty["last_transaction_date"].is_null(), empty["last_import_at"].is_null()), (Some(0), true, true));
+    // содержимое данных компании в ответах оператора отсутствует
+    let raw = l.to_string();
+    for secret in ["Секретный", "Заказчик", "Аренда", "Оплата по договору", "purpose", "counterparty"] {
+        assert!(!raw.contains(secret), "{secret}");
+    }
+
+    // поиск (в том числе кириллица в другом регистре) и пагинация
+    let (_, q) = call(&e.app, "GET", "/internal/v1/admin/companies?query=%D1%80%D0%BE%D0%BC%D0%B0%D0%A8", None).await; // «ромаШ»
+    assert_eq!((q["total"].as_i64(), q["items"][0]["id"].as_str()), (Some(1), Some(a.as_str())));
+    let (_, q) = call(&e.app, "GET", "/internal/v1/admin/companies?query=dir2%40x", None).await;
+    assert_eq!(q["items"][0]["id"], b.as_str());
+    let (_, q) = call(&e.app, "GET", "/internal/v1/admin/companies?limit=1&offset=1", None).await;
+    assert_eq!((q["total"].as_i64(), q["items"].as_array().unwrap().len()), (Some(2), 1));
+    assert_eq!(call(&e.app, "GET", "/internal/v1/admin/companies?banned=maybe", None).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn ban_unban_flow_visible_to_members_lookup() {
+    let e = env().await;
+    let cid = ensure_full(&e.app, "dir1", "Ромашка").await["company_id"].as_str().unwrap().to_string();
+    add_member(&e.app, &cid, "emp1", "viewer").await;
+
+    let (s, v) = call(&e.app, "POST", &format!("/internal/v1/admin/companies/{cid}/ban"), Some(json!({"reason": "  Нарушение условий  "}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["banned"].as_bool(), v["ban_reason"].as_str()), (Some(true), Some("Нарушение условий")));
+    let banned_at = v["banned_at"].as_str().unwrap().to_string();
+    // участники (user_id нужны backoffice для закрытия сессий)
+    let ids: Vec<_> = v["members"].as_array().unwrap().iter().map(|m| m["user_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["dir1", "emp1"]);
+
+    for uid in ["dir1", "emp1"] {
+        let (_, m) = call(&e.app, "GET", &format!("/internal/v1/members/by-user/{uid}"), None).await;
+        assert_eq!((m["banned"].as_bool(), m["ban_reason"].as_str()), (Some(true), Some("Нарушение условий")), "{uid}");
+    }
+    assert_eq!(ensure_full(&e.app, "dir1", "x").await["banned"], true);
+    let (_, l) = call(&e.app, "GET", "/internal/v1/admin/companies?banned=true", None).await;
+    assert_eq!(l["total"], 1);
+    assert_eq!(call(&e.app, "GET", "/internal/v1/admin/companies?banned=false", None).await.1["total"], 0);
+
+    // повторная блокировка обновляет причину, момент не меняется
+    let (_, v2) = call(&e.app, "POST", &format!("/internal/v1/admin/companies/{cid}/ban"), Some(json!({"reason": "Другая причина"}))).await;
+    assert_eq!((v2["banned_at"].as_str(), v2["ban_reason"].as_str()), (Some(banned_at.as_str()), Some("Другая причина")));
+    let (_, g) = call(&e.app, "GET", &format!("/internal/v1/admin/companies/{cid}"), None).await;
+    assert_eq!(g["banned"], true);
+
+    let (s, v) = call(&e.app, "POST", &format!("/internal/v1/admin/companies/{cid}/unban"), None).await;
+    assert_eq!((s, v["banned"].as_bool(), v["ban_reason"].is_null()), (StatusCode::OK, Some(false), true));
+    let (_, m) = call(&e.app, "GET", "/internal/v1/members/by-user/emp1", None).await;
+    assert_eq!(m["banned"], false);
+}
+
+#[tokio::test]
+async fn ban_validation_and_unknown_company() {
+    let e = env().await;
+    let cid = ensure_full(&e.app, "dir1", "К").await["company_id"].as_str().unwrap().to_string();
+    for reason in ["", "   "] {
+        let (s, v) = call(&e.app, "POST", &format!("/internal/v1/admin/companies/{cid}/ban"), Some(json!({"reason": reason}))).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_reason")));
+    }
+    let (s, _) = call(&e.app, "POST", &format!("/internal/v1/admin/companies/{cid}/ban"), Some(json!({"reason": "я".repeat(501)}))).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(call(&e.app, "POST", "/internal/v1/admin/companies/nope/ban", Some(json!({"reason": "x"}))).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&e.app, "POST", "/internal/v1/admin/companies/nope/unban", None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&e.app, "GET", "/internal/v1/admin/companies/nope", None).await.0, StatusCode::NOT_FOUND);
+    // блокировка не трогает данные компании
+    import_confirmed(&e.app, &cid, "a.csv", base_txs()).await;
+    call(&e.app, "POST", &format!("/internal/v1/admin/companies/{cid}/ban"), Some(json!({"reason": "x"}))).await;
+    let (_, t) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/transactions"), None).await;
+    assert_eq!(t["total"], 4);
+}
+
+#[tokio::test]
+async fn admin_stats_counts_companies() {
+    let e = env().await;
+    let a = ensure_full(&e.app, "dir1", "А").await["company_id"].as_str().unwrap().to_string();
+    ensure_full(&e.app, "dir2", "Б").await;
+    add_member(&e.app, &a, "emp1", "viewer").await;
+    call(&e.app, "POST", &format!("/internal/v1/admin/companies/{a}/ban"), Some(json!({"reason": "x"}))).await;
+    let (s, v) = call(&e.app, "GET", "/internal/v1/admin/stats", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        (v["companies_total"].as_i64(), v["companies_banned"].as_i64(), v["companies_active"].as_i64(), v["new_7d"].as_i64(), v["new_30d"].as_i64(), v["members_total"].as_i64()),
+        (Some(2), Some(1), Some(1), Some(2), Some(2), Some(3))
+    );
+}

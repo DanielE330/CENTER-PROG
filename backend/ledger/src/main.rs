@@ -1,7 +1,9 @@
 //! ledger: единственный владелец ledger.db — компании, импорты (staging + parser), операции,
 //! ожидаемые события, ревизия данных и аудит. Внутренний HTTP API (без cookie-сессий).
 
+mod admin;
 mod db;
+mod members;
 mod routes;
 #[cfg(test)]
 mod tests;
@@ -34,6 +36,14 @@ pub fn build(st: AppState) -> Router {
     let co = "/internal/v1/companies/{cid}";
     Router::new()
         .route("/internal/v1/companies/ensure", post(ensure_company))
+        .route("/internal/v1/members/by-user/{uid}", get(members::by_user))
+        .route("/internal/v1/admin/companies", get(admin::list_companies))
+        .route("/internal/v1/admin/companies/{cid}", get(admin::get_company))
+        .route("/internal/v1/admin/companies/{cid}/ban", post(admin::ban))
+        .route("/internal/v1/admin/companies/{cid}/unban", post(admin::unban))
+        .route("/internal/v1/admin/stats", get(admin::stats))
+        .route(&format!("{co}/members"), get(members::list_members).post(members::add_member))
+        .route(&format!("{co}/members/{{uid}}"), patch(members::patch_member).delete(members::delete_member))
         .route(co, get(get_company).patch(update_company))
         .route(&format!("{co}/snapshot"), get(snapshot))
         .route(&format!("{co}/imports"), get(list_imports).post(upload_import).layer(DefaultBodyLimit::max(26 * 1024 * 1024)))

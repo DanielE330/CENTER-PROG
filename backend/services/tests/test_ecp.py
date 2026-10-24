@@ -169,3 +169,32 @@ def test_signing_time_must_be_recent(tmp_path):
     with pytest.raises(cades.EcpError) as e:
         cades.parse_signer(sig, now=now + 3600)  # подпись «из прошлого» (повтор старой подписи)
     assert e.value.code == "signature_time_invalid"
+
+
+# ---------- роли: директор по ЭЦП обязан задать пароль ----------
+def test_new_ecp_director_has_no_password_and_must_set_one(client, tmp_path):
+    _, r = login(client, tmp_path)
+    v = r.json()
+    assert v["new"] is True and v["has_email"] is False and v["password_required"] is True
+    assert v["must_change_password"] is False
+    # сессия из ecp/login работает, но пароля у пользователя нет: войти по email нельзя
+    assert client.authsvc.post(f"{P}/login", json={"email": v["email"], "password": "anything-123"}).status_code == 401
+    s = client.authsvc.post(f"{P}/session", json={"token": v["token"]}).json()
+    assert s["has_email"] is False
+
+
+def test_set_credentials_after_ecp_registration_keeps_certificate(client, tmp_path):
+    _, r = login(client, tmp_path)
+    uid = r.json()["user_id"]
+    m = client.authsvc.post(f"{P}/users/{uid}/email-password", json={"email": "dir@example.com", "password": "director-pass-1"})
+    assert m.status_code == 200 and m.json()["email"] == "dir@example.com" and len(m.json()["signatures"]) == 1
+    assert client.authsvc.post(f"{P}/login", json={"email": "dir@example.com", "password": "director-pass-1"}).status_code == 200
+    # повторный вход по тому же сертификату: тот же пользователь, пароль уже есть
+    ch = client.post(f"{P}/ecp/challenge").json()["challenge"]
+    (tmp_path / "m").write_bytes(ch.encode())
+    subprocess.run(["openssl", "cms", "-sign", "-binary", "-in", tmp_path / "m", "-signer", tmp_path / "c.pem",
+                    "-inkey", tmp_path / "k.pem", "-outform", "DER", "-out", tmp_path / "m2.sgn"], check=True, capture_output=True)
+    sig = base64.b64encode((tmp_path / "m2.sgn").read_bytes()).decode()
+    again = client.post(f"{P}/ecp/login", json={"challenge": ch, "signature": sig}).json()
+    assert again["user_id"] == uid and again["new"] is False
+    assert again["has_email"] is True and again["password_required"] is False and again["email"] == "dir@example.com"

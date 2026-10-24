@@ -4,7 +4,7 @@
 use crate::AppState;
 use axum::{
     Json,
-    extract::{FromRequestParts, Path, Request},
+    extract::{FromRequestParts, Path, Query, Request},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
@@ -13,6 +13,67 @@ use common::{ApiError, Ctx, R, Reply, Snapshot, Tx, Upstream, err, internal};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+
+// ---------- роли и права ----------
+/// Роль участника компании. Незнакомая роль трактуется как `Viewer` (минимум прав).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Role {
+    Director,
+    Editor,
+    Viewer,
+}
+
+/// Право: `Read` (GET и вычисляющие POST), `Edit` (любое изменение данных компании), `Manage` (только директор).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Perm {
+    Read,
+    Edit,
+    Manage,
+}
+
+impl Role {
+    pub fn parse(s: &str) -> Role {
+        match s {
+            "director" => Role::Director,
+            "editor" => Role::Editor,
+            _ => Role::Viewer,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Director => "director",
+            Role::Editor => "editor",
+            Role::Viewer => "viewer",
+        }
+    }
+    pub fn can(self, perm: Perm) -> bool {
+        match perm {
+            Perm::Read => true,
+            Perm::Edit => self != Role::Viewer,
+            Perm::Manage => self == Role::Director,
+        }
+    }
+    pub fn permissions(self) -> Value {
+        json!({"read": self.can(Perm::Read), "edit": self.can(Perm::Edit), "manage": self.can(Perm::Manage)})
+    }
+}
+
+pub fn forbidden() -> ApiError {
+    err(StatusCode::FORBIDDEN, "forbidden", "Недостаточно прав для этого действия")
+}
+
+fn banned_error(reason: Option<&str>) -> ApiError {
+    let msg = match reason.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => format!("Компания заблокирована оператором: {r}"),
+        None => "Компания заблокирована оператором".to_string(),
+    };
+    err(StatusCode::FORBIDDEN, "company_banned", msg)
+}
+
+/// Служебный адрес пользователя только с ЭЦП наружу не отдаётся.
+pub fn public_email(e: &str) -> Option<&str> {
+    (!e.is_empty() && !e.ends_with("@ecp.invalid")).then_some(e)
+}
 
 // ---------- аутентификация ----------
 pub struct Principal {
@@ -24,6 +85,45 @@ pub struct Principal {
     pub company_name: String,
     pub company_inn: String,
     pub company_ogrn: String,
+    /// роль по членству в компании (company_members), а не по owner_id
+    pub role: Role,
+    pub banned: bool,
+    pub ban_reason: Option<String>,
+    pub must_change_password: bool,
+    pub password_generated: bool,
+}
+
+impl Principal {
+    /// Директор, зарегистрированный по ЭЦП, обязан задать email и пароль; пока не задал — доступны только me, logout и set-credentials.
+    pub fn password_required(&self) -> bool {
+        !self.has_email
+    }
+
+    /// Проверка права: иначе 403 `forbidden`.
+    pub fn require(&self, perm: Perm) -> R<()> {
+        if self.role.can(perm) { Ok(()) } else { Err(forbidden()) }
+    }
+
+    /// Общие условия для всех маршрутов, кроме me/logout/set-credentials: компания не заблокирована, пароль задан.
+    fn ensure_active(&self) -> R<()> {
+        if self.banned {
+            return Err(banned_error(self.ban_reason.as_deref()));
+        }
+        if self.password_required() {
+            return Err(err(StatusCode::FORBIDDEN, "password_required", "Задайте email и пароль для входа"));
+        }
+        Ok(())
+    }
+
+    pub fn me_json(&self) -> Value {
+        json!({
+            "user_id": self.user_id, "email": self.has_email.then_some(public_email(&self.email)).flatten(),
+            "company_id": self.company_id, "company_name": self.company_name, "company_inn": self.company_inn, "company_ogrn": self.company_ogrn,
+            "role": self.role.as_str(), "permissions": self.role.permissions(),
+            "must_change_password": self.must_change_password, "password_generated": self.password_generated,
+            "password_required": self.password_required(), "company_banned": self.banned, "ban_reason": self.ban_reason,
+        })
+    }
 }
 
 /// Реквизиты компании, которые ledger знает со слов сертификата ЭЦП.
@@ -34,11 +134,30 @@ pub struct Requisites<'a> {
     pub ogrn: Option<&'a str>,
 }
 
+/// Компания и роль пользователя в ней (ответ ledger `companies/ensure` и `members/by-user`).
 pub struct Company {
     pub id: String,
     pub name: String,
     pub inn: String,
     pub ogrn: String,
+    pub role: Role,
+    pub banned: bool,
+    pub ban_reason: Option<String>,
+}
+
+impl Company {
+    fn from_json(v: &Value) -> Company {
+        let s = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+        Company {
+            id: s("company_id"),
+            name: s("company_name"),
+            inn: s("inn"),
+            ogrn: s("ogrn"),
+            role: Role::parse(v["role"].as_str().unwrap_or("")),
+            banned: v["banned"].as_bool().unwrap_or(false),
+            ban_reason: v["ban_reason"].as_str().map(str::to_string),
+        }
+    }
 }
 
 fn cookie_token(h: &HeaderMap) -> Option<String> {
@@ -46,34 +165,100 @@ fn cookie_token(h: &HeaderMap) -> Option<String> {
     c.split(';').filter_map(|p| p.trim().strip_prefix("session=")).next().map(|s| s.to_string())
 }
 
-/// Компания пользователя в ledger (создаётся при первом обращении).
+/// Компания пользователя при входе: сотруднику возвращается компания директора, новому пользователю создаётся
+/// компания, и он становится её директором (создаёт компанию только вход директора, не сотрудника).
 async fn ensure_company(st: &AppState, ctx: &Ctx, user_id: &str, email: &str, req: Requisites<'_>) -> R<Company> {
     let v = st.ledger.post("/internal/v1/companies/ensure", ctx, &json!({"owner_id": user_id, "email": email, "name": req.name, "inn": req.inn, "ogrn": req.ogrn})).await?;
-    let s = |k: &str| v[k].as_str().unwrap_or_default().to_string();
-    Ok(Company { id: s("company_id"), name: s("company_name"), inn: s("inn"), ogrn: s("ogrn") })
+    Ok(Company::from_json(&v))
 }
 
-async fn principal_of(st: &AppState, ctx: &Ctx, user_id: String, email: String, has_email: bool) -> R<Principal> {
-    let c = ensure_company(st, ctx, &user_id, &email, Requisites::default()).await?;
-    Ok(Principal { user_id, email, has_email, company_id: c.id, company_name: c.name, company_inn: c.inn, company_ogrn: c.ogrn })
+/// Участник по членству; без членства сессия недействительна (компания здесь НЕ создаётся).
+async fn principal_of(st: &AppState, ctx: &Ctx, user_id: String, email: String, has_email: bool, must_change_password: bool, password_generated: bool) -> R<Principal> {
+    let r = st.ledger.json(Method::GET, &format!("/internal/v1/members/by-user/{user_id}"), ctx, None).await?;
+    if r.status == StatusCode::NOT_FOUND {
+        return Err(err(StatusCode::UNAUTHORIZED, "unauthenticated", "Сессия недействительна"));
+    }
+    let c = Company::from_json(&r.into_result()?);
+    Ok(Principal {
+        user_id, email, has_email, company_id: c.id, company_name: c.name, company_inn: c.inn, company_ogrn: c.ogrn,
+        role: c.role, banned: c.banned, ban_reason: c.ban_reason, must_change_password, password_generated,
+    })
 }
 
+async fn load_principal(parts: &mut Parts, st: &AppState) -> R<Principal> {
+    let ctx = Ctx::from_request_parts(parts, st).await.unwrap_or_default();
+    let token = cookie_token(&parts.headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unauthenticated", "Требуется вход"))?;
+    let r = st.auth.json(Method::POST, "/internal/v1/session", &ctx, Some(&json!({"token": token}))).await?;
+    if !r.status.is_success() {
+        return Err(err(StatusCode::UNAUTHORIZED, "unauthenticated", "Сессия недействительна"));
+    }
+    let v = r.json();
+    principal_of(
+        st,
+        &ctx,
+        v["user_id"].as_str().unwrap_or_default().to_string(),
+        v["email"].as_str().unwrap_or_default().to_string(),
+        v["has_email"].as_bool().unwrap_or(true),
+        v["must_change_password"].as_bool().unwrap_or(false),
+        v["password_generated"].as_bool().unwrap_or(false),
+    )
+    .await
+}
+
+/// Обычный участник: сессия действительна, компания не заблокирована, пароль задан. Права проверяют `Reader`/`Editor`/`Manager`.
 impl FromRequestParts<AppState> for Principal {
     type Rejection = ApiError;
     async fn from_request_parts(parts: &mut Parts, st: &AppState) -> R<Self> {
-        let ctx = Ctx::from_request_parts(parts, st).await.unwrap_or_default();
-        let token = cookie_token(&parts.headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unauthenticated", "Требуется вход"))?;
-        let r = st.auth.json(Method::POST, "/internal/v1/session", &ctx, Some(&json!({"token": token}))).await?;
-        if !r.status.is_success() {
-            return Err(err(StatusCode::UNAUTHORIZED, "unauthenticated", "Сессия недействительна"));
-        }
-        let v = r.json();
-        principal_of(st, &ctx, v["user_id"].as_str().unwrap_or_default().to_string(), v["email"].as_str().unwrap_or_default().to_string(), v["has_email"].as_bool().unwrap_or(true)).await
+        let p = load_principal(parts, st).await?;
+        p.ensure_active()?;
+        Ok(p)
     }
 }
 
-/// Доступ внешнего клиента: `Authorization: Bearer ckt_…`. Токен привязан к пользователю, а значит и к его единственной
-/// компании, поэтому идентификатор компании в путях внешнего API не нужен.
+/// Сессия без проверки блокировки и пароля: только для me, logout (cookie) и set-credentials.
+pub struct RawPrincipal(pub Principal);
+
+impl FromRequestParts<AppState> for RawPrincipal {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, st: &AppState) -> R<Self> {
+        Ok(RawPrincipal(load_principal(parts, st).await?))
+    }
+}
+
+macro_rules! perm_extractor {
+    ($(#[$doc:meta])* $name:ident, $perm:expr) => {
+        $(#[$doc])*
+        pub struct $name(pub Principal);
+        impl FromRequestParts<AppState> for $name {
+            type Rejection = ApiError;
+            async fn from_request_parts(parts: &mut Parts, st: &AppState) -> R<Self> {
+                let p = Principal::from_request_parts(parts, st).await?;
+                p.require($perm)?;
+                Ok($name(p))
+            }
+        }
+    };
+}
+
+perm_extractor!(
+    /// Право `read`: любая роль.
+    Reader,
+    Perm::Read
+);
+perm_extractor!(
+    /// Право `edit`: director и editor; viewer получает 403 `forbidden` до разбора тела запроса.
+    Editor,
+    Perm::Edit
+);
+perm_extractor!(
+    /// Право `manage`: только director.
+    Manager,
+    Perm::Manage
+);
+
+/// Доступ внешнего клиента: `Authorization: Bearer ckt_…`. Токен привязан к пользователю, а значит к его единственной
+/// компании, поэтому идентификатор компании в путях внешнего API не нужен. Права токена = права роли владельца
+/// (viewer: scope `read`, editor/director: `write`) и проверяются при каждом запросе, поэтому понижение роли действует сразу.
 pub struct TokenPrincipal(pub Principal);
 
 impl FromRequestParts<AppState> for TokenPrincipal {
@@ -87,7 +272,16 @@ impl FromRequestParts<AppState> for TokenPrincipal {
             return Err(err(StatusCode::UNAUTHORIZED, "invalid_token", "Токен недействителен или отозван"));
         }
         let v = r.json();
-        Ok(TokenPrincipal(principal_of(st, &ctx, v["user_id"].as_str().unwrap_or_default().to_string(), v["email"].as_str().unwrap_or_default().to_string(), true).await?))
+        let p = match principal_of(st, &ctx, v["user_id"].as_str().unwrap_or_default().to_string(), v["email"].as_str().unwrap_or_default().to_string(), true, false, false).await {
+            Ok(p) => p,
+            // владелец токена больше не состоит в компании (удалён): токен аннулирован
+            Err(e) if e.0 == StatusCode::UNAUTHORIZED => return Err(err(StatusCode::UNAUTHORIZED, "invalid_token", "Токен недействителен или отозван")),
+            Err(e) => return Err(e),
+        };
+        if p.banned {
+            return Err(banned_error(p.ban_reason.as_deref()));
+        }
+        Ok(TokenPrincipal(p))
     }
 }
 
@@ -155,8 +349,18 @@ pub async fn login(axum::extract::State(st): axum::extract::State<AppState>, ctx
     }
     let uid = v["user_id"].as_str().unwrap_or_default();
     let email = v["email"].as_str().unwrap_or_default();
+    let token = v["token"].as_str().unwrap_or_default();
+    // сотрудник попадает в компанию директора; компанию создаёт только вход нового пользователя (директора)
     let co = ensure_company(&st, &ctx, uid, email, Requisites { name: c.company_name.as_deref(), ..Default::default() }).await?;
-    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": email, "company_id": co.id, "company_name": co.name})))
+    if co.banned {
+        let _ = auth_call(&st, &ctx, "logout", json!({"token": token})).await; // заблокированной компании сессия не нужна
+        return Err(banned_error(co.ban_reason.as_deref()));
+    }
+    Ok(session_response(&st, token, v["ttl"].as_i64().unwrap_or(3600), json!({
+        "email": email, "company_id": co.id, "company_name": co.name, "role": co.role.as_str(), "permissions": co.role.permissions(),
+        "must_change_password": v["must_change_password"].as_bool().unwrap_or(false), "password_generated": v["password_generated"].as_bool().unwrap_or(false),
+        "password_required": false,
+    })))
 }
 
 #[derive(Deserialize)]
@@ -211,7 +415,18 @@ pub async fn ecp_login(axum::extract::State(st): axum::extract::State<AppState>,
         ogrn: cert["ogrn"].as_str(),
     };
     let co = ensure_company(&st, &ctx, uid, email, requisites).await?;
-    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": v["has_email"].as_bool().unwrap_or(false).then_some(email), "company_id": co.id, "company_name": co.name, "company_inn": co.inn, "company_ogrn": co.ogrn, "ecp": true})))
+    let token = v["token"].as_str().unwrap_or_default();
+    if co.banned {
+        let _ = auth_call(&st, &ctx, "logout", json!({"token": token})).await;
+        return Err(banned_error(co.ban_reason.as_deref()));
+    }
+    let has_email = v["has_email"].as_bool().unwrap_or(false);
+    // новый директор по ЭЦП входит без пароля: до POST /account/set-credentials остальные маршруты отвечают 403 password_required
+    Ok(session_response(&st, token, v["ttl"].as_i64().unwrap_or(3600), json!({
+        "email": has_email.then_some(email), "company_id": co.id, "company_name": co.name, "company_inn": co.inn, "company_ogrn": co.ogrn, "ecp": true,
+        "role": co.role.as_str(), "permissions": co.role.permissions(), "password_required": !has_email,
+        "must_change_password": v["must_change_password"].as_bool().unwrap_or(false), "password_generated": v["password_generated"].as_bool().unwrap_or(false),
+    })))
 }
 
 pub async fn register(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx, Json(mut c): Json<Creds>) -> R<Response> {
@@ -239,21 +454,24 @@ pub async fn logout(axum::extract::State(st): axum::extract::State<AppState>, ct
     Ok(res)
 }
 
-pub async fn me(p: Principal) -> Json<Value> {
-    Json(json!({"email": p.has_email.then_some(&p.email), "company_id": p.company_id, "company_name": p.company_name, "company_inn": p.company_inn, "company_ogrn": p.company_ogrn}))
+/// Доступен и при `password_required`, и для заблокированной компании: интерфейс по флагам решает, что показать.
+pub async fn me(RawPrincipal(p): RawPrincipal) -> Json<Value> {
+    Json(p.me_json())
 }
 
-// ---------- аккаунт: способы входа и токены внешнего API ----------
+// ---------- аккаунт: способы входа, пароль и токены внешнего API ----------
 fn account_err(s: StatusCode, v: &Value) -> ApiError {
     match v["detail"]["code"].as_str().unwrap_or("") {
         "email_exists" => err(s, "email_exists", "К аккаунту уже привязан email"),
         "email_taken" => err(s, "email_taken", "Этот email уже используется"),
         "invalid_email" => err(s, "invalid_email", "Некорректный email"),
         "invalid_password" => err(s, "invalid_password", "Пароль должен быть от 8 до 128 символов"),
+        "invalid_current_password" => err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_current_password", "Текущий пароль указан неверно"),
+        "too_many_attempts" => err(StatusCode::TOO_MANY_REQUESTS, "too_many_attempts", "Слишком много попыток, подождите несколько минут"),
         "last_method" => err(s, "last_method", "Нельзя удалить единственный способ входа: сначала добавьте другой"),
         "signature_taken" => err(s, "signature_taken", "Эта подпись уже привязана к другому аккаунту"),
         "too_many_signatures" => err(s, "too_many_signatures", "Достигнут предел числа подписей"),
-        "signature_not_found" | "no_email" | "token_not_found" => err(s, "not_found", "Не найдено"),
+        "signature_not_found" | "no_email" | "token_not_found" | "user_not_found" => err(StatusCode::NOT_FOUND, "not_found", "Не найдено"),
         "too_many_tokens" => err(s, "too_many_tokens", "Достигнут предел числа токенов, удалите ненужные"),
         "invalid_token_name" => err(s, "invalid_token_name", "Название токена от 1 до 80 символов"),
         _ => err(StatusCode::BAD_GATEWAY, "auth_error", "Ошибка сервиса входа"),
@@ -261,11 +479,15 @@ fn account_err(s: StatusCode, v: &Value) -> ApiError {
 }
 
 async fn account_call(st: &AppState, ctx: &Ctx, p: &Principal, method: Method, path: &str, body: Option<Value>) -> R<Value> {
-    let r = st.auth.json(method, &format!("/internal/v1/users/{}{path}", p.user_id), &with_actor(ctx, p), body.as_ref()).await?;
+    user_call(st, ctx, p, &p.user_id, method, path, body).await
+}
+
+async fn user_call(st: &AppState, ctx: &Ctx, p: &Principal, uid: &str, method: Method, path: &str, body: Option<Value>) -> R<Value> {
+    let r = st.auth.json(method, &format!("/internal/v1/users/{uid}{path}"), &with_actor(ctx, p), body.as_ref()).await?;
     if r.status.is_success() { Ok(r.json()) } else { Err(account_err(r.status, &r.json())) }
 }
 
-pub async fn account_methods(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<Json<Value>> {
+pub async fn account_methods(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx) -> R<Json<Value>> {
     Ok(Json(account_call(&st, &ctx, &p, Method::GET, "/methods", None).await?))
 }
 
@@ -277,7 +499,8 @@ pub struct EmailBody {
     password_confirm: Option<String>,
 }
 
-pub async fn account_add_email(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(b): Json<EmailBody>) -> R<Json<Value>> {
+/// manage: способы входа директора (почта, ЭЦП) — только директор.
+pub async fn account_add_email(axum::extract::State(st): axum::extract::State<AppState>, Manager(p): Manager, ctx: Ctx, Json(b): Json<EmailBody>) -> R<Json<Value>> {
     if b.password_confirm.as_deref() != Some(b.password.as_str()) {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "password_mismatch", "Пароли не совпадают"));
     }
@@ -286,14 +509,13 @@ pub async fn account_add_email(axum::extract::State(st): axum::extract::State<Ap
     Ok(Json(v))
 }
 
-pub async fn account_remove_email(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<Json<Value>> {
-    let v = account_call(&st, &ctx, &p, Method::DELETE, "/email", None).await?;
-    audit(&st, &ctx, &p, "account.email_remove", "").await;
-    Ok(Json(v))
+/// Пароль директора удалить нельзя: у директора всегда есть почта и пароль (подписи можно добавлять и удалять).
+pub async fn account_remove_email(Manager(_p): Manager) -> R<Json<Value>> {
+    Err(err(StatusCode::CONFLICT, "password_required", "Пароль директора нельзя удалить"))
 }
 
 /// Привязка сертификата: подпись проверяется так же, как при входе, затем отпечаток добавляется к аккаунту.
-pub async fn account_add_signature(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(c): Json<EcpLogin>) -> R<Json<Value>> {
+pub async fn account_add_signature(axum::extract::State(st): axum::extract::State<AppState>, Manager(p): Manager, ctx: Ctx, Json(c): Json<EcpLogin>) -> R<Json<Value>> {
     let (s, v) = service_call(&st.ecp, &ctx, "ecp/verify", json!({"challenge": c.challenge, "signature": c.signature})).await?;
     if !s.is_success() {
         return Err(ecp_err(s, &v));
@@ -307,14 +529,98 @@ pub async fn account_add_signature(axum::extract::State(st): axum::extract::Stat
     Ok(Json(out))
 }
 
-pub async fn account_remove_signature(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(id): Path<String>) -> R<Json<Value>> {
+pub async fn account_remove_signature(axum::extract::State(st): axum::extract::State<AppState>, Manager(p): Manager, ctx: Ctx, Path(id): Path<String>) -> R<Json<Value>> {
     let v = account_call(&st, &ctx, &p, Method::DELETE, &format!("/signatures/{id}"), None).await?;
     audit(&st, &ctx, &p, "account.signature_remove", "").await;
     Ok(Json(v))
 }
 
-pub async fn tokens_list(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<Json<Value>> {
-    Ok(Json(account_call(&st, &ctx, &p, Method::GET, "/tokens", None).await?))
+#[derive(Deserialize)]
+pub struct ChangePassword {
+    #[serde(default)]
+    current: Option<String>,
+    new: String,
+    #[serde(default)]
+    new_confirm: Option<String>,
+}
+
+/// POST /api/v1/account/change-password {current?, new, new_confirm?}: любая роль, свой пароль. Текущий пароль обязателен,
+/// кроме первой смены после выданного пароля (`must_change_password`). Остальные сессии пользователя закрываются.
+pub async fn change_password(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx, headers: HeaderMap, Json(b): Json<ChangePassword>) -> R<Json<Value>> {
+    if b.new_confirm.as_deref().is_some_and(|c| c != b.new) {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "password_mismatch", "Пароли не совпадают"));
+    }
+    let body = json!({"current": b.current, "new": b.new, "keep_token": cookie_token(&headers)});
+    let v = account_call(&st, &ctx, &p, Method::POST, "/password", Some(body)).await?;
+    audit(&st, &ctx, &p, "account.password_change", "").await;
+    Ok(Json(json!({"ok": true, "must_change_password": v["must_change_password"].as_bool().unwrap_or(false)})))
+}
+
+/// POST /api/v1/account/set-credentials {email, password, password_confirm?}: обязательный шаг директора после регистрации по
+/// ЭЦП. Сертификаты остаются способом входа; email и пароль добавляются, после чего открываются остальные маршруты.
+pub async fn set_credentials(axum::extract::State(st): axum::extract::State<AppState>, RawPrincipal(p): RawPrincipal, ctx: Ctx, Json(b): Json<EmailBody>) -> R<Json<Value>> {
+    if p.banned {
+        return Err(banned_error(p.ban_reason.as_deref()));
+    }
+    if p.has_email {
+        return Err(err(StatusCode::CONFLICT, "credentials_exist", "Email и пароль уже заданы"));
+    }
+    if b.password_confirm.as_deref().is_some_and(|c| c != b.password) {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "password_mismatch", "Пароли не совпадают"));
+    }
+    let v = account_call(&st, &ctx, &p, Method::POST, "/email-password", Some(json!({"email": b.email, "password": b.password}))).await?;
+    let email = v["email"].as_str().unwrap_or_default().to_string();
+    // в списке сотрудников у директора теперь настоящий адрес вместо служебного
+    let _ = st.ledger.json(Method::PATCH, &format!("/internal/v1/companies/{}/members/{}", p.company_id, p.user_id), &with_actor(&ctx, &p), Some(&json!({"email": email}))).await;
+    audit(&st, &ctx, &p, "account.credentials_set", "").await;
+    Ok(Json(json!({"email": email, "password_required": false})))
+}
+
+#[derive(Deserialize)]
+pub struct TokensQuery {
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+/// Участники компании из ledger.
+async fn company_members(st: &AppState, ctx: &Ctx, p: &Principal) -> R<Vec<Value>> {
+    let v = st.ledger.get(&format!("/internal/v1/companies/{}/members", p.company_id), &with_actor(ctx, p)).await?;
+    Ok(v["items"].as_array().cloned().unwrap_or_default())
+}
+
+/// Токены всех сотрудников компании (для директора): с владельцем и его ролью.
+async fn company_tokens(st: &AppState, ctx: &Ctx, p: &Principal) -> R<Vec<Value>> {
+    let members = company_members(st, ctx, p).await?;
+    let ids: Vec<&str> = members.iter().filter_map(|m| m["user_id"].as_str()).collect();
+    let r = st.auth.json(Method::GET, &format!("/internal/v1/tokens?user_ids={}", ids.join(",")), &with_actor(ctx, p), None).await?;
+    if !r.status.is_success() {
+        return Err(err(StatusCode::BAD_GATEWAY, "auth_error", "Ошибка сервиса входа"));
+    }
+    let items = r.json()["items"].as_array().cloned().unwrap_or_default();
+    Ok(items
+        .into_iter()
+        .map(|mut t| {
+            let owner = members.iter().find(|m| m["user_id"] == t["user_id"]);
+            let email = owner.and_then(|m| m["email"].as_str()).and_then(public_email).map(str::to_string);
+            t["owner_id"] = t["user_id"].clone();
+            t["owner_email"] = json!(email);
+            t["owner_role"] = owner.map(|m| m["role"].clone()).unwrap_or(Value::Null);
+            t["mine"] = json!(t["user_id"].as_str() == Some(p.user_id.as_str()));
+            t
+        })
+        .collect())
+}
+
+/// Свои токены; директору `?scope=company` — токены всех сотрудников компании.
+pub async fn tokens_list(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx, Query(q): Query<TokensQuery>) -> R<Json<Value>> {
+    match q.scope.as_deref() {
+        None | Some("") | Some("own") => Ok(Json(account_call(&st, &ctx, &p, Method::GET, "/tokens", None).await?)),
+        Some("company") => {
+            p.require(Perm::Manage)?;
+            Ok(Json(json!({"items": company_tokens(&st, &ctx, &p).await?})))
+        }
+        _ => Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_scope", "scope: own | company")),
+    }
 }
 
 #[derive(Deserialize)]
@@ -322,17 +628,133 @@ pub struct TokenBody {
     name: String,
 }
 
-/// Новый токен возвращается один раз; хранится только его хэш.
-pub async fn tokens_create(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(b): Json<TokenBody>) -> R<(StatusCode, Json<Value>)> {
+/// Новый токен возвращается один раз; хранится только его хэш. Выпускать токен для себя может любой сотрудник;
+/// права токена равны правам его роли.
+pub async fn tokens_create(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx, Json(b): Json<TokenBody>) -> R<(StatusCode, Json<Value>)> {
     let v = account_call(&st, &ctx, &p, Method::POST, "/tokens", Some(json!({"name": b.name}))).await?;
     audit(&st, &ctx, &p, "account.token_create", v["id"].as_str().unwrap_or("")).await;
     Ok((StatusCode::CREATED, Json(v)))
 }
 
-pub async fn tokens_delete(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(id): Path<String>) -> R<StatusCode> {
-    account_call(&st, &ctx, &p, Method::DELETE, &format!("/tokens/{id}"), None).await?;
-    audit(&st, &ctx, &p, "account.token_delete", &id).await;
+/// Свой токен удаляет любой сотрудник; директор может отозвать токен любого сотрудника своей компании.
+pub async fn tokens_delete(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx, Path(id): Path<String>) -> R<StatusCode> {
+    let owner = if p.role.can(Perm::Manage) {
+        let all = company_tokens(&st, &ctx, &p).await?;
+        let t = all.iter().find(|t| t["id"].as_str() == Some(id.as_str())).ok_or_else(|| err(StatusCode::NOT_FOUND, "not_found", "Не найдено"))?;
+        t["user_id"].as_str().unwrap_or_default().to_string()
+    } else {
+        p.user_id.clone()
+    };
+    user_call(&st, &ctx, &p, &owner, Method::DELETE, &format!("/tokens/{id}"), None).await?;
+    audit(&st, &ctx, &p, if owner == p.user_id { "account.token_delete" } else { "account.token_revoke_other" }, &id).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------- сотрудники компании ----------
+fn member_json(m: &Value, me: &str) -> Value {
+    json!({"user_id": m["user_id"], "email": m["email"].as_str().and_then(public_email), "role": m["role"], "created_at": m["created_at"], "is_me": m["user_id"].as_str() == Some(me)})
+}
+
+/// GET /api/v1/members: список сотрудников (любая роль).
+pub async fn members_list(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx) -> R<Json<Value>> {
+    let items: Vec<Value> = company_members(&st, &ctx, &p).await?.iter().map(|m| member_json(m, &p.user_id)).collect();
+    Ok(Json(json!({"items": items})))
+}
+
+#[derive(Deserialize)]
+pub struct MemberBody {
+    email: String,
+    role: String,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    generate: bool,
+}
+
+fn staff_role(r: &str) -> R<&'static str> {
+    match r {
+        "editor" => Ok("editor"),
+        "viewer" => Ok("viewer"),
+        _ => Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_role", "Роль сотрудника: editor или viewer")),
+    }
+}
+
+/// POST /api/v1/members {email, role, password?|generate?} (manage) -> 201 {user_id, email, role, password?}.
+/// Пароль сотрудника: заданный директором или сгенерированный сервером (показывается только в этом ответе).
+pub async fn members_create(axum::extract::State(st): axum::extract::State<AppState>, Manager(p): Manager, ctx: Ctx, Json(b): Json<MemberBody>) -> R<(StatusCode, Json<Value>)> {
+    let role = staff_role(&b.role)?;
+    if b.email.trim().to_lowercase().ends_with("@ecp.invalid") {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_email", "Некорректный email"));
+    }
+    if b.generate == b.password.is_some() {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_password", "Укажите пароль или включите генерацию пароля"));
+    }
+    let actx = with_actor(&ctx, &p);
+    let (s, u) = auth_call(&st, &actx, "users/create", json!({"email": b.email, "password": b.password, "generate": b.generate})).await?;
+    if !s.is_success() {
+        return Err(account_err(s, &u));
+    }
+    let uid = u["user_id"].as_str().unwrap_or_default().to_string();
+    let email = u["email"].as_str().unwrap_or_default().to_string();
+    let added = st.ledger.post(&format!("/internal/v1/companies/{}/members", p.company_id), &actx, &json!({"user_id": uid, "email": email, "role": role})).await;
+    if let Err(e) = added {
+        // не оставляем пользователя без компании
+        let _ = st.auth.json(Method::DELETE, &format!("/internal/v1/users/{uid}"), &actx, None).await;
+        return Err(e);
+    }
+    audit(&st, &ctx, &p, "member.create", &uid).await;
+    let mut out = json!({"user_id": uid, "email": email, "role": role, "must_change_password": true, "password_generated": b.generate});
+    if let Some(pw) = u["password"].as_str() {
+        out["password"] = json!(pw);
+    }
+    Ok((StatusCode::CREATED, Json(out)))
+}
+
+#[derive(Deserialize)]
+pub struct MemberRole {
+    role: String,
+}
+
+/// PATCH /api/v1/members/{user_id} {role} (manage). Директора менять нельзя (409 cannot_change_director).
+pub async fn members_update(axum::extract::State(st): axum::extract::State<AppState>, Manager(p): Manager, ctx: Ctx, Path(uid): Path<String>, Json(b): Json<MemberRole>) -> R<Json<Value>> {
+    let role = if b.role == "director" { "director" } else { staff_role(&b.role)? }; // для director ответит ledger: 409
+    let v = st.ledger.json(Method::PATCH, &format!("/internal/v1/companies/{}/members/{uid}", p.company_id), &with_actor(&ctx, &p), Some(&json!({"role": role}))).await?.into_result()?;
+    audit(&st, &ctx, &p, "member.role_change", &uid).await;
+    Ok(Json(member_json(&v, &p.user_id)))
+}
+
+/// Участник своей компании (чужой — 404) и его роль.
+async fn find_member(st: &AppState, ctx: &Ctx, p: &Principal, uid: &str) -> R<Value> {
+    company_members(st, ctx, p).await?.into_iter().find(|m| m["user_id"].as_str() == Some(uid)).ok_or_else(|| err(StatusCode::NOT_FOUND, "not_found", "Не найдено"))
+}
+
+/// DELETE /api/v1/members/{user_id} (manage): сессии и токены сотрудника аннулируются. Директора удалить нельзя.
+pub async fn members_delete(axum::extract::State(st): axum::extract::State<AppState>, Manager(p): Manager, ctx: Ctx, Path(uid): Path<String>) -> R<StatusCode> {
+    let m = find_member(&st, &ctx, &p, &uid).await?;
+    if m["role"] == "director" {
+        return Err(err(StatusCode::CONFLICT, "cannot_remove_director", "Директора удалить нельзя"));
+    }
+    let actx = with_actor(&ctx, &p);
+    // сначала аннулируем доступ (сессии, токены), затем членство; повтор безопасен
+    let r = st.auth.json(Method::DELETE, &format!("/internal/v1/users/{uid}"), &actx, None).await?;
+    if !r.status.is_success() && r.status != StatusCode::NOT_FOUND {
+        return Err(err(StatusCode::BAD_GATEWAY, "auth_error", "Ошибка сервиса входа"));
+    }
+    st.ledger.json(Method::DELETE, &format!("/internal/v1/companies/{}/members/{uid}", p.company_id), &actx, None).await?.into_result()?;
+    audit(&st, &ctx, &p, "member.delete", &uid).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/v1/members/{user_id}/reset-password (manage) -> {password}: новый сгенерированный пароль, виден один раз,
+/// сессии сотрудника закрыты, при следующем входе смена обязательна.
+pub async fn members_reset_password(axum::extract::State(st): axum::extract::State<AppState>, Manager(p): Manager, ctx: Ctx, Path(uid): Path<String>) -> R<Json<Value>> {
+    let m = find_member(&st, &ctx, &p, &uid).await?;
+    if m["role"] == "director" {
+        return Err(err(StatusCode::CONFLICT, "cannot_reset_director", "Пароль директора меняется в настройках аккаунта"));
+    }
+    let v = user_call(&st, &ctx, &p, &uid, Method::POST, "/reset-password", None).await?;
+    audit(&st, &ctx, &p, "member.reset_password", &uid).await;
+    Ok(Json(json!({"password": v["password"], "must_change_password": true})))
 }
 
 // ---------- внешний API по токену: /api/ext/v1/* ----------
@@ -342,8 +764,13 @@ async fn ext_forward(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request, tail
     Ok(forward(up, p, ctx, req, path).await?.into_response())
 }
 
+/// Права токена по роли владельца: viewer — `read`, editor и director — `write` (чтение + изменение данных).
+fn token_scope(role: Role) -> &'static str {
+    if role.can(Perm::Edit) { "write" } else { "read" }
+}
+
 pub async fn ext_company(TokenPrincipal(p): TokenPrincipal) -> Json<Value> {
-    Json(json!({"company_id": p.company_id, "company_name": p.company_name, "inn": p.company_inn, "ogrn": p.company_ogrn}))
+    Json(json!({"company_id": p.company_id, "company_name": p.company_name, "inn": p.company_inn, "ogrn": p.company_ogrn, "scope": token_scope(p.role)}))
 }
 
 pub async fn ext_forecast_latest(axum::extract::State(st): axum::extract::State<AppState>, TokenPrincipal(p): TokenPrincipal, ctx: Ctx, req: Request) -> R<Response> {
@@ -358,7 +785,9 @@ pub async fn ext_transactions(axum::extract::State(st): axum::extract::State<App
     ext_forward(&st.ledger, &p, &ctx, req, "transactions").await
 }
 
+/// GET — чтение, POST — создание ожидаемого платежа (scope `write`: токен viewer получает 403 `forbidden`).
 pub async fn ext_events(axum::extract::State(st): axum::extract::State<AppState>, TokenPrincipal(p): TokenPrincipal, ctx: Ctx, req: Request) -> R<Response> {
+    p.require(if req.method() == Method::GET || req.method() == Method::HEAD { Perm::Read } else { Perm::Edit })?;
     ext_forward(&st.ledger, &p, &ctx, req, "expected-events").await
 }
 
@@ -371,10 +800,11 @@ const MAX_BODY: usize = 26 * 1024 * 1024;
 
 /// Переписывает публичный путь /api/v1/companies/{cid}/... в /internal/v1/companies/{cid}/... и пересылает запрос
 /// как есть (метод, query, тело, Content-Type). Ответ сервиса возвращается без изменений.
-async fn relay(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request) -> R<Reply> {
+async fn relay(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request, perm: Perm) -> R<Reply> {
     let uri = req.uri().clone();
     let cid = uri.path().split('/').nth(4).unwrap_or_default().to_string();
     authorize(p, &cid)?;
+    p.require(perm)?;
     let tail = uri.path().strip_prefix("/api/v1").unwrap_or(uri.path());
     let path = match uri.query() {
         Some(q) => format!("/internal/v1{tail}?{q}"),
@@ -393,28 +823,41 @@ async fn forward(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request, path: St
     up.send(method, &path, &with_actor(ctx, p), ct.as_deref(), body).await
 }
 
+/// Права по методу: GET/HEAD — `read`, любое изменение (POST/PATCH/DELETE: импорт и подтверждение, ожидаемые платежи,
+/// смена категории) — `edit`. Название компании (PATCH на саму компанию) идёт отдельным маршрутом `update_company` (`manage`).
 pub async fn to_ledger(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
-    Ok(relay(&st.ledger, &p, &ctx, req).await?.into_response())
+    let perm = if req.method() == Method::GET || req.method() == Method::HEAD { Perm::Read } else { Perm::Edit };
+    Ok(relay(&st.ledger, &p, &ctx, req, perm).await?.into_response())
 }
 
-pub async fn to_forecast(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
-    Ok(relay(&st.forecast, &p, &ctx, req).await?.into_response())
+/// PATCH /api/v1/companies/{cid}: название и реквизиты компании (manage).
+pub async fn update_company(axum::extract::State(st): axum::extract::State<AppState>, Manager(p): Manager, ctx: Ctx, req: Request) -> R<Response> {
+    let r = relay(&st.ledger, &p, &ctx, req, Perm::Manage).await?;
+    if r.status.is_success() {
+        audit(&st, &ctx, &p, "company.update", &p.company_id).await;
+    }
+    Ok(r.into_response())
 }
 
-pub async fn to_planfact(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
-    Ok(relay(&st.planfact, &p, &ctx, req).await?.into_response())
+pub async fn to_forecast(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx, req: Request) -> R<Response> {
+    Ok(relay(&st.forecast, &p, &ctx, req, Perm::Read).await?.into_response())
 }
 
-pub async fn create_forecast(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
-    let r = relay(&st.forecast, &p, &ctx, req).await?;
+pub async fn to_planfact(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx, req: Request) -> R<Response> {
+    Ok(relay(&st.planfact, &p, &ctx, req, Perm::Read).await?.into_response())
+}
+
+/// Построение прогноза — вычисляющий POST: право `read` (viewer тоже может строить прогнозы и сценарии).
+pub async fn create_forecast(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx, req: Request) -> R<Response> {
+    let r = relay(&st.forecast, &p, &ctx, req, Perm::Read).await?;
     if r.status.is_success() {
         audit(&st, &ctx, &p, "forecast.create", r.json()["run_id"].as_str().unwrap_or("")).await;
     }
     Ok(r.into_response())
 }
 
-pub async fn create_scenario(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
-    let r = relay(&st.forecast, &p, &ctx, req).await?;
+pub async fn create_scenario(axum::extract::State(st): axum::extract::State<AppState>, Reader(p): Reader, ctx: Ctx, req: Request) -> R<Response> {
+    let r = relay(&st.forecast, &p, &ctx, req, Perm::Read).await?;
     if r.status.is_success() {
         audit(&st, &ctx, &p, "scenario.create", r.json()["scenario"]["run_id"].as_str().unwrap_or("")).await;
     }
@@ -569,7 +1012,7 @@ async fn load_snapshot(st: &AppState, ctx: &Ctx, cid: &str) -> R<Snapshot> {
 
 /// Налоговые события: ЕНП (два срока из календаря ФНС), аванс УСН (апр/июл/окт) или НДС (три ближайших 28-х). Даты берутся с nalog.gov.ru (сервис gov), при недоступности — 28-е число.
 /// Сумма: из запроса или оценка по налоговым платежам из выписки. События создаются в ledger.
-pub async fn tax_calendar(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>, body: Option<Json<TaxBody>>) -> R<(StatusCode, Json<Value>)> {
+pub async fn tax_calendar(axum::extract::State(st): axum::extract::State<AppState>, Editor(p): Editor, ctx: Ctx, Path(cid): Path<String>, body: Option<Json<TaxBody>>) -> R<(StatusCode, Json<Value>)> {
     authorize(&p, &cid)?;
     let actx = with_actor(&ctx, &p);
     let snap = load_snapshot(&st, &actx, &cid).await?;
@@ -631,7 +1074,7 @@ pub async fn tax_calendar(axum::extract::State(st): axum::extract::State<AppStat
 }
 
 /// Ключевая ставка ЦБ РФ (сервис gov, данные cbr.ru).
-pub async fn gov_key_rate(axum::extract::State(st): axum::extract::State<AppState>, _p: Principal, ctx: Ctx) -> R<Json<Value>> {
+pub async fn gov_key_rate(axum::extract::State(st): axum::extract::State<AppState>, _p: Reader, ctx: Ctx) -> R<Json<Value>> {
     let r = st.gov.json(Method::GET, "/internal/v1/gov/key-rate", &ctx, None).await?;
     if !r.status.is_success() {
         return Err(err(StatusCode::BAD_GATEWAY, "gov_error", "Не удалось получить ключевую ставку"));
@@ -672,7 +1115,7 @@ pub fn obligation_to_event(it: &Value) -> Option<Value> {
 }
 
 /// Забирает счета и договоры из integrator (1С, ЭДО, банк) и идемпотентно создаёт ожидаемые события в ledger.
-pub async fn integrations_sync(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>, body: Option<Json<SyncBody>>) -> R<Json<Value>> {
+pub async fn integrations_sync(axum::extract::State(st): axum::extract::State<AppState>, Editor(p): Editor, ctx: Ctx, Path(cid): Path<String>, body: Option<Json<SyncBody>>) -> R<Json<Value>> {
     authorize(&p, &cid)?;
     let actx = with_actor(&ctx, &p);
     let ext = body.and_then(|b| b.0.external_company).unwrap_or_else(|| "C001".into());

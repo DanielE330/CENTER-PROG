@@ -3,7 +3,7 @@
 //! пользователь отдельным запросом `suggestions/apply`, и здесь параметры проверяются заново (ответу модели не верим).
 
 use crate::AppState;
-use crate::http::Principal;
+use crate::http::{Editor, Principal, Reader};
 use axum::{
     Json,
     extract::{Path, State},
@@ -80,7 +80,7 @@ fn advisor_request(b: &AskBody, company_name: &str) -> R<Value> {
 }
 
 /// POST /api/v1/companies/{cid}/advisor/ask -> {answer, suggestions[], provider, model, notice, usage, tools_used}
-pub async fn ask(State(st): State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<AskBody>) -> R<Json<Value>> {
+pub async fn ask(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<AskBody>) -> R<Json<Value>> {
     authorize(&p, &cid)?;
     let body = advisor_request(&b, &p.company_name)?;
     let v = st.advisor.post(&format!("/internal/v1/companies/{cid}/ask"), &actor(&ctx, &p), &body).await?;
@@ -162,7 +162,7 @@ pub fn validate_payment(params: &Value, today: NaiveDate) -> R<Payment> {
 
 /// POST /api/v1/companies/{cid}/advisor/suggestions/apply {type, params} -> 201 {id, type}
 /// Создаёт ожидаемое событие в ledger (обычная функция создания события), источник `manual`.
-pub async fn apply(State(st): State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<ApplyBody>) -> R<(StatusCode, Json<Value>)> {
+pub async fn apply(State(st): State<AppState>, Editor(p): Editor, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<ApplyBody>) -> R<(StatusCode, Json<Value>)> {
     authorize(&p, &cid)?;
     if b.kind != ADD_EXPECTED_PAYMENT {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_type", "Неизвестный тип предложения"));
