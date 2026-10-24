@@ -196,6 +196,46 @@ fn company_name(st: &AppState, cid: &str) -> String {
     lock(st).query_row("SELECT name FROM companies WHERE id=?", [cid], |r| r.get(0)).unwrap_or_default()
 }
 
+#[derive(Deserialize)]
+pub struct EcpLogin {
+    challenge: String,
+    signature: String,
+}
+
+pub async fn ecp_challenge(State(st): State<AppState>) -> R<Json<Value>> {
+    let (s, v) = auth_call(&st, "ecp/challenge", json!({})).await?;
+    if !s.is_success() {
+        return Err(ecp_err(s, &v));
+    }
+    Ok(Json(json!({"challenge": v["challenge"]})))
+}
+
+fn ecp_err(s: StatusCode, v: &Value) -> ApiError {
+    match v["detail"]["code"].as_str().unwrap_or("") {
+        "invalid_challenge" => err(s, "invalid_challenge", "Запрос на подпись устарел, повторите вход"),
+        "signature_invalid" => err(s, "signature_invalid", "Подпись не прошла проверку"),
+        "certificate_expired" => err(s, "certificate_expired", "Срок действия сертификата истёк"),
+        "bad_signature" | "no_certificate" => err(s, "bad_signature", "Не удалось разобрать подпись"),
+        "too_many_attempts" => err(s, "too_many_attempts", "Слишком много попыток, подождите"),
+        "verifier_unavailable" => err(StatusCode::SERVICE_UNAVAILABLE, "verifier_unavailable", "Проверка ЭЦП на сервере недоступна"),
+        _ => err(StatusCode::BAD_GATEWAY, "auth_error", "Ошибка сервиса входа"),
+    }
+}
+
+/// Вход по ЭЦП: личность определяется сертификатом, email и пароль не нужны.
+pub async fn ecp_login(State(st): State<AppState>, Json(c): Json<EcpLogin>) -> R<Response> {
+    let (s, v) = auth_call(&st, "ecp/login", json!({"challenge": c.challenge, "signature": c.signature})).await?;
+    if !s.is_success() {
+        return Err(ecp_err(s, &v));
+    }
+    let uid = v["user_id"].as_str().unwrap_or_default();
+    let email = v["email"].as_str().unwrap_or_default();
+    let display = v["display_name"].as_str().filter(|n| n.chars().count() >= 2);
+    let cid = ensure_company(&st, uid, email, display)?;
+    let name = company_name(&st, &cid);
+    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": email, "company_id": cid, "company_name": name, "ecp": true})))
+}
+
 pub async fn register(State(st): State<AppState>, Json(mut c): Json<Creds>) -> R<Response> {
     let name = c.company_name.take().map(|n| n.trim().to_string()).unwrap_or_default();
     if name.chars().count() < 2 || name.chars().count() > 200 {

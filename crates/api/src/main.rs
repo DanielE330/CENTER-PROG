@@ -48,6 +48,8 @@ async fn main() {
     let api = Router::new()
         .route("/api/v1/auth/register", post(http::register))
         .route("/api/v1/auth/login", post(http::login))
+        .route("/api/v1/auth/ecp/challenge", post(http::ecp_challenge))
+        .route("/api/v1/auth/ecp/login", post(http::ecp_login))
         .route("/api/v1/auth/logout", post(http::logout))
         .route("/api/v1/auth/me", get(http::me))
         .route(co, patch(http::update_company))
@@ -99,7 +101,7 @@ fn set_common(h: &mut axum::http::HeaderMap) {
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     h.insert(
         "content-security-policy",
-        HeaderValue::from_static("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"),
+        HeaderValue::from_static("default-src 'self'; script-src 'self' chrome-extension:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"),
     );
 }
 

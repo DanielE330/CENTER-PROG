@@ -3,6 +3,7 @@ import { api } from "./api";
 import type { Me } from "./ctx";
 import { Icon } from "./icons";
 import { Field } from "./ui";
+import { listCertificates, signDetached, type CertInfo } from "./cades";
 
 function PasswordInput({ value, onChange, autoComplete }: { value: string; onChange: (v: string) => void; autoComplete: string }) {
   const [show, setShow] = useState(false);
@@ -12,6 +13,48 @@ function PasswordInput({ value, onChange, autoComplete }: { value: string; onCha
       <button type="button" className="pw-eye" aria-label={show ? "Скрыть пароль" : "Показать пароль"} aria-pressed={show} title={show ? "Скрыть пароль" : "Показать пароль"} onClick={() => setShow(!show)}>
         <Icon name={show ? "eyeOff" : "eye"} size={18} />
       </button>
+    </div>
+  );
+}
+
+function EcpLogin({ onDone }: { onDone: (m: Me) => void }) {
+  const [certs, setCerts] = useState<CertInfo[] | null>(null);
+  const [sel, setSel] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setError(""); setBusy(true);
+    try {
+      const l = await listCertificates();
+      setCerts(l); setSel(l[0]?.thumbprint ?? "");
+      if (!l.length) setError("В хранилище нет действующих сертификатов с закрытым ключом");
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  }
+  async function sign() {
+    setError(""); setBusy(true);
+    try {
+      const { challenge } = await api.post<{ challenge: string }>("/api/v1/auth/ecp/challenge");
+      const signature = await signDetached(sel, challenge);
+      onDone(await api.post<Me>("/api/v1/auth/ecp/login", { challenge, signature }));
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  }
+  if (!certs) return (
+    <>
+      <button type="button" className="btn secondary" disabled={busy} onClick={load}>{busy ? "Поиск сертификатов…" : "Войти по ЭЦП"}</button>
+      {error && <div className="alert" role="alert">{error}</div>}
+    </>
+  );
+  return (
+    <div className="stack">
+      <Field label="Сертификат ЭЦП">
+        <select value={sel} onChange={(e) => setSel(e.target.value)}>
+          {certs.map((c) => <option key={c.thumbprint} value={c.thumbprint}>{c.name} (до {c.validTo}, {c.issuer})</option>)}
+        </select>
+      </Field>
+      {error && <div className="alert" role="alert">{error}</div>}
+      <button type="button" className="btn" disabled={busy || !sel} onClick={sign}>{busy ? "Подпись…" : "Подписать и войти"}</button>
+      <button type="button" className="link" onClick={() => { setCerts(null); setError(""); }}>Отмена</button>
     </div>
   );
 }
@@ -60,6 +103,7 @@ export default function Login({ onDone }: { onDone: (m: Me) => void }) {
         {mismatch && <div className="small neg" role="alert">Пароли не совпадают</div>}
         {error && <div className="alert" role="alert">{error}</div>}
         <button className="btn" disabled={busy || mismatch}>{reg ? "Зарегистрироваться" : "Войти"}</button>
+        {!reg && <EcpLogin onDone={onDone} />}
         <button type="button" className="link" onClick={() => { setMode(reg ? "login" : "register"); setError(""); setConfirm(""); }}>
           {reg ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Регистрация"}
         </button>
