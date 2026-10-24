@@ -74,19 +74,20 @@ function Profile() {
   const { logout } = useAuth()
   const [open, setOpen] = useState(false)
   const ref = useOutside(open, () => setOpen(false))
-  const initials = me.email.slice(0, 2).toUpperCase()
+  const who = me.email ?? me.company_name
+  const initials = who.slice(0, 2).toUpperCase()
   return (
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="true"
-        aria-label={t('header.profile', { email: me.email })}
+        aria-label={t('header.profile', { email: who })}
         className="flex items-center gap-2.5 pl-2 sm:pl-3 sm:border-l border-line cursor-pointer rounded-control"
       >
         <span className="grid place-items-center size-9 rounded-full bg-primary-soft text-primary text-sm font-semibold" aria-hidden>{initials}</span>
         <span className="hidden sm:block leading-tight text-left max-w-[200px]">
-          <span className="block text-sm font-medium truncate">{me.email}</span>
+          <span className="block text-sm font-medium truncate">{who}</span>
           <span className="block text-xs text-muted">{t('header.account')}</span>
         </span>
         <ChevronDown size={16} className="text-muted hidden sm:block" aria-hidden />

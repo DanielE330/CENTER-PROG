@@ -27,28 +27,33 @@ def client(tmp_path, monkeypatch):
     return c
 
 
-def make_cms(tmp_path, message: str, cn="Ivan", days=30) -> str:
+def make_cms(tmp_path, message: str, cn="Ivan", days=30, requisites=None) -> str:
+    """requisites: {'1.2.643.100.4': '...'} — OID российских реквизитов (openssl не знает их имён, регистрируем в конфиге)."""
     d = tmp_path
+    names = {oid: f"req{i}" for i, oid in enumerate(requisites or {})}
+    conf = "oid_section=oids\n[oids]\n" + "".join(f"{n}={oid}\n" for oid, n in names.items())
+    conf += "[req]\ndistinguished_name=dn\nprompt=no\n[dn]\n" f"CN={cn}\nO=Romashka\n"
+    conf += "".join(f"{names[oid]}={v}\n" for oid, v in (requisites or {}).items())
+    (d / "req.cnf").write_text(conf)
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", d / "k.pem", "-out", d / "c.pem",
-         "-subj", f"/CN={cn}/O=Romashka", "-days", str(days)], check=True, capture_output=True)
+         "-config", d / "req.cnf", "-days", str(days)], check=True, capture_output=True)
     (d / "m").write_bytes(message.encode())
     subprocess.run(["openssl", "cms", "-sign", "-binary", "-in", d / "m", "-signer", d / "c.pem", "-inkey", d / "k.pem",
                     "-outform", "DER", "-out", d / "m.sgn"], check=True, capture_output=True)
     return base64.b64encode((d / "m.sgn").read_bytes()).decode()
 
 
-def login(client, tmp_path, cn="Ivan", register=True, company="ООО Ромашка"):
+def login(client, tmp_path, cn="Ivan"):
     ch = client.post(f"{P}/ecp/challenge").json()["challenge"]
-    return ch, client.post(f"{P}/ecp/login", json={
-        "challenge": ch, "signature": make_cms(tmp_path, ch, cn), "register": register, "company_name": company})
+    return ch, client.post(f"{P}/ecp/login", json={"challenge": ch, "signature": make_cms(tmp_path, ch, cn)})
 
 
 def test_ecp_login_creates_account_and_session(client, tmp_path):
     ch, r = login(client, tmp_path)
     assert r.status_code == 200, r.text
     v = r.json()
-    assert v["new"] is True and v["display_name"] == "ООО Ромашка" and v["email"].endswith("@ecp.invalid")
+    assert v["new"] is True and v["display_name"] == "Romashka" and v["email"].endswith("@ecp.invalid")
     s = client.authsvc.post(f"{P}/session", json={"token": v["token"]})
     assert s.status_code == 200 and s.json()["user_id"] == v["user_id"]
 
@@ -56,7 +61,7 @@ def test_ecp_login_creates_account_and_session(client, tmp_path):
 def test_challenge_is_single_use(client, tmp_path):
     ch, r = login(client, tmp_path)
     assert r.status_code == 200
-    again = client.post(f"{P}/ecp/login", json={"challenge": ch, "signature": make_cms(tmp_path, ch), "register": True, "company_name": "ООО Ромашка"})
+    again = client.post(f"{P}/ecp/login", json={"challenge": ch, "signature": make_cms(tmp_path, ch)})
     assert again.status_code == 401 and again.json()["detail"]["code"] == "invalid_challenge"
 
 
@@ -70,7 +75,7 @@ def test_expired_challenge_rejected(client, tmp_path, monkeypatch):
     monkeypatch.setattr(ecp, "CHALLENGE_TTL", 0)
     real = ecp_app.time.time
     monkeypatch.setattr(ecp_app.time, "time", lambda: real() + 400)
-    r = client.post(f"{P}/ecp/login", json={"challenge": ch, "signature": make_cms(tmp_path, ch), "register": True, "company_name": "ООО Ромашка"})
+    r = client.post(f"{P}/ecp/login", json={"challenge": ch, "signature": make_cms(tmp_path, ch)})
     assert r.status_code == 401
 
 
@@ -97,7 +102,7 @@ def test_same_certificate_same_account_independent_of_password_login(client, tmp
     subprocess.run(["openssl", "cms", "-sign", "-binary", "-in", tmp_path / "m", "-signer", tmp_path / "c.pem",
                     "-inkey", tmp_path / "k.pem", "-outform", "DER", "-out", tmp_path / "m2.sgn"], check=True, capture_output=True)
     sig2 = base64.b64encode((tmp_path / "m2.sgn").read_bytes()).decode()
-    a = client.post(f"{P}/ecp/login", json={"challenge": ch1, "signature": sig1, "register": True, "company_name": "ООО Ромашка"}).json()
+    a = client.post(f"{P}/ecp/login", json={"challenge": ch1, "signature": sig1}).json()
     b = client.post(f"{P}/ecp/login", json={"challenge": ch2, "signature": sig2}).json()
     assert a["user_id"] == b["user_id"] and a["new"] is True and b["new"] is False
     # по email/паролю в такую запись войти нельзя
@@ -120,22 +125,21 @@ def test_identity_recorded_in_ecp_db(client, tmp_path):
     assert rows == [(r.json()["user_id"],)]
 
 
-def test_login_requires_registration(client, tmp_path):
-    ch, r = login(client, tmp_path, register=False)
-    assert r.status_code == 404 and r.json()["detail"]["code"] == "not_registered"
+def test_login_returns_company_data_from_certificate(client, tmp_path):
+    ch = client.post(f"{P}/ecp/challenge").json()["challenge"]
+    sig = make_cms(tmp_path, ch, requisites={"1.2.643.100.4": "001234567890", "1.2.643.100.1": "1027700132195"})
+    v = client.post(f"{P}/ecp/login", json={"challenge": ch, "signature": sig}).json()
+    assert v["company"] == {"name": "Romashka", "inn": "1234567890", "ogrn": "1027700132195"}
 
 
-def test_register_requires_company_name_and_is_not_repeatable(client, tmp_path):
-    _, r = login(client, tmp_path, company=" ")
-    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_company_name"
+def test_login_without_requisites_gives_empty_inn(client, tmp_path):
+    _, r = login(client, tmp_path)
+    assert r.json()["company"] == {"name": "Romashka", "inn": "", "ogrn": ""}
+
+
+def test_verify_does_not_create_user_and_burns_challenge(client, tmp_path):
     ch = client.post(f"{P}/ecp/challenge").json()["challenge"]
     sig = make_cms(tmp_path, ch)
-    body = {"challenge": ch, "signature": sig, "register": True, "company_name": "ООО Ромашка"}
-    assert client.post(f"{P}/ecp/login", json=body).status_code == 200
-    ch2 = client.post(f"{P}/ecp/challenge").json()["challenge"]
-    (tmp_path / "m").write_bytes(ch2.encode())
-    subprocess.run(["openssl", "cms", "-sign", "-binary", "-in", tmp_path / "m", "-signer", tmp_path / "c.pem",
-                    "-inkey", tmp_path / "k.pem", "-outform", "DER", "-out", tmp_path / "m3.sgn"], check=True, capture_output=True)
-    sig2 = base64.b64encode((tmp_path / "m3.sgn").read_bytes()).decode()
-    r = client.post(f"{P}/ecp/login", json={"challenge": ch2, "signature": sig2, "register": True, "company_name": "ООО Ромашка"})
-    assert r.status_code == 409 and r.json()["detail"]["code"] == "already_registered"
+    r = client.post(f"{P}/ecp/verify", json={"challenge": ch, "signature": sig})
+    assert r.status_code == 200 and len(r.json()["external_id"]) == 64
+    assert client.post(f"{P}/ecp/verify", json={"challenge": ch, "signature": sig}).status_code == 401

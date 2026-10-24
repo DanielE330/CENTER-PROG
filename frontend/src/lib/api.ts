@@ -3,6 +3,8 @@
  * money as kopeck strings. Components never call fetch directly — they use hooks/queries.ts.
  */
 import type {
+  AccountMethods,
+  ApiTokenInfo,
   Backtest,
   ExpectedEvent,
   ForecastRun,
@@ -10,11 +12,13 @@ import type {
   ImportRow,
   KeyRate,
   Me,
+  NewApiToken,
   NewExpectedEvent,
   PlanFact,
   ScenarioParams,
   ScenarioResponse,
   SyncResult,
+  TaxCalendarRequest,
   TaxCalendarResult,
   TransactionPage,
 } from '../types'
@@ -92,6 +96,16 @@ export const api = {
     }),
   logout: () => request<void>('POST', '/api/v1/auth/logout', { body: {}, expect401: true }),
 
+  // ----- account: sign-in methods and API tokens -----
+  accountMethods: () => request<AccountMethods>('GET', '/api/v1/account/methods'),
+  addEmail: (b: { email: string; password: string; password_confirm: string }) => request<AccountMethods>('POST', '/api/v1/account/email', { body: b }),
+  removeEmail: () => request<AccountMethods>('DELETE', '/api/v1/account/email'),
+  addSignature: (challenge: string, signature: string) => request<AccountMethods>('POST', '/api/v1/account/signatures', { body: { challenge, signature } }),
+  removeSignature: (id: string) => request<AccountMethods>('DELETE', `/api/v1/account/signatures/${encodeURIComponent(id)}`),
+  apiTokens: () => request<{ items: ApiTokenInfo[] }>('GET', '/api/v1/account/tokens'),
+  createApiToken: (name: string) => request<NewApiToken>('POST', '/api/v1/account/tokens', { body: { name } }),
+  deleteApiToken: (id: string) => request<void>('DELETE', `/api/v1/account/tokens/${encodeURIComponent(id)}`),
+
   // ----- company -----
   renameCompany: (name: string) => request<{ company_name: string }>('PATCH', co(), { body: { name } }),
 
@@ -127,8 +141,10 @@ export const api = {
   expectedEvents: () => request<{ items: ExpectedEvent[] }>('GET', co('/expected-events')),
   createEvent: (e: NewExpectedEvent) => request<unknown>('POST', co('/expected-events'), { body: e }),
   deleteEvent: (id: string) => request<void>('DELETE', co(`/expected-events/${id}`)),
-  taxCalendar: (amountKop?: string) =>
-    request<TaxCalendarResult>('POST', co('/expected-events/tax-calendar'), { body: amountKop ? { amount_kop: amountKop } : {} }),
+  taxCalendar: ({ kind, amountKop, usnObject }: TaxCalendarRequest) =>
+    request<TaxCalendarResult>('POST', co('/expected-events/tax-calendar'), {
+      body: { kind, ...(amountKop ? { amount_kop: amountKop } : {}), ...(kind === 'usn' && usnObject ? { usn_object: usnObject } : {}) },
+    }),
   syncIntegrations: (externalCompany: string) =>
     request<SyncResult>('POST', co('/integrations/sync'), { body: { external_company: externalCompany } }),
 

@@ -15,12 +15,14 @@ import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
 import { useAuth, useMe } from '../../app/auth'
 import { api } from '../../lib/api'
-import { useImports } from '../../hooks/queries'
+import { useForecastRun, useImports, useRecalc } from '../../hooks/queries'
 import { HORIZONS, loadPrefs, savePrefs } from '../../lib/prefs'
 import { formatDate, formatDateTime, formatNumber } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
 import type { ImportRow } from '../../types'
 import { ImportStatement } from './ImportStatement'
+import { AccountMethods } from './AccountMethods'
+import { ApiTokens } from './ApiTokens'
 
 export default function SettingsPage() {
   const { t } = useTranslation()
@@ -30,6 +32,8 @@ export default function SettingsPage() {
   const [name, setName] = useState(me.company_name)
   const [horizon, setHorizon] = useState(() => loadPrefs().horizon)
   const [saved, setSaved] = useState(false)
+  const forecastRun = useForecastRun()
+  const recalc = useRecalc()
 
   const rename = useMutation({
     mutationFn: (n: string) => api.renameCompany(n),
@@ -43,6 +47,8 @@ export default function SettingsPage() {
 
   const savePref = () => {
     savePrefs({ horizon })
+    // уже построенный прогноз пересобираем с новым горизонтом, чтобы настройка была видна сразу
+    if (forecastRun.data && forecastRun.data.result.horizon !== horizon) recalc.mutate(horizon)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -78,8 +84,8 @@ export default function SettingsPage() {
           <Card title={t('settings.org.title')} subtitle={t('settings.org.subtitle')}>
             <form className="px-5 pb-5 flex flex-col gap-4" onSubmit={submitName}>
               <Input label={t('settings.org.name')} value={name} onChange={(e) => { setName(e.target.value); rename.reset() }} required minLength={2} maxLength={200} />
-              <Input label={t('settings.org.email')} value={me.email} readOnly />
-              <Input label={t('settings.org.id')} value={me.company_id} readOnly className="tnum" />
+              {me.company_inn && <Input label={t('settings.org.inn')} value={me.company_inn} readOnly className="tnum" />}
+              {me.company_ogrn && <Input label={t('settings.org.ogrn')} value={me.company_ogrn} readOnly className="tnum" />}
               <Select label={t('settings.org.currency')} disabled onChange={() => {}} hint={t('settings.org.currencyHint')} value="RUB" options={[{ value: 'RUB', label: t('settings.org.rub') }]} />
               {rename.isSuccess && <Notice tone="success">{t('settings.org.saved')}</Notice>}
               {rename.isError && <Notice tone="danger">{errorText(t, rename.error)}</Notice>}
@@ -91,6 +97,10 @@ export default function SettingsPage() {
             </form>
           </Card>
 
+          <AccountMethods />
+
+          <ApiTokens />
+
           <Card title={t('settings.prefs.title')} subtitle={t('settings.prefs.subtitle')}>
             <div className="px-5 pb-5 flex flex-col gap-4">
               <Select
@@ -101,7 +111,7 @@ export default function SettingsPage() {
                 options={HORIZONS.map((d) => ({ value: d, label: t('common.daysCount', { count: d }) }))}
               />
               <div className="flex items-center gap-3">
-                <Button variant="primary" onClick={savePref}>{t('common.save')}</Button>
+                <Button variant="primary" disabled={recalc.isPending} onClick={savePref}>{t('common.save')}</Button>
                 {saved && (
                   <span className="inline-flex items-center gap-1 text-sm text-primary" role="status">
                     <Check size={16} aria-hidden /> {t('common.saved')}

@@ -5,7 +5,7 @@ import type { ImportPreview } from '../../types'
 import { Button } from '../../components/ui/Button'
 import { Notice } from '../../components/shared/Notice'
 import { Badge } from '../../components/shared/StatusBadge'
-import { useConfirmImport, useForecastRun, useRecalc, useUploadStatement } from '../../hooks/queries'
+import { useConfirmImport, useRecalc, useUploadStatement } from '../../hooks/queries'
 import { formatDate, formatKop, formatNumber } from '../../lib/formatters'
 import { loadPrefs } from '../../lib/prefs'
 import { errorText } from '../../i18n/helpers'
@@ -18,7 +18,6 @@ export function ImportStatement({ onDone }: { onDone?: () => void }) {
   const upload = useUploadStatement()
   const confirm = useConfirmImport()
   const recalc = useRecalc()
-  const forecast = useForecastRun()
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [done, setDone] = useState<{ inserted: number; skipped: number } | null>(null)
   const [error, setError] = useState<unknown>(null)
@@ -43,9 +42,9 @@ export function ImportStatement({ onDone }: { onDone?: () => void }) {
       const r = await confirm.mutateAsync(preview.import_id)
       setDone({ inserted: r.inserted, skipped: r.skipped_duplicates })
       setPreview(null)
-      // The forecast is rebuilt with the horizon of the current one (or the saved default for the first import).
+      // The forecast is rebuilt with the horizon chosen in the settings (default 90 days).
       try {
-        await recalc.mutateAsync(forecast.data?.result.horizon ?? loadPrefs().horizon)
+        await recalc.mutateAsync(loadPrefs().horizon)
       } catch (e) {
         setError(e)
       }

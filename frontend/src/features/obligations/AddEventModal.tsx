@@ -11,10 +11,12 @@ import { useCreateEvent, useTaxCalendar } from '../../hooks/queries'
 import { parseRubToKop } from '../../lib/money'
 import { errorText } from '../../i18n/helpers'
 import { formatDate, formatKop } from '../../lib/formatters'
-import type { EventSource, TaxCalendarResult } from '../../types'
+import type { EventSource, TaxCalendarResult, TaxKind } from '../../types'
 import { sourceLabel } from './labels'
 
 const SOURCES: EventSource[] = ['manual', 'invoice', 'contract', 'tax']
+
+const TAX_KINDS: TaxKind[] = ['enp', 'usn', 'vat']
 
 const empty = { date: '', amount: '', direction: 'in', title: '', counterparty: '', source: 'manual', confidence: 90 }
 
@@ -24,6 +26,8 @@ export function AddEventModal({ open, onClose }: { open: boolean; onClose: () =>
   const tax = useTaxCalendar()
   const [f, setF] = useState(empty)
   const [taxAmount, setTaxAmount] = useState('')
+  const [taxKind, setTaxKind] = useState<TaxKind>('enp')
+  const [usnObject, setUsnObject] = useState<'income' | 'income_expenses'>('income')
   const [error, setError] = useState<string | null>(null)
   const [taxResult, setTaxResult] = useState<TaxCalendarResult | null>(null)
   const set = <K extends keyof typeof empty>(k: K, v: (typeof empty)[K]) => setF((x) => ({ ...x, [k]: v }))
@@ -60,7 +64,7 @@ export function AddEventModal({ open, onClose }: { open: boolean; onClose: () =>
     const kop = taxAmount.trim() ? parseRubToKop(taxAmount) : null
     if (taxAmount.trim() && !kop) return setError(t('obligations.add.badTaxAmount'))
     try {
-      setTaxResult(await tax.mutateAsync(kop ?? undefined))
+      setTaxResult(await tax.mutateAsync({ kind: taxKind, amountKop: kop ?? undefined, usnObject }))
     } catch (err) {
       setError(errorText(t, err))
     }
@@ -108,6 +112,23 @@ export function AddEventModal({ open, onClose }: { open: boolean; onClose: () =>
         <hr className="border-line" />
 
         <form className="flex flex-col gap-3" onSubmit={addTax}>
+          <Select
+            label={t('obligations.tax.kind')}
+            value={taxKind}
+            onChange={(v) => setTaxKind(v as TaxKind)}
+            options={TAX_KINDS.map((k) => ({ value: k, label: t(`obligations.tax.kinds.${k}`) }))}
+          />
+          {taxKind === 'usn' && (
+            <Select
+              label={t('obligations.tax.usnObject')}
+              value={usnObject}
+              onChange={(v) => setUsnObject(v as 'income' | 'income_expenses')}
+              options={[
+                { value: 'income', label: t('obligations.tax.usnIncome') },
+                { value: 'income_expenses', label: t('obligations.tax.usnIncomeExpenses') },
+              ]}
+            />
+          )}
           <Input
             label={t('obligations.tax.label')}
             hint={t('obligations.tax.hint')}
@@ -118,7 +139,7 @@ export function AddEventModal({ open, onClose }: { open: boolean; onClose: () =>
           <div>
             <Button type="submit" disabled={busy}>
               {tax.isPending && <Loader2 size={16} className="spin" aria-hidden />}
-              {t('obligations.tax.submit')}
+              {t(`obligations.tax.submit.${taxKind}`)}
             </Button>
           </div>
         </form>

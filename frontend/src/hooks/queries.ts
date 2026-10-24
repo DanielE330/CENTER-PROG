@@ -5,7 +5,7 @@ import type { TransactionQuery } from '../lib/api'
 import { useAuth } from '../app/auth'
 import { buildView } from '../features/forecast/model'
 import type { ForecastView } from '../features/forecast/model'
-import type { NewExpectedEvent, ScenarioParams } from '../types'
+import type { NewExpectedEvent, ScenarioParams, TaxCalendarRequest } from '../types'
 
 /** All company data lives under ['co', companyId, ...], so one call refreshes everything after a data change. */
 function useKey() {
@@ -81,7 +81,7 @@ export function useDeleteEvent() {
 
 export function useTaxCalendar() {
   const all = useInvalidateAll()
-  return useMutation({ mutationFn: (amountKop?: string) => api.taxCalendar(amountKop), onSuccess: () => void all() })
+  return useMutation({ mutationFn: (req: TaxCalendarRequest) => api.taxCalendar(req), onSuccess: () => void all() })
 }
 
 export function useSyncIntegrations() {

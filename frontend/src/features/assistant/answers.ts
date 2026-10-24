@@ -67,7 +67,7 @@ export function localAnswer(intent: Exclude<Intent, 'delay' | 'revenue'>, r: For
     }
     case 'reduce': {
       if (risk.level === 'none') return [{ key: R + 'reduceNone', params: { probPercent: risk.shortfall_probability } }]
-      const upto = when ?? format(addDays(parseISO(r.as_of), r.horizon), 'yyyy-MM-dd')
+      const upto = when ?? format(addDays(parseISO(r.as_of), r.horizon + (r.bridge_days ?? 0)), 'yyyy-MM-dd')
       const out = r.planned.filter((p) => BigInt(p.amount) < 0n && p.date <= upto).sort(byAmount).slice(0, 3)
       const inc = r.planned.filter((p) => BigInt(p.amount) > 0n && p.date <= upto).slice(0, 3)
       return [

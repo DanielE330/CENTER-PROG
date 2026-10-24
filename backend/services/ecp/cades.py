@@ -35,6 +35,9 @@ class Signer:
     issuer: str
     serial: str
     display_name: str
+    # данные организации из сертификата (пусто, если УЦ их не указал)
+    inn: str = ""
+    ogrn: str = ""
 
 
 def challenge_text(nonce: str) -> str:
@@ -43,6 +46,39 @@ def challenge_text(nonce: str) -> str:
 
 def _name(n: x509.Name) -> dict:
     return {k: v for k, v in n.native.items()} if n else {}
+
+
+# OID реквизитов в subject сертификатов УЦ РФ
+OID_INN_LEGAL = "1.2.643.100.4"
+OID_INN = "1.2.643.3.131.1.1"
+OID_OGRN = "1.2.643.100.1"
+OID_OGRNIP = "1.2.643.100.5"
+
+
+def _subject_oids(n: x509.Name) -> dict:
+    """Атрибуты subject по точечной записи OID (asn1crypto не знает имён российских OID)."""
+    out: dict = {}
+    for rdn in n.chosen:
+        for atv in rdn:
+            v = atv["value"]
+            try:
+                val = v.native
+                if val is None and hasattr(v, "parsed"):
+                    val = v.parsed.native
+            except Exception:
+                continue
+            if isinstance(val, bytes):
+                val = val.decode("utf-8", "ignore")
+            out.setdefault(atv["type"].dotted, str(val))
+    return out
+
+
+def _digits(v: str, lengths: tuple[int, ...]) -> str:
+    d = "".join(ch for ch in v if ch.isdigit())
+    # у юрлиц ИНН физлица-подписанта бывает «00» + ИНН10
+    if len(d) == 12 and d.startswith("00") and 10 in lengths:
+        d = d[2:]
+    return d if len(d) in lengths else ""
 
 
 def parse_signer(sig_der: bytes, now: float | None = None) -> Signer:
@@ -76,12 +112,17 @@ def parse_signer(sig_der: bytes, now: float | None = None) -> Signer:
         raise EcpError("certificate_expired")
     subj = _name(cert.subject)
     display = subj.get("organization_name") or subj.get("common_name") or ""
+    oids = _subject_oids(cert.subject)
+    inn = _digits(oids.get(OID_INN_LEGAL) or oids.get(OID_INN) or "", (10, 12))
+    ogrn = _digits(oids.get(OID_OGRN) or oids.get(OID_OGRNIP) or "", (13, 15))
     return Signer(
         fingerprint=hashlib.sha256(cert.dump()).hexdigest(),
         subject=cert.subject.human_friendly,
         issuer=cert.issuer.human_friendly,
         serial=format(cert.serial_number, "x"),
         display_name=str(display)[:200],
+        inn=inn,
+        ogrn=ogrn,
     )
 
 

@@ -178,7 +178,14 @@
     "no_forecast": "No forecast has been built yet",
     "gov_error": "Could not get data from the government service",
     "not_registered": "This certificate is not registered. Register with e-signature first",
-    "already_registered": "This certificate is already registered. Sign in with e-signature"
+    "already_registered": "This certificate is already registered. Sign in with e-signature",
+    "email_exists": "An email is already linked to this account",
+    "last_method": "The only sign-in method cannot be removed: add another one first",
+    "signature_taken": "This signature is linked to another account",
+    "too_many_signatures": "Signature limit reached",
+    "too_many_tokens": "Token limit reached, delete unused ones",
+    "invalid_token_name": "Token name must be 1 to 80 characters",
+    "invalid_token": "The token is invalid or revoked"
   },
   "quality": {
     "title": "Data quality",
@@ -434,11 +441,24 @@
     "tax": {
       "label": "Federal Tax Service calendar: unified tax payment, amount, ₽",
       "hint": "Due dates are taken from nalog.gov.ru. Without an amount we use a typical payment from your statement.",
-      "submit": "Fetch tax due dates",
+      "submit": {
+        "enp": "Fetch ENP due dates",
+        "usn": "Add USN advances",
+        "vat": "Add VAT payments"
+      },
       "doneTitle": "Due dates added: {{count}}",
       "doneText": "{{dates}} · {{amount}} · source: {{source}}.",
       "nothingNew": "These due dates are already among the expected events.",
-      "estimated": "The amount was estimated from the tax payments in the statement."
+      "estimated": "The amount was estimated from the tax payments in the statement.",
+      "kind": "Tax type",
+      "kinds": {
+        "enp": "Unified tax payment (ENP)",
+        "usn": "Simplified tax (USN) advance (28 Apr/Jul/Oct)",
+        "vat": "VAT (three payments on the 28th)"
+      },
+      "usnObject": "USN object",
+      "usnIncome": "Income (6%)",
+      "usnIncomeExpenses": "Income minus expenses (15%)"
     }
   },
   "sync": {
@@ -637,18 +657,18 @@
       "title": "Organisation",
       "subtitle": "The legal entity name is stored on the server.",
       "name": "Legal entity",
-      "email": "Email",
-      "id": "Company ID",
       "currency": "Currency",
       "currencyHint": "Only roubles are supported.",
       "rub": "Russian rouble (RUB)",
-      "saved": "Name saved"
+      "saved": "Name saved",
+      "inn": "TIN (INN)",
+      "ogrn": "OGRN"
     },
     "prefs": {
       "title": "Preferences",
       "subtitle": "Stored in this browser only.",
       "horizon": "Forecast horizon after import",
-      "horizonHint": "Used when the forecast is built for the first time."
+      "horizonHint": "Applied immediately on save and after every import."
     },
     "history": {
       "title": "Import history",
@@ -695,5 +715,41 @@
     "confirm": "Confirm and build the forecast",
     "processing": "Processing…",
     "another": "Another file"
+  },
+  "account": {
+    "title": "Sign-in methods",
+    "subtitle": "Sign in with email and password or with an electronic signature. At least one method must remain.",
+    "emailTitle": "Email and password",
+    "emailHint": "Password sign-in",
+    "noEmail": "No email linked: you can only sign in with an electronic signature.",
+    "addEmail": "Link email",
+    "remove": "Remove",
+    "signaturesTitle": "Electronic signatures",
+    "noSignatures": "No signatures linked.",
+    "signatureNoName": "Certificate",
+    "signatureHint": "Fingerprint {{fp}}… · added {{date}}",
+    "addSignature": "Link a signature",
+    "signAndAdd": "Sign and link",
+    "lastMethod": "This is the only sign-in method",
+    "lastMethodNote": "The only sign-in method cannot be removed: add another one first."
+  },
+  "apiTokens": {
+    "title": "API access",
+    "subtitle": "A token gives external systems (1C, BI, scripts) access to your company data. No company id is needed: the token identifies the company.",
+    "empty": "No tokens yet",
+    "name": "Token name",
+    "namePlaceholder": "For example, 1C accounting",
+    "create": "Create token",
+    "revoke": "Revoke",
+    "created": "created {{value}}",
+    "lastUsed": "used {{value}}",
+    "neverUsed": "never used",
+    "createdTitle": "Token created",
+    "createdText": "Copy it now: it will not be shown again.",
+    "tokenAria": "Access token",
+    "copy": "Copy",
+    "copied": "Copied",
+    "usage": "Example request:",
+    "endpoints": "Available: GET /api/ext/v1/company, forecast, transactions, expected-events, plan-fact; POST forecast and expected-events."
   }
 }

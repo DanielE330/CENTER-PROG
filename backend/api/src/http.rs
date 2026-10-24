@@ -17,9 +17,28 @@ use std::collections::BTreeMap;
 // ---------- аутентификация ----------
 pub struct Principal {
     pub user_id: String,
+    /// у пользователя только с ЭЦП это служебный адрес `@ecp.invalid`; наружу отдаётся, только если `has_email`
     pub email: String,
+    pub has_email: bool,
     pub company_id: String,
     pub company_name: String,
+    pub company_inn: String,
+    pub company_ogrn: String,
+}
+
+/// Реквизиты компании, которые ledger знает со слов сертификата ЭЦП.
+#[derive(Default)]
+pub struct Requisites<'a> {
+    pub name: Option<&'a str>,
+    pub inn: Option<&'a str>,
+    pub ogrn: Option<&'a str>,
+}
+
+pub struct Company {
+    pub id: String,
+    pub name: String,
+    pub inn: String,
+    pub ogrn: String,
 }
 
 fn cookie_token(h: &HeaderMap) -> Option<String> {
@@ -27,10 +46,16 @@ fn cookie_token(h: &HeaderMap) -> Option<String> {
     c.split(';').filter_map(|p| p.trim().strip_prefix("session=")).next().map(|s| s.to_string())
 }
 
-/// Компания пользователя в ledger (создаётся при первом обращении). Возвращает (id, название).
-async fn ensure_company(st: &AppState, ctx: &Ctx, user_id: &str, email: &str, name: Option<&str>) -> R<(String, String)> {
-    let v = st.ledger.post("/internal/v1/companies/ensure", ctx, &json!({"owner_id": user_id, "email": email, "name": name})).await?;
-    Ok((v["company_id"].as_str().unwrap_or_default().to_string(), v["company_name"].as_str().unwrap_or_default().to_string()))
+/// Компания пользователя в ledger (создаётся при первом обращении).
+async fn ensure_company(st: &AppState, ctx: &Ctx, user_id: &str, email: &str, req: Requisites<'_>) -> R<Company> {
+    let v = st.ledger.post("/internal/v1/companies/ensure", ctx, &json!({"owner_id": user_id, "email": email, "name": req.name, "inn": req.inn, "ogrn": req.ogrn})).await?;
+    let s = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+    Ok(Company { id: s("company_id"), name: s("company_name"), inn: s("inn"), ogrn: s("ogrn") })
+}
+
+async fn principal_of(st: &AppState, ctx: &Ctx, user_id: String, email: String, has_email: bool) -> R<Principal> {
+    let c = ensure_company(st, ctx, &user_id, &email, Requisites::default()).await?;
+    Ok(Principal { user_id, email, has_email, company_id: c.id, company_name: c.name, company_inn: c.inn, company_ogrn: c.ogrn })
 }
 
 impl FromRequestParts<AppState> for Principal {
@@ -43,10 +68,26 @@ impl FromRequestParts<AppState> for Principal {
             return Err(err(StatusCode::UNAUTHORIZED, "unauthenticated", "Сессия недействительна"));
         }
         let v = r.json();
-        let user_id = v["user_id"].as_str().unwrap_or_default().to_string();
-        let email = v["email"].as_str().unwrap_or_default().to_string();
-        let (company_id, company_name) = ensure_company(st, &ctx, &user_id, &email, None).await?;
-        Ok(Principal { user_id, email, company_id, company_name })
+        principal_of(st, &ctx, v["user_id"].as_str().unwrap_or_default().to_string(), v["email"].as_str().unwrap_or_default().to_string(), v["has_email"].as_bool().unwrap_or(true)).await
+    }
+}
+
+/// Доступ внешнего клиента: `Authorization: Bearer ckt_…`. Токен привязан к пользователю, а значит и к его единственной
+/// компании, поэтому идентификатор компании в путях внешнего API не нужен.
+pub struct TokenPrincipal(pub Principal);
+
+impl FromRequestParts<AppState> for TokenPrincipal {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, st: &AppState) -> R<Self> {
+        let ctx = Ctx::from_request_parts(parts, st).await.unwrap_or_default();
+        let bad = || err(StatusCode::UNAUTHORIZED, "invalid_token", "Нужен заголовок Authorization: Bearer <токен>");
+        let token = parts.headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(str::trim).ok_or_else(bad)?;
+        let r = st.auth.json(Method::POST, "/internal/v1/tokens/verify", &ctx, Some(&json!({"token": token}))).await?;
+        if !r.status.is_success() {
+            return Err(err(StatusCode::UNAUTHORIZED, "invalid_token", "Токен недействителен или отозван"));
+        }
+        let v = r.json();
+        Ok(TokenPrincipal(principal_of(st, &ctx, v["user_id"].as_str().unwrap_or_default().to_string(), v["email"].as_str().unwrap_or_default().to_string(), true).await?))
     }
 }
 
@@ -114,8 +155,8 @@ pub async fn login(axum::extract::State(st): axum::extract::State<AppState>, ctx
     }
     let uid = v["user_id"].as_str().unwrap_or_default();
     let email = v["email"].as_str().unwrap_or_default();
-    let (cid, name) = ensure_company(&st, &ctx, uid, email, c.company_name.as_deref()).await?;
-    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": email, "company_id": cid, "company_name": name})))
+    let co = ensure_company(&st, &ctx, uid, email, Requisites { name: c.company_name.as_deref(), ..Default::default() }).await?;
+    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": email, "company_id": co.id, "company_name": co.name})))
 }
 
 #[derive(Deserialize)]
@@ -160,9 +201,15 @@ pub async fn ecp_login(axum::extract::State(st): axum::extract::State<AppState>,
     }
     let uid = v["user_id"].as_str().unwrap_or_default();
     let email = v["email"].as_str().unwrap_or_default();
-    let display = v["display_name"].as_str().filter(|n| n.chars().count() >= 2);
-    let (cid, name) = ensure_company(&st, &ctx, uid, email, display).await?;
-    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": email, "company_id": cid, "company_name": name, "ecp": true})))
+    // данные компании берём из сертификата: название (организация или ФИО), ИНН, ОГРН
+    let cert = &v["company"];
+    let requisites = Requisites {
+        name: cert["name"].as_str().map(str::trim).filter(|n| n.chars().count() >= 2),
+        inn: cert["inn"].as_str(),
+        ogrn: cert["ogrn"].as_str(),
+    };
+    let co = ensure_company(&st, &ctx, uid, email, requisites).await?;
+    Ok(session_response(&st, v["token"].as_str().unwrap_or_default(), v["ttl"].as_i64().unwrap_or(3600), json!({"email": v["has_email"].as_bool().unwrap_or(false).then_some(email), "company_id": co.id, "company_name": co.name, "company_inn": co.inn, "company_ogrn": co.ogrn, "ecp": true})))
 }
 
 pub async fn register(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx, Json(mut c): Json<Creds>) -> R<Response> {
@@ -191,7 +238,130 @@ pub async fn logout(axum::extract::State(st): axum::extract::State<AppState>, ct
 }
 
 pub async fn me(p: Principal) -> Json<Value> {
-    Json(json!({"email": p.email, "company_id": p.company_id, "company_name": p.company_name}))
+    Json(json!({"email": p.has_email.then_some(&p.email), "company_id": p.company_id, "company_name": p.company_name, "company_inn": p.company_inn, "company_ogrn": p.company_ogrn}))
+}
+
+// ---------- аккаунт: способы входа и токены внешнего API ----------
+fn account_err(s: StatusCode, v: &Value) -> ApiError {
+    match v["detail"]["code"].as_str().unwrap_or("") {
+        "email_exists" => err(s, "email_exists", "К аккаунту уже привязан email"),
+        "email_taken" => err(s, "email_taken", "Этот email уже используется"),
+        "invalid_email" => err(s, "invalid_email", "Некорректный email"),
+        "invalid_password" => err(s, "invalid_password", "Пароль должен быть от 8 до 128 символов"),
+        "last_method" => err(s, "last_method", "Нельзя удалить единственный способ входа: сначала добавьте другой"),
+        "signature_taken" => err(s, "signature_taken", "Эта подпись уже привязана к другому аккаунту"),
+        "too_many_signatures" => err(s, "too_many_signatures", "Достигнут предел числа подписей"),
+        "signature_not_found" | "no_email" | "token_not_found" => err(s, "not_found", "Не найдено"),
+        "too_many_tokens" => err(s, "too_many_tokens", "Достигнут предел числа токенов, удалите ненужные"),
+        "invalid_token_name" => err(s, "invalid_token_name", "Название токена от 1 до 80 символов"),
+        _ => err(StatusCode::BAD_GATEWAY, "auth_error", "Ошибка сервиса входа"),
+    }
+}
+
+async fn account_call(st: &AppState, ctx: &Ctx, p: &Principal, method: Method, path: &str, body: Option<Value>) -> R<Value> {
+    let r = st.auth.json(method, &format!("/internal/v1/users/{}{path}", p.user_id), &with_actor(ctx, p), body.as_ref()).await?;
+    if r.status.is_success() { Ok(r.json()) } else { Err(account_err(r.status, &r.json())) }
+}
+
+pub async fn account_methods(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<Json<Value>> {
+    Ok(Json(account_call(&st, &ctx, &p, Method::GET, "/methods", None).await?))
+}
+
+#[derive(Deserialize)]
+pub struct EmailBody {
+    email: String,
+    password: String,
+    #[serde(default)]
+    password_confirm: Option<String>,
+}
+
+pub async fn account_add_email(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(b): Json<EmailBody>) -> R<Json<Value>> {
+    if b.password_confirm.as_deref() != Some(b.password.as_str()) {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "password_mismatch", "Пароли не совпадают"));
+    }
+    let v = account_call(&st, &ctx, &p, Method::POST, "/email", Some(json!({"email": b.email, "password": b.password}))).await?;
+    audit(&st, &ctx, &p, "account.email_add", "").await;
+    Ok(Json(v))
+}
+
+pub async fn account_remove_email(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<Json<Value>> {
+    let v = account_call(&st, &ctx, &p, Method::DELETE, "/email", None).await?;
+    audit(&st, &ctx, &p, "account.email_remove", "").await;
+    Ok(Json(v))
+}
+
+/// Привязка сертификата: подпись проверяется так же, как при входе, затем отпечаток добавляется к аккаунту.
+pub async fn account_add_signature(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(c): Json<EcpLogin>) -> R<Json<Value>> {
+    let (s, v) = service_call(&st.ecp, &ctx, "ecp/verify", json!({"challenge": c.challenge, "signature": c.signature})).await?;
+    if !s.is_success() {
+        return Err(ecp_err(s, &v));
+    }
+    let label = v["display_name"].as_str().unwrap_or_default();
+    let out = account_call(&st, &ctx, &p, Method::POST, "/signatures", Some(json!({"external_id": v["external_id"], "label": label}))).await?;
+    // реквизиты, которых у компании ещё нет, берём из сертификата (введённые вручную не затираются)
+    let cert = &v["company"];
+    let _ = ensure_company(&st, &ctx, &p.user_id, &p.email, Requisites { name: None, inn: cert["inn"].as_str(), ogrn: cert["ogrn"].as_str() }).await;
+    audit(&st, &ctx, &p, "account.signature_add", "").await;
+    Ok(Json(out))
+}
+
+pub async fn account_remove_signature(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(id): Path<String>) -> R<Json<Value>> {
+    let v = account_call(&st, &ctx, &p, Method::DELETE, &format!("/signatures/{id}"), None).await?;
+    audit(&st, &ctx, &p, "account.signature_remove", "").await;
+    Ok(Json(v))
+}
+
+pub async fn tokens_list(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx) -> R<Json<Value>> {
+    Ok(Json(account_call(&st, &ctx, &p, Method::GET, "/tokens", None).await?))
+}
+
+#[derive(Deserialize)]
+pub struct TokenBody {
+    name: String,
+}
+
+/// Новый токен возвращается один раз; хранится только его хэш.
+pub async fn tokens_create(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Json(b): Json<TokenBody>) -> R<(StatusCode, Json<Value>)> {
+    let v = account_call(&st, &ctx, &p, Method::POST, "/tokens", Some(json!({"name": b.name}))).await?;
+    audit(&st, &ctx, &p, "account.token_create", v["id"].as_str().unwrap_or("")).await;
+    Ok((StatusCode::CREATED, Json(v)))
+}
+
+pub async fn tokens_delete(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(id): Path<String>) -> R<StatusCode> {
+    account_call(&st, &ctx, &p, Method::DELETE, &format!("/tokens/{id}"), None).await?;
+    audit(&st, &ctx, &p, "account.token_delete", &id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------- внешний API по токену: /api/ext/v1/* ----------
+async fn ext_forward(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request, tail: &str) -> R<Response> {
+    let q = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+    let path = format!("/internal/v1/companies/{}/{tail}{q}", p.company_id);
+    Ok(forward(up, p, ctx, req, path).await?.into_response())
+}
+
+pub async fn ext_company(TokenPrincipal(p): TokenPrincipal) -> Json<Value> {
+    Json(json!({"company_id": p.company_id, "company_name": p.company_name, "inn": p.company_inn, "ogrn": p.company_ogrn}))
+}
+
+pub async fn ext_forecast_latest(axum::extract::State(st): axum::extract::State<AppState>, TokenPrincipal(p): TokenPrincipal, ctx: Ctx, req: Request) -> R<Response> {
+    ext_forward(&st.forecast, &p, &ctx, req, "forecasts/latest").await
+}
+
+pub async fn ext_forecast_create(axum::extract::State(st): axum::extract::State<AppState>, TokenPrincipal(p): TokenPrincipal, ctx: Ctx, req: Request) -> R<Response> {
+    ext_forward(&st.forecast, &p, &ctx, req, "forecasts").await
+}
+
+pub async fn ext_transactions(axum::extract::State(st): axum::extract::State<AppState>, TokenPrincipal(p): TokenPrincipal, ctx: Ctx, req: Request) -> R<Response> {
+    ext_forward(&st.ledger, &p, &ctx, req, "transactions").await
+}
+
+pub async fn ext_events(axum::extract::State(st): axum::extract::State<AppState>, TokenPrincipal(p): TokenPrincipal, ctx: Ctx, req: Request) -> R<Response> {
+    ext_forward(&st.ledger, &p, &ctx, req, "expected-events").await
+}
+
+pub async fn ext_plan_fact(axum::extract::State(st): axum::extract::State<AppState>, TokenPrincipal(p): TokenPrincipal, ctx: Ctx, req: Request) -> R<Response> {
+    ext_forward(&st.planfact, &p, &ctx, req, "plan-fact").await
 }
 
 // ---------- проксирование к внутренним сервисам ----------
@@ -208,6 +378,10 @@ async fn relay(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request) -> R<Reply
         Some(q) => format!("/internal/v1{tail}?{q}"),
         None => format!("/internal/v1{tail}"),
     };
+    forward(up, p, ctx, req, path).await
+}
+
+async fn forward(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request, path: String) -> R<Reply> {
     let method = req.method().clone();
     let ct = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
     let body = axum::body::to_bytes(req.into_body(), MAX_BODY)
@@ -260,6 +434,97 @@ fn parse_kop(s: &str) -> Option<i64> {
 pub struct TaxBody {
     #[serde(default)]
     amount_kop: Option<String>,
+    /// "enp" (по умолчанию), "usn" (аванс УСН по кварталам) или "vat" (НДС тремя равными платежами)
+    #[serde(default)]
+    kind: Option<String>,
+    /// ставка УСН, %: по умолчанию 6 («доходы») или 15 («доходы минус расходы»)
+    #[serde(default)]
+    rate_pct: Option<f64>,
+    /// объект УСН: "income" (по умолчанию) или "income_expenses"
+    #[serde(default)]
+    usn_object: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TaxKind {
+    Enp,
+    Usn,
+    Vat,
+}
+
+impl TaxKind {
+    fn parse(s: Option<&str>) -> Option<Self> {
+        match s.unwrap_or("enp") {
+            "enp" => Some(Self::Enp),
+            "usn" => Some(Self::Usn),
+            "vat" => Some(Self::Vat),
+            _ => None,
+        }
+    }
+    fn title(self) -> &'static str {
+        match self {
+            Self::Enp => "ЕНП (налоговый календарь)",
+            Self::Usn => "Аванс по УСН (налоговый календарь)",
+            Self::Vat => "НДС, 1/3 за квартал (налоговый календарь)",
+        }
+    }
+}
+
+const REVENUE_CATS: [&str; 2] = ["revenue", "other_income"];
+/// Расходы, учитываемые при расчёте НДС к уплате и УСН «доходы минус расходы» (без налогов, зарплаты и кредитов).
+const PURCHASE_CATS: [&str; 5] = ["suppliers", "rent", "utilities", "marketing", "other_expense"];
+
+/// Сумма операций заданных категорий за последние ~квартал (90 дней) истории; расходы возвращаются положительным числом.
+fn quarter_sum(txs: &[Tx], base: NaiveDate, cats: &[&str], income: bool) -> i64 {
+    let from = base - Duration::days(90);
+    txs.iter()
+        .filter(|t| t.date > from && cats.contains(&t.category.as_str()) && (t.amount > 0) == income)
+        .map(|t| t.amount.abs())
+        .sum()
+}
+
+/// Аванс УСН за квартал: ставка × доходы за последние 90 дней; для «доходы минус расходы» — ставка × (доходы − расходы),
+/// но не менее 1 % доходов (минимальный налог). Это оценка по выписке, а не расчёт налоговой базы.
+pub fn estimate_usn(txs: &[Tx], base: NaiveDate, rate_pct: f64, income_minus_expenses: bool) -> Option<i64> {
+    let income = quarter_sum(txs, base, &REVENUE_CATS, true);
+    if income <= 0 {
+        return None;
+    }
+    let tax = if income_minus_expenses {
+        let expenses = quarter_sum(txs, base, &PURCHASE_CATS, false);
+        let by_base = ((income - expenses).max(0) as f64 * rate_pct / 100.0).round() as i64;
+        by_base.max((income as f64 * 0.01).round() as i64)
+    } else {
+        (income as f64 * rate_pct / 100.0).round() as i64
+    };
+    (tax > 0).then_some(tax)
+}
+
+/// Один из трёх равных платежей НДС за квартал: (поступления − закупки) × 20/120 / 3. Выручка в выписке считается с НДС.
+pub fn estimate_vat_installment(txs: &[Tx], base: NaiveDate) -> Option<i64> {
+    let net = quarter_sum(txs, base, &REVENUE_CATS, true) - quarter_sum(txs, base, &PURCHASE_CATS, false);
+    let vat = net as f64 * 20.0 / 120.0 / 3.0;
+    (vat >= 1.0).then(|| vat.round() as i64)
+}
+
+fn day28(y: i32, m: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(y, m, 28).expect("28-е число есть в каждом месяце")
+}
+
+/// Ближайшие `n` сроков после `base`: 28-е в месяцах из списка (апр/июл/окт для аванса УСН; все месяцы для НДС).
+fn next_28ths(base: NaiveDate, months: &[u32], n: usize) -> Vec<NaiveDate> {
+    let mut out = vec![];
+    let mut y = base.year();
+    while out.len() < n && y <= base.year() + 2 {
+        for &m in months {
+            let d = day28(y, m);
+            if d > base && out.len() < n {
+                out.push(d);
+            }
+        }
+        y += 1;
+    }
+    out
 }
 
 /// Оценка месячного налогового платежа: медиана сумм списаний «taxes» по месяцам за последние полгода истории.
@@ -300,7 +565,7 @@ async fn load_snapshot(st: &AppState, ctx: &Ctx, cid: &str) -> R<Snapshot> {
     serde_json::from_value(v).map_err(internal)
 }
 
-/// ЕНП: два ближайших срока уплаты. Даты берутся с nalog.gov.ru (сервис gov), при недоступности — 28-е число.
+/// Налоговые события: ЕНП (два срока из календаря ФНС), аванс УСН (апр/июл/окт) или НДС (три ближайших 28-х). Даты берутся с nalog.gov.ru (сервис gov), при недоступности — 28-е число.
 /// Сумма: из запроса или оценка по налоговым платежам из выписки. События создаются в ledger.
 pub async fn tax_calendar(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, Path(cid): Path<String>, body: Option<Json<TaxBody>>) -> R<(StatusCode, Json<Value>)> {
     authorize(&p, &cid)?;
@@ -308,30 +573,51 @@ pub async fn tax_calendar(axum::extract::State(st): axum::extract::State<AppStat
     let snap = load_snapshot(&st, &actx, &cid).await?;
     let txs: Vec<Tx> = snap.transactions.iter().map(|r| r.tx.clone()).collect();
     let base = txs.iter().map(|t| t.date).max().unwrap_or_else(|| chrono::Local::now().date_naive());
-    let (amount, estimated) = match body.and_then(|b| b.0.amount_kop) {
-        Some(a) => (parse_kop(&a).ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_amount", "Некорректная сумма"))?, false),
-        None => (
-            estimate_tax(&txs, base).ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "amount_required", "В выписке нет налоговых платежей, укажите сумму ЕНП"))?,
-            true,
-        ),
-    };
-    let (dates, source) = match fns_payment_dates(&st, &actx, base).await {
-        Some(d) => (d, "nalog.gov.ru"),
+    let body = body.map(|b| b.0).unwrap_or_default();
+    let kind = TaxKind::parse(body.kind.as_deref()).ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_kind", "Вид налога: enp, usn или vat"))?;
+    let (amount, estimated) = match body.amount_kop.as_deref() {
+        Some(a) => (parse_kop(a).ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_amount", "Некорректная сумма"))?, false),
         None => {
-            let mut d = vec![];
-            let (mut y, mut m) = (base.year(), base.month());
-            for _ in 0..4 {
-                d.push(NaiveDate::from_ymd_opt(y, m, 28).unwrap());
-                if m == 12 { y += 1; m = 1 } else { m += 1 }
-            }
-            (d.into_iter().filter(|x| *x > base).collect(), "fallback-28")
+            let est = match kind {
+                TaxKind::Enp => estimate_tax(&txs, base),
+                TaxKind::Usn => {
+                    let ie = match body.usn_object.as_deref() {
+                        None | Some("income") => false,
+                        Some("income_expenses") => true,
+                        _ => return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_usn_object", "Объект УСН: income или income_expenses")),
+                    };
+                    let rate = body.rate_pct.unwrap_or(if ie { 15.0 } else { 6.0 });
+                    if !(0.0..=100.0).contains(&rate) {
+                        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_rate", "Ставка от 0 до 100 %"));
+                    }
+                    estimate_usn(&txs, base, rate, ie)
+                }
+                TaxKind::Vat => estimate_vat_installment(&txs, base),
+            };
+            (est.ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "amount_required", "Не удалось оценить сумму по выписке, укажите её вручную"))?, true)
         }
+    };
+    let (dates, source) = match kind {
+        TaxKind::Usn => (next_28ths(base, &[4, 7, 10], 2), "statutory-28"),
+        TaxKind::Vat => (next_28ths(base, &(1..=12).collect::<Vec<u32>>(), 3), "statutory-28"),
+        TaxKind::Enp => match fns_payment_dates(&st, &actx, base).await {
+            Some(d) => (d.into_iter().take(2).collect(), "nalog.gov.ru"),
+            None => {
+                let mut d = vec![];
+                let (mut y, mut m) = (base.year(), base.month());
+                for _ in 0..4 {
+                    d.push(day28(y, m));
+                    if m == 12 { y += 1; m = 1 } else { m += 1 }
+                }
+                (d.into_iter().filter(|x| *x > base).take(2).collect(), "fallback-28")
+            }
+        },
     };
     let mut created = vec![];
     let mut new_events = vec![];
-    for d in dates.into_iter().take(2) {
-        if !snap.events.iter().any(|e| e.date == d && e.source == "tax") {
-            new_events.push(json!({"date": d, "amount_kop": -amount, "title": "ЕНП (налоговый календарь)", "counterparty": "ФНС России", "source": "tax", "confidence": 1.0}));
+    for d in dates {
+        if !snap.events.iter().any(|e| e.date == d && e.source == "tax" && e.title == kind.title()) {
+            new_events.push(json!({"date": d, "amount_kop": -amount, "title": kind.title(), "counterparty": "ФНС России", "source": "tax", "confidence": 1.0}));
             created.push(d.to_string());
         }
     }
@@ -339,7 +625,7 @@ pub async fn tax_calendar(axum::extract::State(st): axum::extract::State<AppStat
         st.ledger.post(&format!("/internal/v1/companies/{cid}/expected-events/bulk"), &actx, &json!({"events": new_events})).await?;
     }
     audit(&st, &ctx, &p, "event.tax_calendar", source).await;
-    Ok((StatusCode::CREATED, Json(json!({"created": created, "source": source, "amount_kop": amount.to_string(), "amount_estimated": estimated}))))
+    Ok((StatusCode::CREATED, Json(json!({"created": created, "source": source, "amount_kop": amount.to_string(), "amount_estimated": estimated, "kind": body.kind.as_deref().unwrap_or("enp")}))))
 }
 
 /// Ключевая ставка ЦБ РФ (сервис gov, данные cbr.ru).
@@ -414,6 +700,42 @@ mod tests {
     }
     fn tax(date: NaiveDate, amount: i64) -> Tx {
         Tx { date, amount, counterparty: "ФНС".into(), inn: String::new(), purpose: String::new(), category: "taxes".into() }
+    }
+
+    fn cat(date: NaiveDate, amount: i64, category: &str) -> Tx {
+        Tx { date, amount, counterparty: "X".into(), inn: String::new(), purpose: String::new(), category: category.into() }
+    }
+
+    #[test]
+    fn usn_and_vat_estimates_use_last_quarter() {
+        let base = d(2026, 9, 30);
+        let txs = vec![
+            cat(d(2026, 8, 1), 1_200_000, "revenue"),
+            cat(d(2026, 9, 1), 600_000, "revenue"),
+            cat(d(2026, 9, 2), -300_000, "suppliers"),
+            cat(d(2026, 9, 3), -500_000, "payroll"),
+            cat(d(2025, 1, 1), 9_999_999, "revenue"),
+        ];
+        assert_eq!(estimate_usn(&txs, base, 6.0, false), Some(108_000));
+        // (1_800_000 − 300_000) × 15 % = 225_000
+        assert_eq!(estimate_usn(&txs, base, 15.0, true), Some(225_000));
+        // (1_800_000 − 300_000) × 20/120 / 3 = 83_333
+        assert_eq!(estimate_vat_installment(&txs, base), Some(83_333));
+        assert_eq!(estimate_usn(&[], base, 6.0, false), None);
+        assert_eq!(estimate_vat_installment(&[cat(d(2026, 9, 1), -100, "suppliers")], base), None);
+    }
+
+    #[test]
+    fn usn_income_minus_expenses_has_minimum_tax() {
+        let txs = vec![cat(d(2026, 9, 1), 1_000_000, "revenue"), cat(d(2026, 9, 2), -1_500_000, "suppliers")];
+        assert_eq!(estimate_usn(&txs, d(2026, 9, 30), 15.0, true), Some(10_000));
+    }
+
+    #[test]
+    fn statutory_dates_follow_quarters() {
+        assert_eq!(next_28ths(d(2026, 9, 30), &[4, 7, 10], 2), vec![d(2026, 10, 28), d(2027, 4, 28)]);
+        assert_eq!(next_28ths(d(2026, 10, 28), &[4, 7, 10], 1), vec![d(2027, 4, 28)]);
+        assert_eq!(next_28ths(d(2026, 11, 30), &(1..=12).collect::<Vec<u32>>(), 3), vec![d(2026, 12, 28), d(2027, 1, 28), d(2027, 2, 28)]);
     }
 
     #[test]
