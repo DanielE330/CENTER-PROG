@@ -52,6 +52,7 @@ services:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: ecp}
     environment:
+      ECP_DEBUG_DUMP: ${ECP_DEBUG_DUMP:-0}
       ECP_DB: /data/ecp.db
       AUTH_URL: http://auth:8001
     volumes: [ecp-data:/data]
