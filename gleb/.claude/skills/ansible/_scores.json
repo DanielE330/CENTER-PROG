@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "skillHash": "sha256:73b5ab2c885cd3a6303b18bdc51b220db86635838d10f03a5eb1faafa8d22f44",
+  "scoredAt": "2026-05-13T13:58:59.236Z",
+  "backend": "ollama",
+  "model": "gpt-oss:20b",
+  "quality": {
+    "score": 93,
+    "dimensions": {
+      "clarity": "PASS",
+      "completeness": "WEAK",
+      "conciseness": "PASS",
+      "actionability": "PASS",
+      "crossPlatform": "PASS",
+      "examples": "PASS"
+    },
+    "issues": [
+      {
+        "severity": "MEDIUM",
+        "category": "completeness",
+        "detail": "The skill does not cover error scenarios or edge cases, focusing mainly on happy path examples."
+      }
+    ]
+  },
+  "security": {
+    "verdict": "SAFE",
+    "issues": []
+  },
+  "impact": {
+    "multiplier": 1,
+    "baselineAvg": 50,
+    "treatmentAvg": 50,
+    "scenarios": [
+      {
+        "name": "playbook-with-template-and-handler",
+        "baseline": 70,
+        "treatment": 0,
+        "rationale": "Response A covers most rubric items but omits starting/enabling Nginx; Response B provides no content."
+      },
+      {
+        "name": "dynamic-aws-inventory-setup",
+        "baseline": 30,
+        "treatment": 100,
+        "rationale": "Response B meets all rubric requirements, while Response A omits key elements such as the correct filters, keyed_groups, and compose syntax."
+      }
+    ]
+  }
+}

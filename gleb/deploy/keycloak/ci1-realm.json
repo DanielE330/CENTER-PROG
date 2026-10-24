@@ -1,0 +1,163 @@
+{
+  "realm": "ci1",
+  "enabled": true,
+  "displayName": "ЦИ1",
+  "organizationsEnabled": true,
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "sslRequired": "all",
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "permanentLockout": false,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "passwordPolicy": "length(12) and notUsername and notEmail and upperCase(1) and digits(1)",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 36000,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "defaultSignatureAlgorithm": "RS256",
+  "internationalizationEnabled": true,
+  "supportedLocales": ["ru", "en"],
+  "defaultLocale": "ru",
+  "roles": {
+    "realm": [
+      { "name": "owner", "description": "Владелец: всё, включая настройки и политику LLM" },
+      { "name": "accountant", "description": "Бухгалтер: данные и платежи, без настроек" },
+      { "name": "viewer", "description": "Только просмотр" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "ci1-api",
+      "name": "CI1 API (audience)",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "gateway",
+      "name": "Web BFF",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${GATEWAY_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["${PUBLIC_URL}/api/v1/auth/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${PUBLIC_URL}/*",
+        "use.refresh.tokens": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "ci1-api", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true" }
+        },
+        {
+          "name": "audience-advisor-tools",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "advisor-tools", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true" }
+        },
+        {
+          "name": "organization-with-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-organization-membership-mapper",
+          "config": {
+            "claim.name": "organization",
+            "addOrganizationId": "true",
+            "multivalued": "true",
+            "jsonType.label": "JSON",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "tenancy",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-x509",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": { "x509.subjectdn": "CN=tenancy", "x509.allow.regex.pattern.comparison": "false" },
+      "protocolMappers": [
+        { "name": "audience-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "ci1-api", "access.token.claim": "true" } }
+      ]
+    },
+    {
+      "clientId": "connectors",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-x509",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": { "x509.subjectdn": "CN=connectors", "x509.allow.regex.pattern.comparison": "false" },
+      "protocolMappers": [
+        { "name": "audience-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "ci1-api", "access.token.claim": "true" } }
+      ]
+    },
+    {
+      "clientId": "llm-gateway",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-x509",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": { "x509.subjectdn": "CN=llm-gateway", "x509.allow.regex.pattern.comparison": "false" },
+      "protocolMappers": [
+        { "name": "audience-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "ci1-api", "access.token.claim": "true" } }
+      ]
+    },
+    {
+      "clientId": "advisor-tools",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-x509",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "x509.subjectdn": "CN=advisor-tools",
+        "x509.allow.regex.pattern.comparison": "false",
+        "standard.token.exchange.enabled": "true"
+      },
+      "protocolMappers": [
+        { "name": "audience-api", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "ci1-api", "access.token.claim": "true" } },
+        { "name": "organization-with-id", "protocol": "openid-connect", "protocolMapper": "oidc-organization-membership-mapper",
+          "config": { "claim.name": "organization", "addOrganizationId": "true", "multivalued": "true", "jsonType.label": "JSON",
+                      "access.token.claim": "true", "introspection.token.claim": "true" } }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-tenancy",
+      "enabled": true,
+      "serviceAccountClientId": "tenancy",
+      "clientRoles": { "realm-management": ["manage-users", "view-users", "query-users", "manage-realm", "view-realm"] }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+---
+- name: Reload sshd
+  ansible.builtin.service:
+    name: ssh
+    state: reloaded
+
+- name: Reload nftables
+  ansible.builtin.service:
+    name: nftables
+    state: reloaded

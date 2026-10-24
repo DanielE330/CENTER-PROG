@@ -1,0 +1,24 @@
+---
+- name: Containers config directory
+  ansible.builtin.file:
+    path: "{{ ci1_home }}/.config/containers"
+    state: directory
+    owner: "{{ ci1_user }}"
+    mode: "0700"
+
+- name: Only images signed by our release workflow are accepted from our registry
+  ansible.builtin.template:
+    src: policy.json.j2
+    dest: "{{ ci1_home }}/.config/containers/policy.json"
+    owner: "{{ ci1_user }}"
+    mode: "0600"
+
+- name: Sigstore attachments are looked up in the registry
+  ansible.builtin.copy:
+    dest: "{{ ci1_home }}/.config/containers/registries.d/ci1.yaml"
+    content: |
+      docker:
+        {{ ci1_registry }}:
+          use-sigstore-attachments: true
+    owner: "{{ ci1_user }}"
+    mode: "0600"

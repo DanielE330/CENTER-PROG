@@ -1,0 +1,31 @@
+# Local credentials and environments
+/git_token.md
+.env
+.env.*
+!.env.example
+.venv/
+.tooling/
+.claude/settings.local.json
+node_modules/
+target/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+playwright-report/
+test-results/
+
+# Organizer dataset stays out of git; only checksums are tracked
+/data/*
+!/data/MANIFEST
+
+# Organizer materials: dataset archive and case PDF stay local
+/cashflow_dataset_participants.zip
+/Case.pdf
+/.claude/settings.json
+
+# Build outputs and local environments
+/web/dist/
+/.venv-app/
+/deploy/dev-secrets/
+/models/

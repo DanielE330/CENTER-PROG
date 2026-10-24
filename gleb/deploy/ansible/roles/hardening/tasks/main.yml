@@ -1,0 +1,23 @@
+---
+- name: SSH keys only, no root login
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-ci1.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+    mode: "0644"
+  notify: Reload sshd
+
+- name: Firewall rules (only HTTPS and SSH from the LAN)
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    mode: "0644"
+  notify: Reload nftables
+
+- name: Firewall enabled
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+    state: started
