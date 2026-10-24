@@ -39,16 +39,16 @@ EXPOSE 3004
 CMD ["planfact"]
 
 # api: публичный BFF; SPA собирается отдельным этапом и раздаётся им при запуске без gateway
-FROM node:22-slim AS web
-WORKDIR /web
-COPY web/package.json web/package-lock.json ./
+FROM node:22-slim AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
-COPY web/ ./
+COPY frontend/ ./
 RUN npm run build
 
 FROM runtime AS api
 COPY --from=build /out/api /usr/local/bin/api
-COPY --from=web /web/dist /app/web/dist
-ENV PUBLIC_ADDR=0.0.0.0:3000 INTERNAL_ADDR=0.0.0.0:3100 WEB_DIR=/app/web/dist
+COPY --from=frontend /frontend/dist /app/frontend/dist
+ENV PUBLIC_ADDR=0.0.0.0:3000 INTERNAL_ADDR=0.0.0.0:3100 WEB_DIR=/app/frontend/dist
 EXPOSE 3000
 CMD ["api"]

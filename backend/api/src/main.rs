@@ -73,7 +73,7 @@ async fn main() {
         .layer(middleware::from_fn(security_layer))
         .with_state(state.clone());
 
-    let web_dir = env("WEB_DIR", "web/dist");
+    let web_dir = env("WEB_DIR", "frontend/dist");
     let spa = ServeDir::new(&web_dir).fallback(ServeFile::new(format!("{web_dir}/index.html")));
     let public = Router::new()
         .route("/live", get(|| async { "ok" }))

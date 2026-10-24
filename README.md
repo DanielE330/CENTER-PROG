@@ -4,21 +4,20 @@
 - Шлюз Caddy (`infra/docker/Caddyfile`): единственная публичная точка входа (`:3000`), раздаёт SPA, проксирует `/api/*` в Rust API, скрывает `/internal/*`, выставляет заголовки безопасности; автоматический TLS при `SITE_ADDRESS=<домен>` и `CADDY_AUTO_HTTPS=on` (тогда же задайте `COOKIE_SECURE=true`).
 - Rust workspace (`backend/`, один `Cargo.lock`): `api` (BFF, публичный `:3000` + внутренний `:3100`, без базы данных), `ledger` (`:3002`, владеет `ledger.db`), `forecast` (`:3003`, владеет `forecast.db`), `planfact` (`:3004`), общая библиотека `common`. Внутренние сервисы слушают только внутренние адреса; публичный контракт `/api/v1/...` не менялся. Подробнее в `docs/microservices.md`.
 - Python-сервисы (`backend/services/`): `auth` (`:8001`), `parser` (`:8002`), `gov` (`:8003`), `ecp` (`:8007`), `integrator` (`:8008`) и имитаторы внешних систем `onec` (`:8004`), `edo` (`:8005`), `bank` (`:8006`), FastAPI/uvicorn.
-- Фронтенд (`web/`, Vite + React) собирается в образ API и раздаётся Rust API.
+- Фронтенд (`frontend/`, Vite + React + Tailwind) собирается в образ API и раздаётся Rust API.
 - SQLite — временная замена PostgreSQL на время разработки, см. `docs/architecture.md`.
 
 ## Структура репозитория
     backend/           Rust workspace: common, api (BFF), ledger, forecast (финансовое ядро: src/model.rs, bin eval), planfact
     backend/services/  Python: auth (пользователи, сессии), ecp (вход по ЭЦП), parser (выписки), gov (парсеры ЦБ и ФНС),
                        integrator, onec/edo/bank (имитаторы), tests/
-    web/               React + TypeScript SPA
-    frontend/          прототип дизайна (на моках)
+    frontend/          React + TypeScript SPA (Vite, Tailwind, TanStack Query, i18n RU/EN, тёмная тема)
     infra/             docker/ (Dockerfile, Caddyfile), docker-compose.yml, Makefile, scripts/ (dev.sh, smoke.sh, gen_statement.py)
     docs/              knowledge-base.md (начните отсюда), architecture.md, design.md, microservices.md, task/ (описание кейса, PDF), forecast_evaluation.md
     data/              в .gitignore: датасет (data/dataset/ из data/raw/*.zip), состояние локального запуска (data/run/)
 
 ## Запуск без Docker
-    infra/scripts/dev.sh    # собирает web и Rust workspace, поднимает все сервисы на http://localhost:3000
+    infra/scripts/dev.sh    # собирает frontend и Rust workspace, поднимает все сервисы на http://localhost:3000
     infra/scripts/smoke.sh  # сквозной тест через curl на запущенном стеке (регистрация, импорт, прогноз, налоговый календарь, sync)
     infra/scripts/dev.sh stop
 

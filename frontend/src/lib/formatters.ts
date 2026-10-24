@@ -25,6 +25,24 @@ export function formatCurrency(value: number | null | undefined): string {
     .replace(/ /g, ' ')
 }
 
+/** Money from the API: a decimal string of kopecks. Rounded to whole rubles without float arithmetic. */
+export function formatKop(kop: string | null | undefined, opts: { sign?: boolean } = {}): string {
+  if (kop == null || kop === '') return '—'
+  const v = BigInt(kop)
+  const abs = v < 0n ? -v : v
+  const rub = (abs + 50n) / 100n
+  const text = new Intl.NumberFormat(getLocale(), {
+    style: 'currency',
+    currency: CURRENCY,
+    currencyDisplay: 'narrowSymbol',
+    maximumFractionDigits: 0,
+  })
+    .format(rub)
+    .replace(/ /g, ' ')
+  if (v < 0n && rub > 0n) return `−${text}`
+  return opts.sign && rub > 0n ? `+${text}` : text
+}
+
 /** Compact money: 12,5 млн ₽ / ₽12.5M. */
 export function formatCompact(value: number | null | undefined): string {
   if (value == null) return '—'
@@ -51,6 +69,8 @@ export function formatSignedCurrency(value: number): string {
 }
 
 export function formatPercent(value: number): string {
+  // A tiny but non-zero probability must not read as "0 %".
+  if (value > 0 && value < 0.005) return `<${formatPercent(0.01)}`
   return new Intl.NumberFormat(getLocale(), { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
@@ -80,4 +100,9 @@ export function formatDateTime(iso: string): string {
       day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
     }).format(parseISO(iso)),
   )
+}
+
+/** Percentage points such as the key rate (14 -> «14%», 14.25 -> «14,25%»). Not a 0..1 ratio. */
+export function formatRate(value: number): string {
+  return `${new Intl.NumberFormat(getLocale(), { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value)}%`
 }

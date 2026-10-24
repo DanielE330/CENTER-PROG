@@ -1,9 +1,0 @@
-.period-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.gap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
-.gap-cell { display: flex; flex-direction: column; gap: 4px; }
-.gap-cell b { font-size: 20px; font-weight: 700; }
-.gap-cell span { font-size: 13px; color: var(--muted); }
-tr.picked td { background: var(--green-soft); }
-tr.clickable { cursor: pointer; }
-.day-items { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
-.scroll-y { max-height: 420px; overflow: auto; }

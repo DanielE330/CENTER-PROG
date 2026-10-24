@@ -8,5 +8,5 @@ data
 **/.venv
 __pycache__
 **/__pycache__
-web/dist
+frontend/dist
 *.pdf

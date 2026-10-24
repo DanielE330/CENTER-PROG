@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import type { ForecastPoint } from '../../types'
-import { formatAxisNumber, formatCompact, formatCurrency, formatDate, formatShortDate } from '../../lib/formatters'
+import { formatAxisNumber, formatCompact, formatCurrency, formatDate, formatPercent, formatShortDate } from '../../lib/formatters'
 import { cssVar, prefersReducedMotion } from '../../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from '../../lib/theme'
@@ -79,7 +79,8 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
       id: 'actual',
       name: t('chart.actual'),
       type: 'line',
-      symbol: 'none',
+      symbol: 'circle',
+      symbolSize: 9,
       lineStyle: { color: neutral, width: 2 },
       itemStyle: { color: neutral },
       data: points.map((p) => p.actual),
@@ -179,7 +180,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
           const idx = (params as Array<{ dataIndex: number }>)[0]?.dataIndex ?? 0
           const p = points[idx]
           if (!p) return ''
-          const isActual = p.actual != null && p.date < today
+          const isActual = p.actual != null
           const bal = isActual ? p.actual : p.forecast
           const cmp = compare ? compareByDate.get(p.date) : undefined
           const row = (k: string, v: string, color?: string) =>
@@ -189,8 +190,9 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
             row(isActual ? t('chart.tooltip.balanceActual') : t('chart.tooltip.balanceOf', { name: forecastName.toLowerCase() }), bal != null ? formatCurrency(bal) : t('common.noData'), bal != null && bal < 0 ? danger : undefined),
             cmp !== undefined ? row(compare!.name, cmp != null ? formatCurrency(cmp) : t('common.noData')) : '',
             p.lower != null && p.upper != null && !isActual ? row(t('chart.tooltip.range'), `${formatCompact(p.lower)} … ${formatCompact(p.upper)}`) : '',
-            row(t('chart.tooltip.inflow'), formatCurrency(p.inflow), primary),
-            row(t('chart.tooltip.outflow'), formatCurrency(p.outflow), warning),
+            p.probNegative != null && !isActual ? row(t('chart.tooltip.probNegative'), formatPercent(p.probNegative), p.probNegative >= 0.25 ? danger : undefined) : '',
+            p.inflow || p.outflow ? row(t('chart.tooltip.inflow'), formatCurrency(p.inflow), primary) : '',
+            p.inflow || p.outflow ? row(t('chart.tooltip.outflow'), formatCurrency(p.outflow), warning) : '',
             '</div>',
           ].join('')
         },

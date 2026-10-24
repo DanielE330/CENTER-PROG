@@ -1,3 +1,5 @@
+import { AppError } from '../i18n/helpers'
+
 // Обёртка над КриптоПро ЭЦП Browser plug-in (cadesplugin_api.js, асинхронный режим).
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
@@ -20,12 +22,12 @@ export function loadPlugin(): Promise<void> {
   loading = new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = "/cadesplugin_api.js";
-    s.onerror = () => { loading = null; reject(new Error("Не найден cadesplugin_api.js (КриптоПро ЭЦП Browser plug-in)")); };
+    s.onerror = () => { loading = null; reject(new AppError("cades.scriptMissing")); };
     s.onload = () => {
       const cp = window.cadesplugin;
-      if (!cp) { loading = null; return reject(new Error("Плагин КриптоПро не инициализировался")); }
-      const timer = setTimeout(() => { loading = null; reject(new Error("Плагин КриптоПро не отвечает: установите расширение для браузера и КриптоПро CSP")); }, 8000);
-      Promise.resolve(cp).then(() => { clearTimeout(timer); resolve(); }, (e: unknown) => { clearTimeout(timer); loading = null; reject(new Error(String(e))); });
+      if (!cp) { loading = null; return reject(new AppError("cades.notInitialized")); }
+      const timer = setTimeout(() => { loading = null; reject(new AppError("cades.noResponse")); }, 8000);
+      Promise.resolve(cp).then(() => { clearTimeout(timer); resolve(); }, (e: unknown) => { clearTimeout(timer); loading = null; reject(new AppError("cades.pluginError", { reason: String((e as { message?: string })?.message ?? e) })); });
     };
     document.head.appendChild(s);
   });
@@ -48,7 +50,7 @@ export async function listCertificates(): Promise<CertInfo[]> {
       const c = await certs.Item(i);
       const validTo = new Date(await c.ValidToDate);
       if (validTo.getTime() < now || !(await c.HasPrivateKey())) continue;
-      out.push({ index: i, name: cn(await c.SubjectName), issuer: cn(await c.IssuerName), validTo: validTo.toLocaleDateString("ru-RU"), thumbprint: await c.Thumbprint });
+      out.push({ index: i, name: cn(await c.SubjectName), issuer: cn(await c.IssuerName), validTo: validTo.toISOString().slice(0, 10), thumbprint: await c.Thumbprint });
     }
     return out;
   } finally {
@@ -64,7 +66,7 @@ export async function signDetached(thumbprint: string, text: string): Promise<st
   await store.Open(CAPICOM_CURRENT_USER_STORE, CAPICOM_MY_STORE, CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);
   try {
     const found = await (await store.Certificates).Find(0 /* по отпечатку */, thumbprint);
-    if ((await found.Count) < 1) throw new Error("Сертификат не найден в хранилище");
+    if ((await found.Count) < 1) throw new AppError("cades.certNotFound");
     const cert = await found.Item(1);
     const signer = await cp.CreateObjectAsync("CAdESCOM.CPSigner");
     await signer.propset_Certificate(cert);

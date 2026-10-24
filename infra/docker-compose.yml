@@ -171,7 +171,7 @@ services:
       FORECAST_URL: http://forecast:3003
       PLANFACT_URL: http://planfact:3004
       INTEGRATOR_URL: http://integrator:8008
-      WEB_DIR: /app/web/dist
+      WEB_DIR: /app/frontend/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     networks: [internal, edge]
     depends_on:

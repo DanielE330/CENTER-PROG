@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, CalendarClock, CheckCircle2, Clock, HelpCircle, OctagonAlert, ShieldCheck } from 'lucide-react'
-import type { ObligationStatus, RiskLevel, TransactionStatus } from '../../types'
+import { AlertTriangle, CalendarClock, CheckCircle2, CircleHelp, Clock, OctagonAlert, ShieldCheck, UserCheck } from 'lucide-react'
+import type { ObligationStatus, RiskLevel, Transaction } from '../../types'
 import { cn } from '../../lib/utils'
 
-type Tone = 'neutral' | 'success' | 'warning' | 'danger'
+export type Tone = 'neutral' | 'success' | 'warning' | 'danger'
 
 const tones: Record<Tone, string> = {
   neutral: 'bg-app text-muted border-line',
@@ -23,10 +23,10 @@ export function Badge({ tone = 'neutral', icon, children }: { tone?: Tone; icon?
 }
 
 const obligation: Record<ObligationStatus, { label: string; tone: Tone; icon: ReactNode }> = {
-  planned: { label: 'status.planned', tone: 'neutral', icon: <Clock size={12} /> },
-  expected: { label: 'status.expected', tone: 'success', icon: <CalendarClock size={12} /> },
-  completed: { label: 'status.completed', tone: 'neutral', icon: <CheckCircle2 size={12} /> },
-  overdue: { label: 'status.overdue', tone: 'danger', icon: <OctagonAlert size={12} /> },
+  planned: { label: 'status.planned', tone: 'neutral', icon: <Clock size={12} aria-hidden /> },
+  expected: { label: 'status.expected', tone: 'success', icon: <CalendarClock size={12} aria-hidden /> },
+  completed: { label: 'status.completed', tone: 'neutral', icon: <CheckCircle2 size={12} aria-hidden /> },
+  overdue: { label: 'status.overdue', tone: 'danger', icon: <OctagonAlert size={12} aria-hidden /> },
 }
 
 export function ObligationStatusBadge({ status }: { status: ObligationStatus }) {
@@ -35,31 +35,23 @@ export function ObligationStatusBadge({ status }: { status: ObligationStatus }) 
   return <Badge tone={s.tone} icon={s.icon}>{t(s.label)}</Badge>
 }
 
-export function TransactionStatusBadge({ status }: { status?: TransactionStatus }) {
+/** How reliable the category of a transaction is. */
+export function CategoryStatusBadge({ tx }: { tx: Pick<Transaction, 'manual' | 'category_confidence'> }) {
   const { t } = useTranslation()
-  if (!status) return <span className="text-muted">—</span>
-  return status === 'completed' ? (
-    <Badge tone="success" icon={<CheckCircle2 size={12} />}>{t('status.txCompleted')}</Badge>
-  ) : (
-    <Badge tone="warning" icon={<Clock size={12} />}>{t('status.txPending')}</Badge>
-  )
+  if (tx.manual) return <Badge tone="success" icon={<UserCheck size={12} aria-hidden />}>{t('status.txConfirmed')}</Badge>
+  if (tx.category_confidence < 0.5) return <Badge tone="warning" icon={<CircleHelp size={12} aria-hidden />}>{t('status.txReview')}</Badge>
+  return <Badge icon={<CheckCircle2 size={12} aria-hidden />}>{t('status.txAuto')}</Badge>
 }
 
 const risk: Record<RiskLevel, { label: string; tone: Tone; icon: ReactNode }> = {
-  low: { label: 'risk.badge.low', tone: 'success', icon: <ShieldCheck size={12} /> },
-  medium: { label: 'risk.badge.medium', tone: 'warning', icon: <AlertTriangle size={12} /> },
-  high: { label: 'risk.badge.high', tone: 'danger', icon: <OctagonAlert size={12} /> },
-  unknown: { label: 'risk.badge.unknown', tone: 'neutral', icon: <HelpCircle size={12} /> },
+  none: { label: 'risk.badge.none', tone: 'success', icon: <ShieldCheck size={12} aria-hidden /> },
+  low: { label: 'risk.badge.low', tone: 'success', icon: <ShieldCheck size={12} aria-hidden /> },
+  medium: { label: 'risk.badge.medium', tone: 'warning', icon: <AlertTriangle size={12} aria-hidden /> },
+  high: { label: 'risk.badge.high', tone: 'danger', icon: <OctagonAlert size={12} aria-hidden /> },
 }
 
 export function RiskBadge({ level }: { level: RiskLevel }) {
   const { t } = useTranslation()
   const s = risk[level]
   return <Badge tone={s.tone} icon={s.icon}>{t(s.label)}</Badge>
-}
-
-/** Marks values that come from demo data rather than a real source. */
-export function MockBadge({ label }: { label?: string }) {
-  const { t } = useTranslation()
-  return <Badge tone="warning">{label ?? t('common.demoData')}</Badge>
 }

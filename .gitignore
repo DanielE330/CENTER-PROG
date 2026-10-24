@@ -4,4 +4,4 @@ __pycache__/
 node_modules/
 data/
 *.pyc
-web/dist/
+frontend/dist/

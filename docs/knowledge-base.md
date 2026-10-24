@@ -49,7 +49,7 @@ backend/planfact/   Rust :3004, без БД: план-факт (история �
 backend/services/auth/     Python FastAPI :8001 — пользователи, сессии (scrypt, sha256 токена, lockout)
 backend/services/parser/   Python FastAPI :8002 — разбор CSV/XLSX, категоризация
 backend/services/tests/    pytest
-web/               React + TypeScript + Vite, ECharts, Inter (локально)
+frontend/          React + TypeScript + Vite, Tailwind v4, TanStack Query, ECharts, i18next (RU/EN), Inter (локально)
 infra/ (docker/, docker-compose.yml, Makefile, scripts/)   контейнеры и Caddy gateway (не проверялись: Docker не установлен на машине разработки)
 infra/scripts/dev.sh     запуск без Docker; infra/scripts/gen_statement.py — синтетическая выписка
 docs/              документы
@@ -69,7 +69,7 @@ data/              в .gitignore: dataset/ (из data/raw/*.zip), run/ (БД и 
 
 Без Docker (проверено):
 ```
-infra/scripts/dev.sh        # сборка web и Rust-workspace, запуск всех сервисов; http://localhost:3000
+infra/scripts/dev.sh        # сборка frontend и Rust-workspace, запуск всех сервисов; http://localhost:3000
 infra/scripts/dev.sh stop
 ```
 Демо-логин: `demo@example.com` / `demo12345` (`DEMO_SEED=1`). Состояние локального запуска — `data/run/` (БД, логи, pid).
@@ -82,7 +82,7 @@ Docker (написано, но не собиралось): `make -C infra up` �
 cd backend && RUSTUP_TOOLCHAIN=stable cargo test           # workspace: 18 (fc_model) + 3 (eval) + 2 (api)
 infra/scripts/smoke.sh                                            # интеграционный smoke через curl (нужен запущенный dev.sh)
 cd backend/services && uv run pytest -q                           # 63 теста
-cd web && npx tsc --noEmit && npm run build
+cd frontend && npx tsc --noEmit && npm run build
 ```
 Оценка на датасете: `cd backend && cargo run --release -p forecast --bin eval -- --compare --csv` (запускать из корня репозитория, ~2 с на все 150 компаний).
 
@@ -130,10 +130,11 @@ POST /api/v1/companies/{cid}/integrations/sync   {"external_company":"C001"} -> 
 
 Известные допущения: прогноз строится от даты последней операции в выписке (без «моста» до сегодняшнего дня); одна валюта RUB.
 
-## 8. Интерфейс (`web/`)
+## 8. Интерфейс (`frontend/`)
 
-Разделы (маршруты): Обзор `/dashboard`, Прогноз `/forecast`, Операции `/transactions`, Платежи и обязательства `/obligations`, Сценарии `/scenarios`, План-факт `/plan-vs-actual`, AI-консультант `/assistant`, Настройки `/settings`. Каркас: Sidebar, Header (организация, уведомления из предупреждений, профиль), общий контекст `ctx.tsx` (последний прогноз, `refresh`, `recalc`, импорт-модалка).
-Дизайн-токены в `styles.css` (зелёный `#176B45`, фон `#F7F9F7`, предупреждения `#D97706`, риск `#DC5252`); цвет всегда с текстовым статусом. Вход/регистрация: название юрлица, повтор пароля, значок глаза у пароля. Суммы форматируются через BigInt (`api.ts: rub`). Страницы пока не проверялись в браузере вручную.
+Единственный фронтенд: React 19 + Vite + Tailwind v4, данные через TanStack Query (`src/hooks/queries.ts`) и клиент `src/lib/api.ts` (тот же origin, cookie `session`; в dev Vite проксирует `/api` на `localhost:3000`). Суммы приходят строками в копейках; форматирование и арифметика — через BigInt (`lib/formatters.ts: formatKop`, `lib/money.ts`), числа в рублях используются только для графиков. Моков нет. i18n RU/EN (`src/i18n/locales`), светлая и тёмная темы, шрифт Inter локально (`@fontsource`), CSP без inline-скриптов (`public/theme-init.js`).
+
+Разделы (маршруты): Обзор `/dashboard` (KPI, график с диапазоном p10–p90, ближайшие платежи, риск, ключевая ставка ЦБ как справка), Прогноз `/forecast` (горизонт 7–90 дней, риск с калиброванной и «сырой» вероятностью, недельные потоки, детали по датам, backtest, регулярные платежи), Операции `/transactions` (серверные фильтры, сортировка, смена категории), Платежи и обязательства `/obligations` (ожидаемые события, налоговый календарь ЕНП, синхронизация интеграций, план-факт за 90 дней), Сценарии `/scenarios`, План-факт `/plan-vs-actual`, AI-консультант `/assistant` (правила по сохранённому прогнозу), Настройки `/settings` (язык, название юрлица, горизонт по умолчанию, импорт выписки с preview и подтверждением, история импортов). Вход и регистрация (название юрлица, повтор пароля, значок глаза) и вход по ЭЦП (КриптоПро, `src/lib/cades.ts`, `public/cadesplugin_api.js`) — `src/features/auth`. Баннеры: «прогноз устарел» (`stale`) и «пересчитан автоматически» (`recomputed`).
 
 ## 9. Результаты оценки (142 компании, rolling-origin, шаг 14 дней)
 
@@ -181,7 +182,7 @@ POST /api/v1/companies/{cid}/integrations/sync   {"external_company":"C001"} -> 
 
 ## 13. Рабочие заметки
 
-- Ветки: `main` (первый коммит + прототип), `testing` (текущая работа). В git не коммитятся `data/`, `target/`, `node_modules/`, `web/dist/`.
+- Ветки: `main` (первый коммит + прототип), `testing` (текущая работа). В git не коммитятся `data/`, `target/`, `node_modules/`, `frontend/dist/`.
 - Git-автор не настроен глобально; коммиты делались с `-c user.name=… -c user.email=…`.
 - Токен GitHub, присланный в чат, считается скомпрометированным и должен быть отозван.
 - Chrome-автоматизация и установка КриптоПро CSP не выполнялись; КриптоПро проекту не нужна.

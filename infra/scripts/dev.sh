@@ -14,7 +14,7 @@ if [ "${1:-}" = "stop" ]; then
   exit 0
 fi
 export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-stable}
-(cd web && [ -d node_modules ] || npm ci >/dev/null; npm run build >/dev/null)
+(cd frontend && [ -d node_modules ] || npm ci >/dev/null; npm run build >/dev/null)
 (cd backend && cargo build --release --workspace --bins 2>&1 | tail -1)
 ROOT=$PWD
 # одна «сегодняшняя» дата для имитаторов и integrator: флаги просрочки согласованы (по умолчанию последняя дата выписок)
@@ -39,7 +39,7 @@ echo $! >$RUN/forecast.pid
 INTERNAL_ADDR=127.0.0.1:3004 LEDGER_URL=$LEDGER_URL FORECAST_URL=$FORECAST_URL setsid nohup $BIN/planfact >$RUN/planfact.log 2>&1 < /dev/null &
 echo $! >$RUN/planfact.pid
 sleep 1
-WEB_DIR=web/dist LEDGER_URL=$LEDGER_URL FORECAST_URL=$FORECAST_URL PLANFACT_URL=$PLANFACT_URL \
+WEB_DIR=frontend/dist LEDGER_URL=$LEDGER_URL FORECAST_URL=$FORECAST_URL PLANFACT_URL=$PLANFACT_URL \
   AUTH_URL=http://127.0.0.1:8001 PARSER_URL=http://127.0.0.1:8002 GOV_URL=http://127.0.0.1:8003 ECP_URL=http://127.0.0.1:8007 INTEGRATOR_URL=http://127.0.0.1:8008 \
   setsid nohup $BIN/api >$RUN/api.log 2>&1 < /dev/null &
 echo $! >$RUN/api.pid
