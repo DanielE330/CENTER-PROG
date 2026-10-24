@@ -277,6 +277,26 @@ class Hop:
     def forecast(self, method: str, path: str, **kw):
         return self.call("forecast", "FORECAST_URL", "http://127.0.0.1:3003", method, path, **kw)
 
+    def notify(self, method: str, path: str, **kw):
+        return self.call("notify", "NOTIFY_URL", "http://127.0.0.1:8014", method, path, **kw)
+
+
+async def notify_banned(hop: Hop, cid: str, members: list, reason: str) -> int:
+    """Письмо участникам заблокированной компании. Сбой почты блокировку не отменяет: возвращается число отправленных."""
+    try:
+        name = (await hop.ledger("GET", f"/internal/v1/admin/companies/{cid}")).get("name") or ""
+    except ApiErr:
+        name = ""
+    emails = {m.get("email") for m in members if isinstance(m, dict)}
+    emails = sorted(e for e in emails if e and not e.endswith("@ecp.invalid"))
+    stamp = int(time.time())
+    results = await asyncio.gather(*(
+        hop.notify("POST", "/internal/v1/send", json={
+            "kind": "company_banned", "to": e, "data": {"company": name, "reason": reason}, "dedup_key": f"ban:{cid}:{e}:{stamp}",
+        }) for e in emails
+    ), return_exceptions=True)
+    return sum(1 for r in results if not isinstance(r, BaseException))
+
 
 def client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=float(os.environ.get("BACKOFFICE_TIMEOUT_SECONDS", "15")), transport=app.state.transport)
@@ -369,7 +389,8 @@ async def ban(cid: str, b: BanIn, x_actor: str = Header(default=""), x_request_i
     async with client() as http:
         hop = Hop(http, x_request_id, op["operator_id"])
         members = await hop.ledger("GET", f"/internal/v1/companies/{cid}/members")  # 404, если компании нет
-        user_ids = [m["user_id"] for m in members.get("items", []) if isinstance(m, dict) and m.get("user_id")]
+        items = members.get("items", [])
+        user_ids = [m["user_id"] for m in items if isinstance(m, dict) and m.get("user_id")]
         try:
             await hop.ledger("POST", f"/internal/v1/admin/companies/{cid}/ban", json={"reason": reason})
         except ApiErr as e:
@@ -379,9 +400,16 @@ async def ban(cid: str, b: BanIn, x_actor: str = Header(default=""), x_request_i
         results = await asyncio.gather(
             *(hop.auth("POST", f"/internal/v1/users/{uid}/revoke-sessions") for uid in user_ids), return_exceptions=True
         )
+        notified = await notify_banned(hop, cid, items, reason)
     failed = sum(1 for r in results if isinstance(r, BaseException))
-    store.audit(op, "ban", cid, f"{reason} | sessions_revoked={len(user_ids) - failed} revoke_failed={failed}", request_id=x_request_id)
-    return {"company_id": cid, "banned": True, "ban_reason": reason, "sessions_revoked": len(user_ids) - failed, "revoke_failed": failed}
+    store.audit(
+        op, "ban", cid, f"{reason} | sessions_revoked={len(user_ids) - failed} revoke_failed={failed} notified={notified}",
+        request_id=x_request_id,
+    )
+    return {
+        "company_id": cid, "banned": True, "ban_reason": reason, "sessions_revoked": len(user_ids) - failed, "revoke_failed": failed,
+        "notified": notified,
+    }
 
 
 @app.post("/internal/v1/admin/companies/{cid}/unban")

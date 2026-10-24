@@ -1,0 +1,10 @@
+{{ product }}
+
+{% block body %}{% endblock %}
+
+--
+Письмо отправлено автоматически, отвечать на него не нужно.
+{% if unsubscribe_url %}
+Настроить уведомления: {{ settings_url }}
+Отписаться: {{ unsubscribe_url }}
+{% endif %}

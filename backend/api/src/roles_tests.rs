@@ -31,6 +31,7 @@ struct User {
     generated: bool,
     /// включён второй фактор: вход по паролю возвращает билет, а не сессию
     mfa: bool,
+    verified: bool,
 }
 
 struct Co {
@@ -60,6 +61,9 @@ struct Fake {
     /// код приглашения -> (компания, роль, email)
     invites: HashMap<String, (String, String, String)>,
     seq: u32,
+    /// письма, принятые заглушкой notify (тело запроса /internal/v1/send)
+    mails: Vec<Value>,
+    notify_down: bool,
 }
 
 type Shared = Arc<Mutex<Fake>>;
@@ -74,7 +78,7 @@ fn lerr(s: StatusCode, code: &str) -> Resp {
 }
 
 fn user_info(u: &User) -> Value {
-    json!({"user_id": u.id, "email": u.email, "has_email": u.has_email, "must_change_password": u.must_change, "password_generated": u.generated})
+    json!({"user_id": u.id, "email": u.email, "has_email": u.has_email, "must_change_password": u.must_change, "password_generated": u.generated, "email_verified": u.verified})
 }
 
 async fn record(State(f): State<Shared>, req: AxReq, next: Next) -> Response {
@@ -156,7 +160,7 @@ async fn a_create(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
     }
     g.seq += 1;
     let id = format!("u{}", g.seq);
-    g.users.push(User { id: id.clone(), email: email.clone(), password: password.clone(), has_email: true, must_change: true, generated: generate, mfa: false });
+    g.users.push(User { id: id.clone(), email: email.clone(), password: password.clone(), has_email: true, must_change: true, generated: generate, mfa: false, verified: false });
     let mut v = json!({"user_id": id, "email": email});
     if generate {
         v["password"] = json!(password);
@@ -440,6 +444,29 @@ async fn l_company_patch(State(f): State<Shared>, Path(cid): Path<String>, Json(
     (StatusCode::OK, Json(json!({"company_id": cid, "company_name": c.name})))
 }
 
+async fn a_email_link(State(f): State<Shared>, Path(uid): Path<String>, Json(b): Json<Value>) -> Resp {
+    let g = f.lock().unwrap();
+    let Some(u) = g.users.iter().find(|u| u.id == uid) else { return detail(StatusCode::NOT_FOUND, "user_not_found") };
+    (StatusCode::OK, Json(json!({"token": format!("lnk-{uid}-{}", b["kind"].as_str().unwrap_or("")), "email": u.email})))
+}
+
+async fn a_forgot(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let g = f.lock().unwrap();
+    match g.users.iter().find(|u| u.has_email && Some(u.email.as_str()) == b["email"].as_str()) {
+        Some(u) => (StatusCode::OK, Json(json!({"user_id": u.id, "email": u.email, "token": format!("lnk-{}-reset", u.id)}))),
+        None => (StatusCode::OK, Json(json!({}))),
+    }
+}
+
+async fn n_send(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    if g.notify_down {
+        return lerr(StatusCode::SERVICE_UNAVAILABLE, "down");
+    }
+    g.mails.push(b);
+    (StatusCode::ACCEPTED, Json(json!({"id": g.mails.len(), "status": "queued"})))
+}
+
 async fn fallback() -> Json<Value> {
     Json(json!({"items": [], "ok": true}))
 }
@@ -459,6 +486,9 @@ fn fake_router(f: Shared) -> Router {
         .route("/internal/v1/users/{uid}/reset-password", post(a_reset))
         .route("/internal/v1/users/{uid}/email-password", post(a_email_password))
         .route("/internal/v1/users/{uid}/methods", get(a_methods))
+        .route("/internal/v1/users/{uid}/email-link", post(a_email_link))
+        .route("/internal/v1/password/forgot", post(a_forgot))
+        .route("/internal/v1/send", post(n_send))
         .route("/internal/v1/users/{uid}/tokens", get(a_tok_list).post(a_tok_create))
         .route("/internal/v1/users/{uid}/tokens/{tid}", delete(a_tok_delete))
         .route("/internal/v1/companies/ensure", post(l_ensure))
@@ -505,6 +535,7 @@ impl T {
             advisor: up("advisor"),
             notifier: up("notifier"),
             backoffice: up("backoffice"),
+            notify: up("notify"),
             demo: Arc::new(demo::Demo { enabled: false, email: "demo@example.com".into(), external_company: "C001".into(), feed: up("demo_feed") }),
             cfg: Arc::new(Config { cookie_secure: false }),
         };
@@ -517,7 +548,7 @@ impl T {
         let mut g = self.f.lock().unwrap();
         g.seq += 1;
         let id = format!("u{}", g.seq);
-        g.users.push(User { id: id.clone(), email: email.into(), password: password.into(), has_email, must_change: false, generated: false, mfa: false });
+        g.users.push(User { id: id.clone(), email: email.into(), password: password.into(), has_email, must_change: false, generated: false, mfa: false, verified: true });
         id
     }
 
@@ -1063,6 +1094,8 @@ async fn members_of_other_companies_are_unreachable() {
 #[tokio::test]
 async fn reset_password_returns_new_password_once_and_closes_sessions() {
     let t = T::new().await;
+    // почта недоступна: директору показывается новый пароль как запасной вариант
+    t.f.lock().unwrap().notify_down = true;
     let (_, [d, e, _]) = t.team();
     let uid = t.f.lock().unwrap().members.iter().find(|m| m.role == "editor").unwrap().uid.clone();
     let (s, v) = t.call("POST", &format!("/api/v1/members/{uid}/reset-password"), &d, None).await;
@@ -1259,6 +1292,23 @@ async fn only_director_invites_admins_and_invite_roles_are_checked() {
 }
 
 #[tokio::test]
+async fn invite_by_email_is_mailed_through_notify() {
+    let t = T::new().await;
+    let (cid, [d, ..]) = t.team4();
+    let (s, v) = t.call("POST", "/api/v1/team/invites", &d, Some(json!({"role": "editor", "email": "new@x.ru"}))).await;
+    assert_eq!((s, v["emailed"].as_bool(), v["email_limited"].as_bool()), (StatusCode::CREATED, Some(true), Some(false)));
+    let m = t.f.lock().unwrap().mails.last().cloned().unwrap();
+    assert_eq!((m["kind"].as_str(), m["to"].as_str()), (Some("team_invite"), Some("new@x.ru")));
+    assert_eq!((m["data"]["token"].as_str(), m["data"]["company_id"].as_str()), (v["code"].as_str(), Some(cid.as_str())));
+    assert_eq!(m["data"]["role_text"], "аналитик");
+    // без почты приглашение всё равно создаётся: ссылку показывает сайт
+    t.f.lock().unwrap().notify_down = true;
+    let (s, v) = t.call("POST", "/api/v1/team/invites", &d, Some(json!({"role": "viewer", "email": "other@x.ru"}))).await;
+    assert_eq!((s, v["emailed"].as_bool()), (StatusCode::CREATED, Some(false)));
+    assert!(v["code"].as_str().is_some());
+}
+
+#[tokio::test]
 async fn accepting_an_invite_moves_the_user_into_the_inviting_company_once() {
     let t = T::new().await;
     let (cid, [d, ..]) = t.team4();
@@ -1393,4 +1443,65 @@ async fn legacy_team_is_moved_into_ledger_and_the_migration_is_idempotent() {
     let rep = crate::legacy::migrate(&t.st).await.unwrap();
     assert_eq!(rep.transferred, 0, "{rep:?}");
     assert_eq!((roles(&ad).as_deref(), roles(&an).as_deref()), (Some("director"), Some("admin")));
+}
+
+// ---------- почта ----------
+fn mails(t: &T) -> Vec<Value> {
+    t.f.lock().unwrap().mails.clone()
+}
+
+#[tokio::test]
+async fn forgot_password_is_always_accepted_and_mails_only_known_users() {
+    let t = T::new().await;
+    t.team();
+    for email in ["ed@x.ru", "nobody@x.ru"] {
+        let (s, v) = t.send("POST", "/api/v1/auth/password/forgot", None, None, Some(json!({"email": email}))).await;
+        assert_eq!((s, v["ok"].as_bool()), (StatusCode::ACCEPTED, Some(true)), "ответ не выдаёт, есть ли адрес");
+    }
+    let m = mails(&t);
+    assert_eq!(m.len(), 1);
+    assert_eq!((m[0]["kind"].as_str(), m[0]["to"].as_str()), (Some("reset_password"), Some("ed@x.ru")));
+    assert!(m[0]["data"]["token"].as_str().unwrap().ends_with("-reset"));
+}
+
+#[tokio::test]
+async fn member_reset_sends_link_instead_of_password() {
+    let t = T::new().await;
+    let (_, [d, _, _]) = t.team();
+    let uid = t.f.lock().unwrap().members.iter().find(|m| m.role == "editor").unwrap().uid.clone();
+    let (s, v) = t.call("POST", &format!("/api/v1/members/{uid}/reset-password"), &d, None).await;
+    assert_eq!((s, v["email_sent"].as_bool(), v["email"].as_str()), (StatusCode::OK, Some(true), Some("ed@x.ru")));
+    assert!(v.get("password").is_none(), "пароль не показывается, если письмо ушло");
+    let m = mails(&t);
+    assert_eq!((m[0]["kind"].as_str(), m[0]["data"]["company"].as_str(), m[0]["data"]["role_text"].as_str()), (Some("member_reset"), Some("Ромашка"), Some("аналитик")));
+}
+
+#[tokio::test]
+async fn new_member_gets_invite() {
+    let t = T::new().await;
+    let (_, [d, _, _]) = t.team();
+    let (s, v) = t.call("POST", "/api/v1/members", &d, Some(json!({"email": "new@x.ru", "role": "viewer", "generate": true}))).await;
+    assert_eq!((s, v["invite_sent"].as_bool()), (StatusCode::CREATED, Some(true)));
+    assert!(v["password"].is_string(), "сгенерированный пароль остаётся запасным способом");
+    let m = mails(&t);
+    assert_eq!((m[0]["kind"].as_str(), m[0]["to"].as_str(), m[0]["data"]["inviter"].as_str()), (Some("invite"), Some("new@x.ru"), Some("dir@x.ru")));
+}
+
+#[tokio::test]
+async fn mailings_need_verified_email() {
+    let t = T::new().await;
+    let (_, [_, e, _]) = t.team();
+    t.f.lock().unwrap().users.iter_mut().find(|u| u.email == "ed@x.ru").unwrap().verified = false;
+    let (s, v) = t.call("GET", "/api/v1/auth/me", &e, None).await;
+    assert_eq!((s, v["email_verified"].as_bool()), (StatusCode::OK, Some(false)));
+    for (method, uri, body) in [
+        ("PUT", "/api/v1/account/notifications", Some(json!({"alerts": true}))),
+        ("POST", "/api/v1/account/notifications/test", None),
+        ("PUT", "/api/v1/account/notifications", Some(json!({"reports": true}))),
+    ] {
+        let (s, v) = t.call(method, uri, &e, body).await;
+        assert_eq!((s, code(&v)), (StatusCode::CONFLICT, "email_not_verified"), "{method} {uri}");
+    }
+    // выключить рассылки можно и без подтверждения
+    assert_eq!(t.call("PUT", "/api/v1/account/notifications", &e, Some(json!({"alerts": false}))).await.0, StatusCode::OK);
 }

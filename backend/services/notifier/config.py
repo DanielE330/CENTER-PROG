@@ -28,6 +28,11 @@ def ledger_url() -> str:
     return env("LEDGER_URL", "http://127.0.0.1:3002")
 
 
+def notify_url() -> str:
+    """Почтовый шлюз notify; пусто — почтовый канал выключен."""
+    return env("NOTIFY_URL", "http://127.0.0.1:8014").rstrip("/")
+
+
 def public_url() -> str:
     return env("PUBLIC_URL", "http://localhost:3000").rstrip("/")
 

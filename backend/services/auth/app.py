@@ -30,6 +30,10 @@ INVITE_TTL = 7 * 24 * 3600
 MAX_MEMBERS = 20
 MFA_TTL = 300
 MFA_MAX_ATTEMPTS = 5
+# срок жизни ссылок из писем; invite — приглашение сотрудника и сброс пароля директором
+LINK_TTL = {"verify": 24 * 3600, "reset": 3600, "invite": 72 * 3600}
+RESEND_SECONDS = 60
+FORGOT_PER_HOUR = 3
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _lock = threading.Lock()
@@ -103,6 +107,16 @@ def db():
             for col in ("must_change_password", "password_generated"):
                 if col not in ucols:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+            # подтверждение почты: пользователи, заведённые до появления писем, считаются подтверждёнными
+            if "email_verified" not in ucols:
+                conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+                conn.execute("UPDATE users SET email_verified=1 WHERE has_email=1")
+            # одноразовые ссылки из писем: подтверждение почты и смена пароля; хранится только sha256
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS email_tokens(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL,"
+                " email TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL, used_at REAL)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS email_tokens_user ON email_tokens(user_id, kind)")
             conn.execute("CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS api_tokens_user ON api_tokens(user_id)")
             yield conn
@@ -250,7 +264,8 @@ def login(c: Credentials):
         raise HTTPException(429, {"code": "too_many_attempts"})
     with db() as conn:
         row = conn.execute(
-            "SELECT id, salt, pwd_hash, must_change_password, password_generated FROM users WHERE email=? AND has_email=1",
+            "SELECT id, salt, pwd_hash, must_change_password, password_generated, email_verified FROM users"
+            " WHERE email=? AND has_email=1",
             (email,),
         ).fetchone()
         # одинаковая работа для существующего и несуществующего пользователя
@@ -267,7 +282,7 @@ def login(c: Credentials):
         token = _new_session(conn, row[0])
     return {
         "token": token, "user_id": row[0], "email": email, "ttl": SESSION_TTL,
-        "must_change_password": bool(row[3]), "password_generated": bool(row[4]),
+        "must_change_password": bool(row[3]), "password_generated": bool(row[4]), "email_verified": bool(row[5]),
     }
 
 
@@ -427,7 +442,7 @@ def user_add_email(uid: str, b: EmailIn):
         salt = secrets.token_bytes(16)
         try:
             conn.execute(
-                "UPDATE users SET email=?, salt=?, pwd_hash=?, has_email=1 WHERE id=?",
+                "UPDATE users SET email=?, salt=?, pwd_hash=?, has_email=1, email_verified=0 WHERE id=?",
                 (email, salt, hash_password(b.password, salt), uid),
             )
         except sqlite3.IntegrityError:
@@ -638,6 +653,7 @@ def user_delete(uid: str):
         conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM api_tokens WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM identities WHERE user_id=?", (uid,))
+        conn.execute("DELETE FROM email_tokens WHERE user_id=?", (uid,))
     _fails.pop(f"pw:{uid}", None)
 
 
@@ -658,13 +674,137 @@ def user_set_email_password(uid: str, b: EmailIn):
         salt = secrets.token_bytes(16)
         try:
             conn.execute(
-                "UPDATE users SET email=?, salt=?, pwd_hash=?, has_email=1, must_change_password=0, password_generated=0"
-                " WHERE id=?",
+                "UPDATE users SET email=?, salt=?, pwd_hash=?, has_email=1, must_change_password=0, password_generated=0,"
+                " email_verified=0 WHERE id=?",
                 (email, salt, hash_password(b.password, salt), uid),
             )
         except sqlite3.IntegrityError:
             raise HTTPException(409, {"code": "email_taken"})
         return _methods(conn, uid)
+
+
+# ---------- ссылки из писем: подтверждение почты и смена пароля ----------
+class LinkIn(BaseModel):
+    kind: str
+
+
+class ForgotIn(BaseModel):
+    email: str
+
+
+class ResetIn(BaseModel):
+    token: str
+    password: str
+
+
+def _issue_link(conn, uid: str, kind: str, email: str) -> str:
+    """Новая ссылка отменяет прежние того же назначения: действует только последняя."""
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    family = ("reset", "invite") if kind in ("reset", "invite") else (kind,)
+    conn.execute(
+        "UPDATE email_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL AND kind IN (%s)" % ",".join("?" * len(family)),
+        (now, uid, *family),
+    )
+    conn.execute("DELETE FROM email_tokens WHERE expires_at < ?", (now - 7 * 24 * 3600,))
+    conn.execute(
+        "INSERT INTO email_tokens VALUES(?,?,?,?,?,?,NULL)", (token_hash(token), uid, kind, email, now, now + LINK_TTL[kind])
+    )
+    return token
+
+
+def _take_link(conn, token: str, kinds: tuple[str, ...]):
+    """Ссылка действует один раз и до истечения срока; иначе 404 token_invalid (причину не уточняем)."""
+    row = conn.execute(
+        "SELECT t.user_id, t.email, t.kind, t.expires_at, t.used_at, u.email FROM email_tokens t"
+        " JOIN users u ON u.id=t.user_id WHERE t.token_hash=?",
+        (token_hash(token),),
+    ).fetchone()
+    # адрес мог смениться после отправки письма: старая ссылка его не подтверждает
+    if not row or row[2] not in kinds or row[4] is not None or row[3] < time.time() or row[1] != row[5]:
+        raise HTTPException(404, {"code": "token_invalid"})
+    conn.execute("UPDATE email_tokens SET used_at=? WHERE token_hash=?", (time.time(), token_hash(token)))
+    return row[0], row[1]
+
+
+@app.post("/internal/v1/users/{uid}/email-link")
+def user_email_link(uid: str, b: LinkIn):
+    """Выпускает ссылку для письма (verify | invite). Повторное письмо подтверждения — не чаще раза в минуту."""
+    if b.kind not in ("verify", "invite"):
+        raise HTTPException(422, {"code": "invalid_kind"})
+    with db() as conn:
+        row = conn.execute("SELECT email, has_email, email_verified FROM users WHERE id=?", (uid,)).fetchone()
+        if not row:
+            raise HTTPException(404, {"code": "user_not_found"})
+        if not row[1]:
+            raise HTTPException(409, {"code": "no_email"})
+        if b.kind == "verify":
+            if row[2]:
+                raise HTTPException(409, {"code": "already_verified"})
+            last = conn.execute(
+                "SELECT MAX(created_at) FROM email_tokens WHERE user_id=? AND kind='verify'", (uid,)
+            ).fetchone()[0]
+            if last and time.time() - last < RESEND_SECONDS:
+                raise HTTPException(429, {"code": "too_many_requests"})
+        return {"token": _issue_link(conn, uid, b.kind, row[0]), "email": row[0]}
+
+
+@app.post("/internal/v1/email/verify")
+def email_verify(b: TokenIn):
+    with db() as conn:
+        uid, email = _take_link(conn, b.token, ("verify",))
+        conn.execute("UPDATE users SET email_verified=1 WHERE id=?", (uid,))
+    return {"user_id": uid, "email": email, "email_verified": True}
+
+
+@app.post("/internal/v1/password/forgot")
+def password_forgot(b: ForgotIn):
+    """{} для неизвестного адреса и при превышении лимита: вызывающий всегда отвечает одинаково и не раскрывает,
+    есть ли такой пользователь. Иначе {user_id, email, token} — ссылку отправляет notify."""
+    email = b.email.strip().lower()
+    if not valid_email(email):
+        return {}
+    with db() as conn:
+        row = conn.execute("SELECT id FROM users WHERE email=? AND has_email=1", (email,)).fetchone()
+        if not row:
+            return {}
+        n = conn.execute(
+            "SELECT COUNT(*) FROM email_tokens WHERE user_id=? AND kind='reset' AND created_at>?", (row[0], time.time() - 3600)
+        ).fetchone()[0]
+        if n >= FORGOT_PER_HOUR:
+            return {}
+        return {"user_id": row[0], "email": email, "token": _issue_link(conn, row[0], "reset", email)}
+
+
+@app.post("/internal/v1/password/reset")
+def password_reset(b: ResetIn):
+    """Новый пароль по ссылке из письма (сброс, приглашение). Ссылка подтверждает и почту; все сессии закрываются."""
+    if not valid_password(b.password):
+        raise HTTPException(422, {"code": "invalid_password"})
+    with db() as conn:
+        uid, email = _take_link(conn, b.token, ("reset", "invite"))
+        salt = secrets.token_bytes(16)
+        conn.execute(
+            "UPDATE users SET salt=?, pwd_hash=?, must_change_password=0, password_generated=0, email_verified=1 WHERE id=?",
+            (salt, hash_password(b.password, salt), uid),
+        )
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+    _fails.pop(f"pw:{uid}", None)
+    _fails.pop(email, None)
+    return {"user_id": uid, "email": email}
+
+
+@app.get("/internal/v1/users/email-status")
+def users_email_status(user_ids: str):
+    """Адреса и признак подтверждения для рассылок notify: `?user_ids=a,b,c`. Пользователи только с ЭЦП не попадают."""
+    ids = [i for i in (x.strip() for x in user_ids.split(",")) if i][:2000]
+    if not ids:
+        return {"items": []}
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, email, email_verified FROM users WHERE has_email=1 AND id IN (%s)" % ",".join("?" * len(ids)), ids
+        ).fetchall()
+    return {"items": [{"user_id": r[0], "email": r[1], "verified": bool(r[2])} for r in rows]}
 
 
 @app.post("/internal/v1/tokens/verify")
@@ -687,7 +827,8 @@ def sessions_issue(u: IssueIn):
     """Выдаёт сессию уже аутентифицированному вызывающим сервисом пользователю."""
     with db() as conn:
         row = conn.execute(
-            "SELECT id, email, has_email, must_change_password, password_generated FROM users WHERE id=?", (u.user_id,)
+            "SELECT id, email, has_email, must_change_password, password_generated, email_verified FROM users WHERE id=?",
+            (u.user_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404, {"code": "user_not_found"})
@@ -697,7 +838,7 @@ def sessions_issue(u: IssueIn):
         token = _new_session(conn, row[0])
     return {
         "token": token, "ttl": SESSION_TTL, "user_id": row[0], "email": row[1], "has_email": bool(row[2]),
-        "must_change_password": bool(row[3]), "password_generated": bool(row[4]),
+        "must_change_password": bool(row[3]), "password_generated": bool(row[4]), "email_verified": bool(row[5]),
     }
 
 
@@ -705,7 +846,8 @@ def sessions_issue(u: IssueIn):
 def session(t: TokenIn):
     with db() as conn:
         row = conn.execute(
-            "SELECT s.user_id, u.email, s.expires_at, u.has_email, u.must_change_password, u.password_generated"
+            "SELECT s.user_id, u.email, s.expires_at, u.has_email, u.must_change_password, u.password_generated,"
+            " u.email_verified"
             " FROM sessions s JOIN users u ON u.id=s.user_id"
             " WHERE s.token_hash=?",
             (token_hash(t.token),),
@@ -714,7 +856,7 @@ def session(t: TokenIn):
         raise HTTPException(401, {"code": "invalid_session"})
     return {
         "user_id": row[0], "email": row[1], "has_email": bool(row[3]),
-        "must_change_password": bool(row[4]), "password_generated": bool(row[5]),
+        "must_change_password": bool(row[4]), "password_generated": bool(row[5]), "email_verified": bool(row[6]),
     }
 
 
@@ -843,3 +985,5 @@ def seed_demo():
             register(Credentials(email="demo@example.com", password="demo12345"))
         except HTTPException:
             pass
+        with db() as conn:
+            conn.execute("UPDATE users SET email_verified=1 WHERE email='demo@example.com'")

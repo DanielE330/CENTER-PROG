@@ -13,11 +13,12 @@ import { LanguageSwitch } from '../../components/layout/LanguageSwitch'
 import { EcpLogin } from './EcpLogin'
 import { MfaStep } from './MfaStep'
 import type { MeWithCodes, MfaChallenge } from '../../types'
+import { ForgotPassword } from './EmailLinks'
 
 export default function AuthPage() {
   const { t } = useTranslation()
   const { setMe } = useAuth()
-  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login')
   const [company, setCompany] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -27,6 +28,8 @@ export default function AuthPage() {
   const [challenge, setChallenge] = useState<MfaChallenge | null>(null)
   const reg = mode === 'register'
   const mismatch = reg && confirm !== '' && confirm !== password
+
+  if (mode === 'forgot') return <ForgotPassword initialEmail={email} onBack={() => setMode('login')} />
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -121,6 +124,12 @@ export default function AuthPage() {
               autoComplete="new-password"
               error={mismatch ? t('auth.mismatch') : null}
             />
+          )}
+
+          {!reg && (
+            <button type="button" className="text-[13px] text-primary font-medium hover:underline cursor-pointer self-end -mt-2" onClick={() => { setError(''); setMode('forgot') }}>
+              {t('mail.forgot.link')}
+            </button>
           )}
 
           {error && (

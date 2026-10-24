@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% from "_button.html" import button %}
+{% block body %}
+<h1 style="font-size:20px;margin:0 0 12px">{{ title }}</h1>
+{% if tone == "danger" %}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fdecec;border:1px solid #f3c2c2;border-radius:10px"><tr><td style="padding:14px 16px">{{ body_html }}</td></tr></table>
+{% elif tone == "success" %}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#e8f4ee;border:1px solid #b5dcc8;border-radius:10px"><tr><td style="padding:14px 16px">{{ body_html }}</td></tr></table>
+{% else %}<div>{{ body_html }}</div>
+{% endif %}
+{% if chart_cid %}<p style="margin:18px 0 0"><img src="cid:{{ chart_cid }}" alt="{{ chart_alt }}" width="504" style="display:block;width:100%;max-width:504px;height:auto;border:1px solid #e2e7e4;border-radius:8px"></p>{% endif %}
+{% if attachment_name %}<p style="font-size:13px;color:#66716a;margin:12px 0 0">Подробный отчёт с диаграммами и план-фактом во вложении: {{ attachment_name }}.</p>{% endif %}
+{{ button(url, button_label) }}
+{% endblock %}
+{% block footer %}Письмо отправлено автоматически, отвечать на него не нужно. Когда приходят отчёты и порог разрыва, задаёт администратор компании в разделе «Настройки» → «Расписание уведомлений».{% endblock %}

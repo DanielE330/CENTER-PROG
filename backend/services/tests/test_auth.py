@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import time
 
@@ -475,3 +476,114 @@ def test_generate_password_properties():
     assert len(seen) == 200
     for pw in seen:
         assert len(pw) == 14 and any(c.isdigit() for c in pw) and any(c.isupper() for c in pw) and any(c.islower() for c in pw)
+
+
+# ---------- ссылки из писем ----------
+def uid_of(c, email="user@example.com"):
+    return login(c, email).json()["user_id"]
+
+
+def link(c, uid, kind="verify"):
+    return c.post(f"{P}/users/{uid}/email-link", json={"kind": kind})
+
+
+def test_new_user_unverified_until_link_used(client):
+    reg(client)
+    uid = uid_of(client)
+    assert login(client).json()["email_verified"] is False
+    r = link(client, uid)
+    assert r.status_code == 200 and r.json()["email"] == "user@example.com"
+    assert client.post(f"{P}/email/verify", json={"token": r.json()["token"]}).json()["email_verified"] is True
+    assert login(client).json()["email_verified"] is True
+    tok = login(client).json()["token"]
+    assert client.post(f"{P}/session", json={"token": tok}).json()["email_verified"] is True
+    assert link(client, uid).status_code == 409, "подтверждённому адресу ссылка не нужна"
+
+
+def test_verify_link_single_use_rate_limited_and_superseded(client, db_path):
+    reg(client)
+    uid = uid_of(client)
+    first = link(client, uid).json()["token"]
+    assert link(client, uid).status_code == 429, "повторное письмо не чаще раза в минуту"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE email_tokens SET created_at=created_at-120")
+    second = link(client, uid).json()["token"]
+    assert client.post(f"{P}/email/verify", json={"token": first}).status_code == 404, "действует только последняя ссылка"
+    assert client.post(f"{P}/email/verify", json={"token": second}).status_code == 200
+    assert client.post(f"{P}/email/verify", json={"token": second}).status_code == 404
+    with sqlite3.connect(db_path) as conn:
+        stored = [r[0] for r in conn.execute("SELECT token_hash FROM email_tokens")]
+    assert second not in stored and all(len(h) == 64 for h in stored), "в базе только sha256"
+
+
+def test_link_expires(client, db_path):
+    reg(client)
+    tok = link(client, uid_of(client)).json()["token"]
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE email_tokens SET expires_at=?", (time.time() - 1,))
+    assert client.post(f"{P}/email/verify", json={"token": tok}).json()["detail"]["code"] == "token_invalid"
+
+
+def test_changed_email_invalidates_old_verify_link(client):
+    r = client.post(f"{P}/users/external", json={"external_id": "cert-1"})
+    uid = r.json()["user_id"]
+    client.post(f"{P}/users/{uid}/email-password", json={"email": "a@example.com", "password": PWD})
+    tok = link(client, uid).json()["token"]
+    client.post(f"{P}/users/{uid}/signatures", json={"external_id": "cert-2"})
+    client.delete(f"{P}/users/{uid}/email")
+    client.post(f"{P}/users/{uid}/email", json={"email": "b@example.com", "password": PWD})
+    assert client.post(f"{P}/email/verify", json={"token": tok}).status_code == 404
+
+
+def test_forgot_does_not_reveal_and_is_limited(client):
+    reg(client)
+    assert client.post(f"{P}/password/forgot", json={"email": "ghost@example.com"}).json() == {}
+    assert client.post(f"{P}/password/forgot", json={"email": "not-an-email"}).json() == {}
+    got = [client.post(f"{P}/password/forgot", json={"email": " USER@example.com "}).json() for _ in range(4)]
+    assert all(g["token"] for g in got[:3]) and got[3] == {}, "не больше 3 писем в час"
+
+
+def test_reset_by_link_sets_password_verifies_and_closes_sessions(client):
+    reg(client)
+    old = login(client).json()["token"]
+    tok = client.post(f"{P}/password/forgot", json={"email": "user@example.com"}).json()["token"]
+    assert client.post(f"{P}/password/reset", json={"token": tok, "password": "short"}).status_code == 422
+    r = client.post(f"{P}/password/reset", json={"token": tok, "password": "brand-new-pass"})
+    assert r.status_code == 200 and r.json()["email"] == "user@example.com"
+    assert client.post(f"{P}/session", json={"token": old}).status_code == 401
+    assert login(client).status_code == 401
+    assert login(client, pwd="brand-new-pass").json()["email_verified"] is True
+    assert client.post(f"{P}/password/reset", json={"token": tok, "password": "another-pass-1"}).status_code == 404
+
+
+def test_invite_link_lets_member_set_own_password(client):
+    r = client.post(f"{P}/users/create", json={"email": "staff@example.com", "generate": True})
+    uid = r.json()["user_id"]
+    tok = link(client, uid, "invite").json()["token"]
+    assert client.post(f"{P}/email/verify", json={"token": tok}).status_code == 404, "ссылка приглашения не подтверждает почту отдельно"
+    assert client.post(f"{P}/password/reset", json={"token": tok, "password": "my-own-pass-1"}).status_code == 200
+    v = login(client, "staff@example.com", "my-own-pass-1").json()
+    assert (v["must_change_password"], v["password_generated"], v["email_verified"]) == (False, False, True)
+
+
+def test_email_status_for_mailings(client):
+    reg(client)
+    reg(client, "other@example.com")
+    ecp = client.post(f"{P}/users/external", json={"external_id": "cert-9"}).json()["user_id"]
+    a, b = uid_of(client), uid_of(client, "other@example.com")
+    client.post(f"{P}/email/verify", json={"token": link(client, a).json()["token"]})
+    items = client.get(f"{P}/users/email-status", params={"user_ids": f"{a},{b},{ecp},ghost"}).json()["items"]
+    assert sorted((i["email"], i["verified"]) for i in items) == [("other@example.com", False), ("user@example.com", True)]
+
+
+def test_existing_users_become_verified_on_migration(db_path):
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE users(id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, salt BLOB NOT NULL, pwd_hash BLOB NOT NULL,"
+            " created_at REAL NOT NULL)"
+        )
+        salt = b"s" * 16
+        conn.execute("INSERT INTO users VALUES('u1','old@example.com',?,?,0)", (salt, auth_app.hash_password(PWD, salt)))
+    c = TestClient(auth_app.app)
+    assert login(c, "old@example.com").json()["email_verified"] is True

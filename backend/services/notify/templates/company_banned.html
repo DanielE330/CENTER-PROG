@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block body %}
+<h1 style="font-size:20px;margin:0 0 12px">Доступ к «{{ company }}» приостановлен</h1>
+<p style="margin:0 0 8px">Оператор платформы «{{ product }}» временно заблокировал компанию. Войти в неё сейчас нельзя, открытые сеансы завершены. Данные компании сохранены.</p>
+{% if reason %}<p style="margin:0 0 8px">Причина: {{ reason }}</p>{% endif %}
+<p style="margin:0">Если вы считаете это ошибкой, свяжитесь со службой поддержки.</p>
+{% endblock %}

@@ -186,6 +186,7 @@ services:
       LEDGER_URL: http://ledger:3002
       FORECAST_URL: http://forecast:3003
       AUTH_URL: http://auth:8001
+      NOTIFY_URL: http://notify:8014
       OPERATOR_EMAIL: ${OPERATOR_EMAIL:-}
       OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:-}
       # второй фактор оператора (TOTP) обязателен; секреты шифруются ключом BACKOFFICE_MFA_KEY (пусто — ключ-файл в томе backoffice-data)
@@ -204,8 +205,8 @@ services:
   notifier:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: notifier}
-    # Telegram-бот и расписание уведомлений; ходит на api.telegram.org (сеть edge) и во внутренние сервисы.
-    # Без TELEGRAM_BOT_TOKEN сервис запускается, но бот и рассылки выключены.
+    # Расписание уведомлений: Telegram-бот (api.telegram.org, сеть edge) и почта (через notify). Без TELEGRAM_BOT_TOKEN
+    # бот выключен, а алерты и отчёты всё равно уходят на почту участникам, у которых она включена.
     environment:
       NOTIFIER_DB: /data/notifier.db
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -215,26 +216,62 @@ services:
       HERMES_URL: ${HERMES_URL:-}
       HERMES_MODEL: ${HERMES_MODEL:-NousResearch/Hermes-3-Llama-3.1-8B}
       HERMES_API_KEY: ${HERMES_API_KEY:-}
-      # письма с приглашениями в команду; без SMTP_HOST и SMTP_FROM письма не шлются, сайт показывает ссылку
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      SMTP_SSL: ${SMTP_SSL:-0}
-      SMTP_STARTTLS: ${SMTP_STARTTLS:-1}
       LEDGER_URL: http://ledger:3002
       FORECAST_URL: http://forecast:3003
       PLANFACT_URL: http://planfact:3004
+      NOTIFY_URL: http://notify:8014
     volumes: [notifier-data:/data]
     networks: [internal, edge]
     depends_on:
       ledger: {condition: service_healthy}
       forecast: {condition: service_healthy}
       planfact: {condition: service_healthy}
+      notify: {condition: service_started}
     healthcheck:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8009/live', timeout=2)"]
+
+  notify:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: notify}
+    # единственный почтовый шлюз: служебные письма (подтверждение почты, пароль, приглашения, блокировка) и почтовый канал
+    # алертов и отчётов notifier. По умолчанию всё уходит в Mailpit (http://localhost:8025); реальный SMTP — SMTP_* в infra/.env.
+    # Сеть mail — единственный выход наружу (к SMTP-серверу); во внутреннюю сеть notify ходит за составом компаний и статусом почты.
+    environment:
+      NOTIFY_DB: /data/notify.db
+      LEDGER_URL: http://ledger:3002
+      AUTH_URL: http://auth:8001
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_SECURITY: ${SMTP_SECURITY:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      # прежние переменные notifier (.env из ura): понимаются, если новых нет
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SSL: ${SMTP_SSL:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-}
+    volumes: [notify-data:/data]
+    networks: [internal, mail]
+    depends_on:
+      auth: {condition: service_healthy}
+      mailpit: {condition: service_started}
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8014/live', timeout=2)"]
+
+  mailpit:
+    <<: *hardening
+    image: axllent/mailpit:v1.31.6
+    # почтовый ящик для демо и разработки: ловит все письма, веб-интерфейс только с этой машины
+    environment:
+      MP_MAX_MESSAGES: 2000
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports: ["127.0.0.1:${MAILPIT_PORT:-8025}:8025"]
+    tmpfs: [/tmp, /data]
+    networks: [mail]
 
   ledger:
     <<: *hardening
@@ -300,6 +337,7 @@ services:
       ADVISOR_URL: http://advisor:8011
       DEMO_FEED_URL: http://demo-feed:8012
       BACKOFFICE_URL: http://backoffice:8013
+      NOTIFY_URL: http://notify:8014
       DEMO_FEED_ENABLED: ${DEMO_FEED_ENABLED:-${DEMO_SEED:-1}}  # демо «Прошла неделя» только для demo@example.com
       WEB_DIR: /app/frontend/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
@@ -312,6 +350,7 @@ services:
       planfact: {condition: service_healthy}
       notifier: {condition: service_healthy}
       backoffice: {condition: service_started}
+      notify: {condition: service_started}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/live"]
       interval: 10s
@@ -334,6 +373,7 @@ services:
 networks:
   internal: {internal: true}   # все сервисы, кроме gateway и gov/api на edge — без выхода наружу
   edge: {}                     # gateway <-> api
+  mail: {}                     # notify -> SMTP (Mailpit или внешний сервер)
 
 volumes:
   auth-data:
@@ -343,3 +383,4 @@ volumes:
   notifier-data:
   llm-gateway-data:
   backoffice-data:
+  notify-data:

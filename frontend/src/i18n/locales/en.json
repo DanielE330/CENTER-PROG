@@ -232,7 +232,13 @@
     "company_banned": "The company has been blocked by the operator",
     "invalid_current_password": "The current password is incorrect",
     "user_not_found": "Employee not found",
-    "token_not_found": "Token not found"
+    "token_not_found": "Token not found",
+    "token_invalid": "The link is invalid or has expired. Request a new letter",
+    "too_many_requests": "The letter has already been sent, try again in a minute",
+    "already_verified": "The email is already confirmed",
+    "email_not_verified": "Confirm your email first: the link is in the letter sent after registration",
+    "notify_unavailable": "The notification service is unavailable, try again later",
+    "mail_limited": "Too many invitations this hour, try again later"
   },
   "quality": {
     "title": "Data quality",
@@ -820,7 +826,7 @@
     "scopeWrite": "read and write"
   },
   "telegram": {
-    "title": "Telegram notifications",
+    "title": "Notification schedule (Telegram and email)",
     "subtitle": "The bot sends a cash-gap alert a week ahead, a weekly risk report, and weekly and monthly summaries with a plan. You mark goal results in the bot — they drive the next plan.",
     "notConfigured": "The bot is not configured: the administrator has not set a Telegram bot token.",
     "connect": "Connect Telegram",
@@ -1179,9 +1185,9 @@
     "deleteText": "{{email}} will lose access, and their sessions and API tokens will be revoked. This cannot be undone.",
     "deleteConfirm": "Delete employee",
     "createdTitle": "Employee added",
-    "createdText": "Pass the password to {{email}}. They must change it at first sign-in.",
+    "createdText": "If the email invitation does not arrive, give the password to {{email}} yourself. They must change it at first sign-in.",
     "resetDoneTitle": "Password reset",
-    "resetDoneText": "New password for {{email}}. All their sessions were ended; they must change the password at sign-in.",
+    "resetDoneText": "The letter with a link could not be sent, so here is a new password for {{email}}. All their sessions are closed; they must change the password at sign-in.",
     "passwordAria": "Generated password",
     "onceTitle": "The password is shown only once",
     "onceText": "After you close this window the password cannot be shown again: copy it now. If you lose it, reset the password again.",
@@ -1192,6 +1198,71 @@
     "transferAria": "Transfer ownership to {{email}}",
     "transferTitle": "Transfer company ownership?",
     "transferText": "{{email}} becomes the owner and you become an administrator. Only the new owner can give ownership back.",
-    "transferConfirm": "Transfer ownership"
+    "transferConfirm": "Transfer ownership",
+    "inviteMailedTitle": "Invitation sent",
+    "inviteMailedText": "A letter with a link was sent to {{email}}: the employee will set their own password. The link is valid for 72 hours.",
+    "resetMailedTitle": "Password reset",
+    "resetMailedText": "The employee's sessions are closed. A letter with a link to set a new password was sent to {{email}} (valid for 72 hours)."
+  },
+  "mail": {
+    "forgot": {
+      "link": "Forgot password?",
+      "title": "Password recovery",
+      "text": "Enter the email you sign in with. We will send you a link to set a new password.",
+      "submit": "Send link",
+      "sentTitle": "Check your inbox",
+      "sentText": "If {{email}} is registered, a letter with a link has been sent to it. The link is valid for 1 hour.",
+      "noLetter": "No letter? Check the spam folder or request a new link in a minute. The company owner or an administrator can also reset an employee's password."
+    },
+    "reset": {
+      "title": "New password",
+      "inviteTitle": "Welcome",
+      "text": "Choose a new password. After saving, all open sessions are closed; sign in again.",
+      "inviteText": "You have been invited to a company. Choose a password to sign in with your email.",
+      "submit": "Save password",
+      "doneTitle": "Password saved",
+      "doneText": "Sign in with the new password. Your email is now confirmed.",
+      "expiredText": "The link has already been used or has expired (it is valid for 1 hour). Request a new one on the sign-in screen: \"Forgot password?\".",
+      "expiredInvite": "The link has already been used or has expired. Ask the company owner or an administrator to send the invitation again or reset your password."
+    },
+    "verify": {
+      "title": "Email confirmation",
+      "doneTitle": "Email confirmed",
+      "doneText": "Cash gap alerts and reports can now come to this address. Letters can be set up in Settings.",
+      "expiredText": "The link has already been used or has expired (it is valid for 24 hours). Sign in and click \"Send the letter again\" in the top bar."
+    },
+    "unsubscribe": {
+      "title": "Unsubscribe",
+      "doneTitle": "You have unsubscribed",
+      "doneText": "Alerts and reports will no longer be emailed. Sign-in letters (password recovery) still arrive. You can turn mailings back on in Settings.",
+      "expiredText": "The link is invalid. Letters can be managed in Settings → Email notifications.",
+      "toSettings": "Open settings"
+    },
+    "banner": {
+      "text": "Confirm your email {{email}}: until it is confirmed, alerts and reports are not emailed.",
+      "sent": "A letter has been sent to {{email}}. Follow the link in it.",
+      "sentShort": "Sent",
+      "resend": "Send the letter again"
+    },
+    "settings": {
+      "title": "Email notifications",
+      "subtitle": "What comes to your own inbox. Every employee has their own settings.",
+      "verified": "confirmed",
+      "unverified": "not confirmed",
+      "lockedTitle": "Email not confirmed",
+      "lockedText": "Follow the link from the letter sent after registration. Mailings are off until the email is confirmed.",
+      "alerts": "Cash gap alerts",
+      "alertsHint": "A warning 7, 3 and 1 day before a possible gap, and a letter when the risk goes down.",
+      "reports": "Reports",
+      "reportsHint": "Risk report, weekly and monthly results with a chart; the monthly one comes with an Excel file.",
+      "schedule": "When reports arrive and the alert probability threshold are set by the owner or an administrator in \"Notification schedule\".",
+      "scheduleLink": "Open the schedule",
+      "test": "Send a test letter",
+      "testSent": "A test letter has been sent to {{email}}."
+    },
+    "expiredTitle": "The link is invalid",
+    "checking": "Checking the link…",
+    "toApp": "Go to the app",
+    "backToLogin": "Back to sign in"
   }
 }

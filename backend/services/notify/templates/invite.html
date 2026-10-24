@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% from "_button.html" import button %}
+{% block body %}
+<h1 style="font-size:20px;margin:0 0 12px">Вас пригласили в «{{ company }}»</h1>
+<p style="margin:0 0 8px">{{ inviter }} добавил(а) вас в «{{ product }}» с ролью «{{ role_text }}». Здесь компания следит за остатком денег, прогнозом и рисками кассовых разрывов.</p>
+<p style="margin:0 0 8px">Ваш логин: <strong>{{ email }}</strong>. Задайте пароль, чтобы войти:</p>
+{{ button(url, "Задать пароль и войти") }}
+<p style="font-size:13px;color:#66716a;margin:16px 0 0">Ссылка действует 72 часа. Если срок истёк, попросите владельца или администратора компании отправить приглашение ещё раз.</p>
+{% endblock %}

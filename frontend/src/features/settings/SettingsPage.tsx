@@ -27,6 +27,7 @@ import { ApiTokens } from './ApiTokens'
 import { TelegramNotifications } from './TelegramNotifications'
 import { TeamPolicies } from './TeamPolicies'
 import { LeaveTeam, TeamInvites } from './TeamInvites'
+import { NotificationSettings } from './NotificationSettings'
 import { MembersPanel } from '../account/MembersPanel'
 import { canEdit } from '../../lib/roles'
 
@@ -106,6 +107,7 @@ export default function SettingsPage() {
             </form>
           </Card>
 
+          <NotificationSettings />
           <TelegramNotifications />
 
           <MembersPanel />

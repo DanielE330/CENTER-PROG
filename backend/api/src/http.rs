@@ -98,6 +98,8 @@ pub struct Principal {
     pub ban_reason: Option<String>,
     pub must_change_password: bool,
     pub password_generated: bool,
+    /// почта подтверждена по ссылке из письма; без этого рассылки (алерты, отчёты) не отправляются
+    pub email_verified: bool,
 }
 
 impl Principal {
@@ -106,7 +108,7 @@ impl Principal {
         Principal {
             user_id: user_id.to_string(), email: String::new(), has_email: false, company_id: String::new(), company_name: String::new(),
             company_inn: String::new(), company_ogrn: String::new(), role: Role::Viewer, banned: false, ban_reason: None,
-            must_change_password: false, password_generated: false,
+            must_change_password: false, password_generated: false, email_verified: true,
         }
     }
 
@@ -138,6 +140,7 @@ impl Principal {
             "role": self.role.as_str(), "permissions": self.role.permissions(),
             "must_change_password": self.must_change_password, "password_generated": self.password_generated,
             "password_required": self.password_required(), "company_banned": self.banned, "ban_reason": self.ban_reason,
+            "email_verified": self.email_verified,
         })
     }
 }
@@ -197,7 +200,7 @@ async fn principal_of(st: &AppState, ctx: &Ctx, user_id: String, email: String, 
     let c = Company::from_json(&r.into_result()?);
     Ok(Principal {
         user_id, email, has_email, company_id: c.id, company_name: c.name, company_inn: c.inn, company_ogrn: c.ogrn,
-        role: c.role, banned: c.banned, ban_reason: c.ban_reason, must_change_password, password_generated,
+        role: c.role, banned: c.banned, ban_reason: c.ban_reason, must_change_password, password_generated, email_verified: true,
     })
 }
 
@@ -209,7 +212,7 @@ async fn load_principal(parts: &mut Parts, st: &AppState) -> R<Principal> {
         return Err(err(StatusCode::UNAUTHORIZED, "unauthenticated", "Сессия недействительна"));
     }
     let v = r.json();
-    principal_of(
+    let mut p = principal_of(
         st,
         &ctx,
         v["user_id"].as_str().unwrap_or_default().to_string(),
@@ -218,7 +221,9 @@ async fn load_principal(parts: &mut Parts, st: &AppState) -> R<Principal> {
         v["must_change_password"].as_bool().unwrap_or(false),
         v["password_generated"].as_bool().unwrap_or(false),
     )
-    .await
+    .await?;
+    p.email_verified = v["email_verified"].as_bool().unwrap_or(true);
+    Ok(p)
 }
 
 /// Обычный участник: сессия действительна, компания не заблокирована, пароль задан. Права проверяют `Reader`/`Editor`/`Manager`.
@@ -311,11 +316,11 @@ fn authorize(p: &Principal, cid: &str) -> R<()> {
     if p.company_id == cid { Ok(()) } else { Err(err(StatusCode::NOT_FOUND, "not_found", "Не найдено")) }
 }
 
-fn with_actor(ctx: &Ctx, p: &Principal) -> Ctx {
+pub fn with_actor(ctx: &Ctx, p: &Principal) -> Ctx {
     Ctx { rid: ctx.rid.clone(), actor: p.user_id.clone() }
 }
 
-async fn audit(st: &AppState, ctx: &Ctx, p: &Principal, action: &str, object: &str) {
+pub async fn audit(st: &AppState, ctx: &Ctx, p: &Principal, action: &str, object: &str) {
     let _ = st
         .ledger
         .post(&format!("/internal/v1/companies/{}/audit", p.company_id), &with_actor(ctx, p), &json!({"action": action, "object_id": object, "outcome": "ok"}))
@@ -399,7 +404,7 @@ async fn finish_login(st: &AppState, ctx: &Ctx, v: &Value, company_name: Option<
     let mut body = json!({
         "email": email, "company_id": co.id, "company_name": co.name, "role": co.role.as_str(), "permissions": co.role.permissions(),
         "must_change_password": v["must_change_password"].as_bool().unwrap_or(false), "password_generated": v["password_generated"].as_bool().unwrap_or(false),
-        "password_required": false,
+        "password_required": false, "email_verified": v["email_verified"].as_bool().unwrap_or(true),
     });
     if let (Some(extra), Some(obj)) = (extra, body.as_object_mut()) {
         if let Some(e) = extra.as_object() {
@@ -537,6 +542,8 @@ pub async fn register(axum::extract::State(st): axum::extract::State<AppState>, 
     if !s.is_success() {
         return Err(auth_err(s, &v));
     }
+    // письмо «Подтвердите почту»: вход не ждёт подтверждения, без него не будет только рассылок
+    crate::mail::send_verify(&st, &ctx, v["user_id"].as_str().unwrap_or_default()).await;
     login(axum::extract::State(st), ctx, Json(c)).await
 }
 
@@ -600,6 +607,7 @@ pub async fn account_add_email(axum::extract::State(st): axum::extract::State<Ap
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "password_mismatch", "Пароли не совпадают"));
     }
     let v = account_call(&st, &ctx, &p, Method::POST, "/email", Some(json!({"email": b.email, "password": b.password}))).await?;
+    crate::mail::send_verify(&st, &with_actor(&ctx, &p), &p.user_id).await;
     audit(&st, &ctx, &p, "account.email_add", "").await;
     Ok(Json(v))
 }
@@ -667,8 +675,9 @@ pub async fn set_credentials(axum::extract::State(st): axum::extract::State<AppS
     let email = v["email"].as_str().unwrap_or_default().to_string();
     // в списке сотрудников у директора теперь настоящий адрес вместо служебного
     let _ = st.ledger.json(Method::PATCH, &format!("/internal/v1/companies/{}/members/{}", p.company_id, p.user_id), &with_actor(&ctx, &p), Some(&json!({"email": email}))).await;
+    let sent = crate::mail::send_verify(&st, &with_actor(&ctx, &p), &p.user_id).await;
     audit(&st, &ctx, &p, "account.credentials_set", "").await;
-    Ok(Json(json!({"email": email, "password_required": false})))
+    Ok(Json(json!({"email": email, "password_required": false, "email_verified": false, "email_sent": sent})))
 }
 
 #[derive(Deserialize)]
@@ -805,7 +814,9 @@ pub async fn members_create(axum::extract::State(st): axum::extract::State<AppSt
         return Err(e);
     }
     audit(&st, &ctx, &p, "member.create", &uid).await;
-    let mut out = json!({"user_id": uid, "email": email, "role": role, "must_change_password": true, "password_generated": b.generate});
+    // приглашение со ссылкой «задать пароль»; выданный пароль остаётся запасным способом
+    let invite_sent = crate::mail::send_member_link(&st, &actx, &p, &uid, role, "invite").await;
+    let mut out = json!({"user_id": uid, "email": email, "role": role, "must_change_password": true, "password_generated": b.generate, "invite_sent": invite_sent});
     if let Some(pw) = u["password"].as_str() {
         out["password"] = json!(pw);
     }
@@ -851,6 +862,7 @@ pub async fn members_delete(axum::extract::State(st): axum::extract::State<AppSt
     }
     st.ledger.json(Method::DELETE, &format!("/internal/v1/companies/{}/members/{uid}", p.company_id), &actx, None).await?.into_result()?;
     sync_telegram_role(&st, &ctx, &p, &uid, None).await;
+    crate::mail::forget_user(&st, &actx, &uid).await;
     audit(&st, &ctx, &p, "member.delete", &uid).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -865,7 +877,12 @@ pub async fn members_reset_password(axum::extract::State(st): axum::extract::Sta
     may_grant(&p, m["role"].as_str().unwrap_or(""))?;
     let v = user_call(&st, &ctx, &p, &uid, Method::POST, "/reset-password", None).await?;
     audit(&st, &ctx, &p, "member.reset_password", &uid).await;
-    Ok(Json(json!({"password": v["password"], "must_change_password": true})))
+    // сотрудник получает ссылку на почту; пароль директору показываем, только если письмо отправить не удалось
+    let role = m["role"].as_str().unwrap_or("viewer");
+    if crate::mail::send_member_link(&st, &with_actor(&ctx, &p), &p, &uid, role, "member_reset").await {
+        return Ok(Json(json!({"email_sent": true, "email": m["email"].as_str().and_then(public_email), "must_change_password": true})));
+    }
+    Ok(Json(json!({"password": v["password"], "email_sent": false, "must_change_password": true})))
 }
 
 // ---------- команда компании: приглашения по ссылке, передача владения, журнал действий ----------
@@ -910,17 +927,14 @@ pub async fn team_invite_create(axum::extract::State(st): axum::extract::State<A
     let email = b["email"].as_str().unwrap_or("").trim().to_string();
     let body = json!({"role": role, "actor": p.user_id, "email": email});
     let mut v = team_call(&st.auth, &ctx, &p, Method::POST, &format!("/internal/v1/companies/{}/invites", p.company_id), Some(body)).await?;
-    // приглашение на email уходит письмом; без настроенного SMTP сайт показывает ссылку, и её отправляют вручную
-    let mut emailed = false;
+    // приглашение на email уходит письмом через notify; если почта недоступна, сайт показывает ссылку, и её отправляют вручную
+    let (mut emailed, mut limited) = (false, false);
     if !email.is_empty() {
-        let inviter = if p.has_email { p.email.clone() } else { String::new() };
-        let mail = json!({"company_id": p.company_id, "to": email, "code": v["code"], "company": p.company_name, "role": v["role"], "inviter": inviter});
-        if let Ok(m) = st.notifier.post("/internal/v1/mail/invite", &with_actor(&ctx, &p), &mail).await {
-            emailed = m["sent"].as_bool().unwrap_or(false);
-            v["email_limited"] = json!(m["limited"].as_bool().unwrap_or(false));
-        }
+        let code = v["code"].as_str().unwrap_or_default().to_string();
+        (emailed, limited) = crate::mail::send_team_invite(&st, &with_actor(&ctx, &p), &p, &email, &code, v["role"].as_str().unwrap_or(&role)).await;
     }
     v["emailed"] = json!(emailed);
+    v["email_limited"] = json!(limited);
     audit(&st, &ctx, &p, "team.invite_create", v["role"].as_str().unwrap_or("")).await;
     Ok((StatusCode::CREATED, Json(v)))
 }

@@ -39,14 +39,20 @@ export function MembersPanel() {
   const [pwdOpen, setPwdOpen] = useState(false)
   const [pwdDone, setPwdDone] = useState(false)
   const [reveal, setReveal] = useState<{ email: string; password: string; reset: boolean } | null>(null)
+  // письмо со ссылкой ушло сотруднику: приглашение или сброс пароля
+  const [mailed, setMailed] = useState<{ email: string; reset: boolean } | null>(null)
   const [toDelete, setToDelete] = useState<Member | null>(null)
   const [toTransfer, setToTransfer] = useState<Member | null>(null)
 
   const refresh = () => void qc.invalidateQueries({ queryKey: KEY })
   const setRole = useMutation({ mutationFn: (v: { id: string; role: Assignable }) => api.setMemberRole(v.id, v.role), onSuccess: refresh })
   const reset = useMutation({
-    mutationFn: (m: Member) => api.resetMemberPassword(m.user_id).then((r) => ({ m, password: r.password })),
-    onSuccess: ({ m, password }) => setReveal({ email: m.email ?? '', password, reset: true }),
+    mutationFn: (m: Member) => api.resetMemberPassword(m.user_id).then((r) => ({ m, r })),
+    onSuccess: ({ m, r }) => {
+      setMailed(null)
+      if (r.email_sent) setMailed({ email: m.email ?? '', reset: true })
+      else if (r.password) setReveal({ email: m.email ?? '', password: r.password, reset: true })
+    },
   })
   const remove = useMutation({
     mutationFn: (m: Member) => api.deleteMember(m.user_id),
@@ -147,6 +153,11 @@ export function MembersPanel() {
           </ul>
         )}
         {error != null && <Notice tone="danger">{errorText(t, error)}</Notice>}
+        {mailed && (
+          <Notice tone="success" title={t(mailed.reset ? 'members.resetMailedTitle' : 'members.inviteMailedTitle')}>
+            {t(mailed.reset ? 'members.resetMailedText' : 'members.inviteMailedText', { email: mailed.email })}
+          </Notice>
+        )}
         <p className="text-xs text-muted">{t('members.rolesNote')}</p>
       </div>
     </Card>
@@ -158,6 +169,7 @@ export function MembersPanel() {
         onCreated={(r) => {
           refresh()
           setAddOpen(false)
+          setMailed(r.invite_sent ? { email: r.email, reset: false } : null)
           if (r.password) setReveal({ email: r.email, password: r.password, reset: false })
         }}
       />
@@ -203,7 +215,7 @@ export function MembersPanel() {
   )
 }
 
-function AddMemberModal({ open, onClose, onCreated, assignable }: { open: boolean; onClose: () => void; onCreated: (r: { email: string; password?: string }) => void; assignable: Assignable[] }) {
+function AddMemberModal({ open, onClose, onCreated, assignable }: { open: boolean; onClose: () => void; onCreated: (r: { email: string; password?: string; invite_sent?: boolean }) => void; assignable: Assignable[] }) {
   const { t } = useTranslation()
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<Assignable>('viewer')

@@ -48,6 +48,7 @@ case "${1:-up}" in
     echo
     echo "Готово: http://localhost:$P"
     if [ "${DEMO:-1}" != "0" ]; then echo "Демо-вход: demo@example.com / demo12345"; fi
+    echo "Письма (Mailpit): http://localhost:8025"
     ;;
   stop)   need_docker; $C down ;;
   reset)  need_docker; $C down -v ;;

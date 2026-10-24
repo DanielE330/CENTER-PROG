@@ -1,6 +1,8 @@
-"""Рассылки и расписание: алерт разрыва, риск-отчёт, недельный и месячный отчёты, ретро-напоминание."""
+"""Рассылки и расписание: алерт разрыва, риск-отчёт, недельный и месячный отчёты, ретро-напоминание.
+Два канала: Telegram (если задан токен бота) и почта через notify (участникам, у которых она включена)."""
 import asyncio
 import logging
+import re
 import time
 from datetime import date, datetime, timedelta
 
@@ -20,7 +22,7 @@ GAP_HOURS = range(8, 21)
 
 
 class Jobs:
-    def __init__(self, store: Store, bot: Bot, up: Upstream, advisor: Advisor | None = None):
+    def __init__(self, store: Store, bot: Bot | None, up: Upstream, advisor: Advisor | None = None):
         self.store, self.bot, self.up, self.advisor = store, bot, up, advisor or Advisor()
         self._bundles: dict[str, tuple[float, Bundle]] = {}
         self._bans: dict[str, tuple[float, str | None]] = {}
@@ -44,8 +46,8 @@ class Jobs:
     # ---------- доставка ----------
     async def broadcast(self, cid: str, fn, kind: str | None = None, excel_only: bool = False) -> int:
         """Вызывает fn(chat_id) для каждого активного чата компании, которому политика отдела разрешает этот вид рассылки.
-        Возвращает число доставленных."""
-        if await self.banned(cid):
+        Возвращает число доставленных. Без токена бота Telegram-канал выключен."""
+        if self.bot is None or await self.banned(cid):
             return 0
         ok = 0
         for ch in self.store.chats(cid):
@@ -66,6 +68,15 @@ class Jobs:
                     log.warning("не доставлено в %s: %s", ch["chat_id"], e)
         return ok
 
+    async def mail(self, cid: str, kind: str, key: str, text: str, path: str = "/", png: bytes | None = None,
+                   chart_alt: str = "", xlsx: bytes | None = None, xlsx_name: str = "") -> int:
+        """То же сообщение письмом: первая строка — тема, остальное — текст. Возвращает число получателей."""
+        if await self.banned(cid):
+            return 0
+        head, _, body = text.partition("\n")
+        subject = re.sub(r"<[^>]+>", "", head).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").strip()
+        return await self.up.mail(cid, kind, key, subject or "Уведомление", body.strip("\n"), path, png, chart_alt, xlsx, xlsx_name)
+
     async def _bundle(self, cid: str, anchor: date | None = None, now_goals: str | None = None) -> Bundle:
         prefs = self.store.prefs(cid)
         today = anchor or config.now_in(config.tz_of(prefs["tz"])).date()
@@ -84,16 +95,20 @@ class Jobs:
             company = (await self._company(cid))
             text = reports.gap_alert_text(company, alert, prefs["gap_days"])
             kb = [[{"text": "📊 График и причины", "callback_data": "x:risk"}] + reports.web_button("/forecast")]
-            if not await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "gap"):
+            tg = await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "gap")
+            mailed = await self.mail(cid, "gap", alert["key"], text, "/forecast")
+            if not tg and not mailed:
                 self.store.release(cid, "gap", alert["key"])  # никто не получил — повторим в следующую проверку
                 return "none"
             self.store.kv_set(cid, "gap_active", alert["date"].isoformat())
             return "sent"
-        if self.store.kv_get(cid, "gap_active"):
+        active = self.store.kv_get(cid, "gap_active")
+        if active:
             self.store.kv_set(cid, "gap_active", None)
             if fc.break_date is None or fc.prob < prefs["gap_threshold"]:
                 text = reports.gap_recovered_text(await self._company(cid))
                 await self.broadcast(cid, lambda c: self.bot.send(c, text), "gap")
+                await self.mail(cid, "gap_resolved", f"{active}:{today.isoformat()}", text, "/forecast")
                 return "recovered"
         return "none"
 
@@ -150,6 +165,7 @@ class Jobs:
         kb = [[{"text": "📎 Excel", "callback_data": "x:risk"}] + reports.web_button("/forecast")]
         await self.broadcast(cid, lambda c: self.bot.send_photo(c, png, "🛡 Прогноз остатка на ближайший месяц"), "risk")
         await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "risk")
+        await self.mail(cid, "risk", self._mail_key(b), text, "/forecast", png, "Прогноз остатка на ближайший месяц")
 
     def _ensure_sprint(self, cid: str, b: Bundle) -> Bundle:
         """Создаёт цели нового спринта (один раз) и подтягивает их в b."""
@@ -178,6 +194,7 @@ class Jobs:
         png, text, kb = charts.week_chart(b), reports.with_advice(reports.week_text(b), b), reports.week_keyboard(b)
         await self.broadcast(cid, lambda c: self.bot.send_photo(c, png, "📅 Неделя: факт против нормы"), "week")
         await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "week")
+        await self.mail(cid, "week", self._mail_key(b), text, "/plan-vs-actual", png, "Неделя: факт против нормы")
 
     async def send_month(self, cid: str) -> None:
         b = await self._bundle(cid)
@@ -190,6 +207,13 @@ class Jobs:
         await self.broadcast(cid, lambda c: self.bot.send_photo(c, png, f"🗓 {fmt.month_title(b.month_last['start'])}: потоки и структура расходов"), "month")
         await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "month")
         await self.broadcast(cid, lambda c: self.bot.send_document(c, xls, name, "📎 Подробный отчёт: диаграммы, план-факт и рекомендации"), "month", excel_only=True)
+        await self.mail(cid, "month", self._mail_key(b), text, "/dashboard", png, "Потоки и структура расходов за месяц", xls, name)
+
+    @staticmethod
+    def _mail_key(b: Bundle) -> str:
+        """Ключ письма отчёта: плановую отправку от повтора защищает расписание (claim), ручная «Отправить сейчас»
+        допускает новое письмо раз в минуту."""
+        return f"{b.today.isoformat()}:{int(time.time() // 60)}"
 
     async def send_excel(self, cid: str, chat_id: int, kind: str) -> None:
         prefs = self.store.prefs(cid)
@@ -219,7 +243,9 @@ class Jobs:
         return 0 <= since <= CATCH_UP_MIN
 
     async def tick(self) -> None:
-        for cid in self.store.companies():
+        # компании с Telegram-чатами и компании, где кто-то получает рассылки письмом
+        cids = list(dict.fromkeys(self.store.companies() + await self.up.mail_companies()))
+        for cid in cids:
             try:
                 await self.tick_company(cid)
             except Exception as e:  # одна компания не должна ронять рассылку остальным

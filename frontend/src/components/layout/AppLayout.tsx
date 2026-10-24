@@ -4,6 +4,8 @@ import { Sidebar } from './Sidebar'
 import { useTranslation } from 'react-i18next'
 import { Header } from './Header'
 import { ReadOnlyBanner } from './ReadOnlyBanner'
+import { VerifyEmailBanner } from './VerifyEmailBanner'
+import { useAuth } from '../../app/auth'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 export function AppLayout() {
@@ -13,6 +15,7 @@ export function AppLayout() {
   const [drawer, setDrawer] = useState(false)
   const { pathname } = useLocation()
   const { t } = useTranslation()
+  const { me } = useAuth()
 
   const collapsed = userCollapsed ?? tablet
 
@@ -39,6 +42,7 @@ export function AppLayout() {
       <div className="flex-1 min-w-0 flex flex-col h-full">
         <Header onMenu={() => setDrawer(true)} />
         <ReadOnlyBanner />
+        {me?.email && me.email_verified === false && <VerifyEmailBanner email={me.email} />}
         <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto overflow-x-hidden outline-none">
           {/* Re-keyed per route so the short fade replays on navigation; app state outside the page is untouched. */}
           <div key={pathname} className="page-enter">

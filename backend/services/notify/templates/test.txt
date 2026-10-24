@@ -1,0 +1,5 @@
+{% extends "base.txt" %}{% block body %}
+Почта настроена
+
+Это тестовое письмо: уведомления «{{ product }}» доходят до {{ email }}. Настроить алерты и отчёты: {{ settings_url }}
+{% endblock %}

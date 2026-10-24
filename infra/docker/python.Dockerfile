@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Build context: repo root. Targets: auth, parser, gov, ecp, onec, edo, bank, integrator, notifier, demo_feed, llm_gateway, advisor, backoffice, test.
+# Build context: repo root. Targets: auth, parser, gov, ecp, onec, edo, bank, integrator, notifier, demo_feed, llm_gateway, advisor, backoffice, notify, test.
 ARG SVC=auth
 FROM python:3.12-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
@@ -84,6 +84,12 @@ ENV BACKOFFICE_DB=/data/backoffice.db
 USER app
 EXPOSE 8013
 CMD ["uvicorn", "backoffice.app:app", "--host", "0.0.0.0", "--port", "8013"]
+
+FROM base AS notify
+ENV NOTIFY_DB=/data/notify.db
+USER app
+EXPOSE 8014
+CMD ["uvicorn", "notify.app:app", "--host", "0.0.0.0", "--port", "8014"]
 
 FROM base AS test
 RUN uv sync --frozen

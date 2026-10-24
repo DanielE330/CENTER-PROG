@@ -15,6 +15,9 @@ const AuthPage = lazy(() => import('./features/auth/AuthPage'))
 const BannedScreen = lazy(() => import('./features/auth/AccessGates').then((m) => ({ default: m.BannedScreen })))
 const SetCredentialsScreen = lazy(() => import('./features/auth/AccessGates').then((m) => ({ default: m.SetCredentialsScreen })))
 const ChangePasswordScreen = lazy(() => import('./features/auth/AccessGates').then((m) => ({ default: m.ChangePasswordScreen })))
+// ссылки из писем: открываются и без входа, и на другом устройстве
+const EmailLinkPage = lazy(() => import('./features/auth/EmailLinks'))
+const EMAIL_LINK = /^\/(verify-email|reset-password|unsubscribe)\/?$/
 
 function Gate() {
   const { status, me } = useAuth()
@@ -23,6 +26,13 @@ function Gate() {
   const [skipped, setSkipped] = useState(false)
   // /operator — панель оператора платформы: свой вход и своя сессия, вход в компанию не требуется
   if (/^\/operator\/?$/.test(window.location.pathname)) return <RouterProvider router={router} />
+  if (EMAIL_LINK.test(window.location.pathname)) {
+    return (
+      <Suspense fallback={<LoadingState height={400} />}>
+        <EmailLinkPage />
+      </Suspense>
+    )
+  }
   if (status === 'loading') return <LoadingState height={400} />
   if (status === 'anon') {
     return (

@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% from "_button.html" import button %}
+{% block body %}
+<h1 style="font-size:20px;margin:0 0 12px">Приглашение в команду «{{ company }}»</h1>
+<p style="margin:0 0 8px">{% if inviter %}{{ inviter }} приглашает{% else %}Вас приглашают{% endif %} вас в «{{ product }}» с ролью «{{ role_text }}». Здесь компания следит за остатком денег, прогнозом и рисками кассовых разрывов.</p>
+<p style="margin:0 0 8px">Перейдите по ссылке, войдите или зарегистрируйтесь с адресом <strong>{{ email }}</strong> и примите приглашение:</p>
+{{ button(url, "Принять приглашение") }}
+<p style="font-size:13px;color:#66716a;margin:16px 0 0">Ссылка действует 7 дней и срабатывает один раз, только для этого адреса. Если приглашение вам не нужно, просто проигнорируйте письмо.</p>
+{% endblock %}

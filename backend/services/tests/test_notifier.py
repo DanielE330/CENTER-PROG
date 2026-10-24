@@ -738,97 +738,120 @@ def test_denied_actions_are_not_audited(core):
     assert not [1 for a, b in w.audits if a == "tg:3"]       # отклонённое действие в журнал не попадает
 
 
-# ---------- письма с приглашениями ----------
-class FakeSMTP:
-    sent: list = []
-    logins: list = []
-    fail = False
+# ---------- почтовый канал (notify) ----------
+class MailWorld(World):
+    """World с почтовым шлюзом notify: подписчики компании и принятые рассылки."""
 
-    def __init__(self, host, port, timeout=0, context=None):
-        self.host, self.port = host, port
+    def __init__(self):
+        super().__init__()
+        self.subs = {"alerts": 1, "reports": 1}
+        self.mails: list[dict] = []
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def starttls(self, context=None):
-        self.tls = True
-
-    def login(self, u, p):
-        FakeSMTP.logins.append((u, p))
-
-    def send_message(self, msg):
-        if FakeSMTP.fail:
-            import smtplib
-            raise smtplib.SMTPException("boom " + "secret-pass")
-        FakeSMTP.sent.append(msg)
+    def upstream_handler(self, req):
+        p = req.url.path
+        if req.url.port == 8014:
+            if p.endswith("/broadcast"):
+                b = json.loads(req.content)
+                self.mails.append(b)
+                n = self.subs["alerts" if b["kind"].startswith("gap") else "reports"]
+                return httpx.Response(200, json={"queued": n, "recipients": n})
+            if p.endswith("/subscribers"):
+                return httpx.Response(200, json=self.subs)
+            if p.endswith("/companies-with-subscribers"):
+                return httpx.Response(200, json={"items": [CID] if any(self.subs.values()) else []})
+        return super().upstream_handler(req)
 
 
 @pytest.fixture
-def smtp(monkeypatch):
-    import smtplib
-    FakeSMTP.sent, FakeSMTP.logins, FakeSMTP.fail = [], [], False
-    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
-    monkeypatch.setenv("SMTP_HOST", "smtp.example.ru")
-    monkeypatch.setenv("SMTP_FROM", "noreply@example.ru")
-    monkeypatch.setenv("SMTP_USER", "mailer")
-    monkeypatch.setenv("SMTP_PASSWORD", "secret-pass")
-    monkeypatch.setenv("PUBLIC_URL", "https://app.example.ru")
-    return FakeSMTP
+def mail_core(monkeypatch):
+    monkeypatch.setenv("NOTIFIER_TODAY", "2026-10-05")
+    monkeypatch.setenv("NOTIFY_URL", "http://notify:8014")
+    w = MailWorld()
+    store = Store(":memory:")
+    return store, Jobs(store, None, Upstream(httpx.MockTransport(w.upstream_handler))), w
 
 
-def test_invite_mail_content_and_login(smtp):
-    from notifier import mailer
-    assert run(mailer.send_invite("ira@x.ru", "CODE1234567890", "ООО «Ромашка»", "analyst", "Пётр"))
-    m = smtp.sent[0]
-    assert m["To"] == "ira@x.ru" and "Ромашка" in m["Subject"]
-    body = m.get_content()
-    assert "https://app.example.ru/?invite=CODE1234567890" in body and "аналитик" in body and "Пётр приглашает" in body
-    assert smtp.logins == [("mailer", "secret-pass")]
+def test_gap_alert_reaches_mail_without_telegram(mail_core):
+    store, jobs, w = mail_core
+    assert run(jobs.check_gap(CID)) == "sent"
+    assert run(jobs.check_gap(CID)) == "dup"                      # тот же этап второй раз не уходит
+    m = w.mails[0]
+    assert m["kind"] == "gap" and m["path"] == "/forecast" and "<" not in m["subject"]
+    assert "Тест" in m["html"] or "разрыв" in m["html"].lower()
+    w.forecast = build_forecast(w.balance, break_date=None)
+    assert run(jobs.check_gap(CID)) == "recovered"
+    assert w.mails[-1]["kind"] == "gap_resolved"
 
 
-def test_invite_mail_rejects_header_injection_and_bad_addresses(smtp):
-    from notifier import mailer
-    assert not run(mailer.send_invite("a@x.ru\nBcc: evil@x.ru", "CODE1234567890", "К", "observer", ""))
-    assert not run(mailer.send_invite("not-an-email", "CODE1234567890", "К", "observer", ""))
-    assert not smtp.sent
-    assert run(mailer.send_invite("ok@x.ru", "CODE1234567890", "Ромашка\r\nBcc: evil@x.ru", "observer", "Хакер\nX: y"))
-    m = smtp.sent[0]
-    assert m["Bcc"] is None and "\n" not in m["Subject"]
+def test_gap_alert_without_any_recipient_is_retried(mail_core):
+    store, jobs, w = mail_core
+    w.subs = {"alerts": 0, "reports": 0}
+    assert run(jobs.check_gap(CID)) == "none"                     # ни Telegram, ни почты: ключ освобождён
+    w.subs = {"alerts": 1, "reports": 0}
+    assert run(jobs.check_gap(CID)) == "sent"
 
 
-def test_invite_mail_failure_returns_false_without_leaking_secrets(smtp, caplog):
-    from notifier import mailer
-    smtp.fail = True
-    with caplog.at_level("WARNING"):
-        assert not run(mailer.send_invite("ok@x.ru", "CODE1234567890", "К", "observer", ""))
-    assert "secret-pass" not in caplog.text and "CODE1234567890" not in caplog.text
+def test_week_and_month_reports_carry_chart_and_excel(mail_core):
+    import base64
+    store, jobs, w = mail_core
+    run(jobs.send_week(CID))
+    week = w.mails[-1]
+    assert week["kind"] == "week" and week["path"] == "/plan-vs-actual"
+    assert base64.b64decode(week["chart_png_b64"]).startswith(b"\x89PNG") and "xlsx_b64" not in week
+    run(jobs.send_month(CID))
+    month = w.mails[-1]
+    assert month["kind"] == "month" and month["xlsx_name"].endswith(".xlsx")
+    load_workbook(io.BytesIO(base64.b64decode(month["xlsx_b64"])))   # Excel целый
 
 
-def test_mail_disabled_without_smtp(monkeypatch):
-    from notifier import mailer
-    monkeypatch.delenv("SMTP_HOST", raising=False)
-    assert not mailer.configured() and not run(mailer.send_invite("ok@x.ru", "CODE1234567890", "К", "observer", ""))
+def test_banned_company_gets_no_mail(mail_core):
+    store, jobs, w = mail_core
+    w.banned = "нарушение"
+    run(jobs.send_week(CID))
+    assert not w.mails
 
 
-def test_api_mail_endpoints(client, smtp):
-    c, _ = client
-    assert c.get("/internal/v1/mail/status").json() == {"configured": True}
-    r = c.post("/internal/v1/mail/invite", json={"to": "Ira@X.ru", "code": "CODE1234567890", "company": "ООО", "role": "observer", "inviter": "П"})
-    assert r.json() == {"configured": True, "sent": True, "limited": False} and smtp.sent[0]["To"] == "ira@x.ru"
-    assert c.post("/internal/v1/mail/invite", json={"to": "ira@x.ru", "code": "x", "role": "observer"}).status_code == 422
+def test_mail_down_does_not_break_telegram(core, monkeypatch):
+    store, jobs, _, w = core
+    monkeypatch.setenv("NOTIFY_URL", "http://notify:8014")    # notify отвечает 404 — письма не ушли, Telegram дошёл
+    assert run(jobs.check_gap(CID)) == "sent" and w.texts()
 
 
-def test_mail_is_limited_to_50_per_hour_per_company(client, smtp):
-    c, _ = client
-    body = {"company_id": CID, "to": "ira@x.ru", "code": "CODE1234567890", "role": "observer"}
-    for _ in range(50):
-        assert c.post("/internal/v1/mail/invite", json=body).json()["sent"] is True
-    r = c.post("/internal/v1/mail/invite", json=body).json()
-    assert r["sent"] is False and r["limited"] is True and len(smtp.sent) == 50
-    assert c.post("/internal/v1/mail/invite", json={**body, "company_id": "other"}).json()["sent"] is True   # лимит на компанию
+def test_scheduler_visits_companies_with_mail_subscribers_only(mail_core, monkeypatch):
+    store, jobs, w = mail_core
+    seen = []
+
+    async def tick_company(cid):
+        seen.append(cid)
+    monkeypatch.setattr(jobs, "tick_company", tick_company)
+    run(jobs.tick())
+    assert seen == [CID]                                          # чатов нет, но есть подписчик на почту
+
+
+@pytest.fixture
+def mail_client(monkeypatch):
+    monkeypatch.setenv("NOTIFIER_TODAY", "2026-10-05")
+    monkeypatch.setenv("NOTIFY_URL", "http://notify:8014")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    w = MailWorld()
+    app.state.store = Store(":memory:")
+    app.state.bot = None
+    app.state.up = Upstream(httpx.MockTransport(w.upstream_handler))
+    app.state.disable_tasks = True
+    with TestClient(app) as c:
+        yield c, w
+    app.state.store = app.state.bot = app.state.up = None
+    app.state.disable_tasks = False
+
+
+def test_send_now_without_bot_goes_to_mail(mail_client):
+    c, w = mail_client
+    r = c.post(f"/internal/v1/companies/{CID}/notifications/send/week")
+    assert r.status_code == 200, r.text
+    assert w.mails and w.mails[-1]["kind"] == "week"
+    w.subs = {"alerts": 0, "reports": 0}
+    r = c.post(f"/internal/v1/companies/{CID}/notifications/send/week")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "no_chats"
 
 
 # ---------- маскирование перед облаком ----------

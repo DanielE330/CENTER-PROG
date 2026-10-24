@@ -1,0 +1,11 @@
+{% extends "base.txt" %}{% block body %}
+{{ title }}
+
+{{ body_text }}
+{% if attachment_name %}
+
+Подробный отчёт во вложении: {{ attachment_name }}.
+{% endif %}
+
+{{ button_label }}: {{ url }}
+{% endblock %}

@@ -38,7 +38,9 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -b "$JAR" -H 'Origin: http
 req GET /api/v1/companies/00000000-0000-0000-0000-000000000000/transactions; expect "чужая компания" 404
 
 # импорт
-CODE=$(curl -s -o /tmp/smoke_body.$$ -w '%{http_code}' -b "$JAR" -H "Origin: $BASE" -F "file=@data/dataset/statements/C001.csv" "$BASE/api/v1/companies/$CID/imports"); BODY=$(cat /tmp/smoke_body.$$)
+# полный датасет, если скачан, иначе демо-выписка из репозитория
+STMT=data/dataset/statements/C001.csv; [ -f "$STMT" ] || STMT=data/demo/statements/C001.csv
+CODE=$(curl -s -o /tmp/smoke_body.$$ -w '%{http_code}' -b "$JAR" -H "Origin: $BASE" -F "file=@$STMT" "$BASE/api/v1/companies/$CID/imports"); BODY=$(cat /tmp/smoke_body.$$)
 expect "загрузка выписки" 201
 IID=$(echo "$BODY" | jq_ import_id)
 req POST "/api/v1/companies/$CID/imports/$IID/confirm"; expect "подтверждение импорта" 200
@@ -101,6 +103,32 @@ if curl -fsS -m 3 "${DEMO_FEED_URL:-http://127.0.0.1:8012}/live" >/dev/null 2>&1
   rm -f "$DJAR"
 else
   echo "skip демо: demo_feed недоступен"
+fi
+
+# почта: письмо подтверждения после регистрации, подтверждение по ссылке, тестовое письмо, отчёт недели письмом (через Mailpit)
+MAILPIT=${MAILPIT:-http://127.0.0.1:8025}
+if curl -fsS "$MAILPIT/api/v1/messages?limit=1" >/dev/null 2>&1; then
+  mail_link() {  # токен из последней ссылки /$1?token=... в письме на $EMAIL
+    local id=""
+    for _ in $(seq 1 20); do
+      id=$(curl -s "$MAILPIT/api/v1/search?query=to:$EMAIL" | python3 -c 'import sys,json; m=json.load(sys.stdin)["messages"]; print(m[0]["ID"] if m else "")')
+      [ -n "$id" ] && break
+      sleep 0.5
+    done
+    [ -n "$id" ] && curl -s "$MAILPIT/api/v1/message/$id" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["Text"]; r=re.findall(r"/'"$1"'\?token=([A-Za-z0-9_-]+)", t); print(r[-1] if r else "")'
+  }
+  TOKEN=$(mail_link verify-email)
+  [ -n "$TOKEN" ] && ok "письмо подтверждения пришло" || bad "нет письма подтверждения в Mailpit"
+  req GET /api/v1/auth/me; [ "$(echo "$BODY" | jq_ email_verified)" = false ] && ok "почта ещё не подтверждена" || bad "email_verified до подтверждения"
+  req PUT /api/v1/account/notifications '{"alerts":true}'; expect "рассылки без подтверждения" 409
+  req POST /api/v1/account/email/verify "{\"token\":\"$TOKEN\"}"; expect "подтверждение почты" 200
+  req POST /api/v1/account/email/verify "{\"token\":\"$TOKEN\"}"; expect "повторная ссылка" 404
+  req GET /api/v1/auth/me; [ "$(echo "$BODY" | jq_ email_verified)" = true ] && ok "почта подтверждена" || bad "email_verified после подтверждения"
+  req PUT /api/v1/account/notifications '{"alerts":true,"reports":true}'; expect "настройки рассылок" 200
+  req POST /api/v1/account/notifications/test; expect "тестовое письмо" 200
+  req POST /api/v1/auth/password/forgot "{\"email\":\"nobody-$RANDOM@example.com\"}"; expect "восстановление: неизвестный адрес" 202
+else
+  echo "skip почта: Mailpit недоступен ($MAILPIT)"
 fi
 
 req POST /api/v1/auth/logout; expect "logout" 204

@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% from "_button.html" import button %}
+{% block body %}
+<h1 style="font-size:20px;margin:0 0 12px">Подтвердите адрес почты</h1>
+<p style="margin:0 0 8px">Чтобы получать предупреждения о кассовых разрывах и отчёты на {{ email }}, подтвердите, что это ваш адрес.</p>
+{{ button(url, "Подтвердить почту") }}
+<p style="font-size:13px;color:#66716a;margin:16px 0 0">Ссылка действует 24 часа. Если вы не регистрировались в «{{ product }}», просто проигнорируйте письмо.</p>
+{% endblock %}

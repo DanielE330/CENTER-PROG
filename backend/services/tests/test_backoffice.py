@@ -46,6 +46,7 @@ class Mesh:
             "c3": [],
         }
         self.fail_revoke: set[str] = set()
+        self.notify_down = False
         self.forecast_down = False
         self.ledger_stats = False  # True: ledger отвечает на /admin/stats, иначе 404 и счётчики считаются постраничным обходом
 
@@ -63,6 +64,10 @@ class Mesh:
             if cid == "c3":
                 return err(404, "no_forecast")
             return j(200, json={"run_id": "r", "stale": False, "risk": {"level": "high", "shortfall_probability": 0.42}})
+        if req.url.port == 8014:
+            if self.notify_down:
+                raise httpx.ConnectError("down")
+            return j(202, json={"id": len(self.calls), "status": "queued"})
         if req.url.port == 8001:
             uid = path.split("/")[4]
             if uid in self.fail_revoke:
@@ -378,7 +383,9 @@ def test_ledger_down_is_503(client, op, mesh, monkeypatch):
 def test_ban_revokes_all_member_sessions_and_audits(client, op, mesh):
     r = client.post(f"{P}/admin/companies/c1/ban", json={"reason": "  Нарушение\nусловий  "}, headers=op)
     assert r.status_code == 200
-    assert r.json() == {"company_id": "c1", "banned": True, "ban_reason": "Нарушение условий", "sessions_revoked": 2, "revoke_failed": 0}
+    assert r.json() == {
+        "company_id": "c1", "banned": True, "ban_reason": "Нарушение условий", "sessions_revoked": 2, "revoke_failed": 0, "notified": 2,
+    }
     assert mesh.companies["c1"]["banned"] and mesh.companies["c1"]["ban_reason"] == "Нарушение условий"
     revoked = [p for m, p, _ in mesh.calls if p.endswith("/revoke-sessions")]
     assert sorted(revoked) == ["/internal/v1/users/u1/revoke-sessions", "/internal/v1/users/u2/revoke-sessions"]
@@ -387,6 +394,20 @@ def test_ban_revokes_all_member_sessions_and_audits(client, op, mesh):
     assert "Нарушение условий" in log[0]["detail"] and "sessions_revoked=2" in log[0]["detail"]
     listed = client.get(f"{P}/admin/audit", headers=op).json()["items"]
     assert listed[0]["action"] == "ban"
+
+
+def test_ban_emails_members_once_each(client, op, mesh):
+    mesh.members["c1"].append({"user_id": "u9", "email": "ecp-1@ecp.invalid", "role": "viewer", "created_at": "2026-10-22"})
+    client.post(f"{P}/admin/companies/c1/ban", json={"reason": "Нарушение условий"}, headers=op)
+    sent = [b for m, p, b in mesh.calls if p == "/internal/v1/send"]
+    assert sorted(b["to"] for b in sent) == ["boss@romashka.ru", "ed@romashka.ru"], "служебный адрес ЭЦП не получает писем"
+    assert all(b["kind"] == "company_banned" and b["data"] == {"company": "Ромашка", "reason": "Нарушение условий"} for b in sent)
+
+
+def test_ban_works_when_mail_is_down(client, op, mesh):
+    mesh.notify_down = True
+    r = client.post(f"{P}/admin/companies/c1/ban", json={"reason": "причина"}, headers=op)
+    assert r.status_code == 200 and r.json()["notified"] == 0 and mesh.companies["c1"]["banned"]
 
 
 def test_ban_counts_failed_revokes(client, op, mesh):

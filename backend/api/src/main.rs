@@ -6,6 +6,7 @@ mod advisor;
 mod demo;
 mod http;
 mod legacy;
+mod mail;
 #[cfg(test)]
 mod roles_tests;
 
@@ -37,6 +38,7 @@ pub struct AppState {
     pub advisor: Upstream,
     pub notifier: Upstream,
     pub backoffice: Upstream,
+    pub notify: Upstream,
     pub demo: Arc<demo::Demo>,
     pub cfg: Arc<Config>,
 }
@@ -55,6 +57,7 @@ async fn main() {
         advisor: Upstream::new("advisor", "Сервис консультанта", &env("ADVISOR_URL", "http://127.0.0.1:8011"), 85),
         notifier: Upstream::new("notifier", "Сервис уведомлений", &env("NOTIFIER_URL", "http://127.0.0.1:8009"), 60),
         backoffice: Upstream::new("backoffice", "Сервис оператора", &env("BACKOFFICE_URL", "http://127.0.0.1:8013"), 60),
+        notify: Upstream::new("notify", "Почтовый сервис", &env("NOTIFY_URL", "http://127.0.0.1:8014"), 30),
         demo: Arc::new(demo::Demo::from_env()),
         cfg: Arc::new(Config { cookie_secure: env("COOKIE_SECURE", "0") == "1" }),
     };
@@ -109,6 +112,14 @@ pub fn tenant_routes() -> Router<AppState> {
         .route("/api/v1/auth/logout", post(http::logout))
         .route("/api/v1/auth/me", get(http::me))
         .route("/api/v1/account/change-password", post(http::change_password))
+        // почта: ссылки из писем открываются без входа
+        .route("/api/v1/auth/password/forgot", post(mail::forgot))
+        .route("/api/v1/auth/password/reset", post(mail::reset))
+        .route("/api/v1/account/email/verify", post(mail::verify))
+        .route("/api/v1/account/email/resend", post(mail::resend))
+        .route("/api/v1/account/notifications", get(mail::get_prefs).put(mail::put_prefs))
+        .route("/api/v1/account/notifications/test", post(mail::test))
+        .route("/api/v1/notifications/unsubscribe", post(mail::unsubscribe))
         .route("/api/v1/account/set-credentials", post(http::set_credentials))
         .route("/api/v1/members", get(http::members_list).post(http::members_create))
         .route("/api/v1/members/{uid}", patch(http::members_update).delete(http::members_delete))

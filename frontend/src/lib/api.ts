@@ -24,6 +24,8 @@ import type {
   Member,
   NewMemberRequest,
   NewMemberResult,
+  MemberResetResult,
+  NotificationPrefs,
   Role,
   NewApiToken,
   NewInvite,
@@ -155,7 +157,19 @@ export const api = {
   addMember: (b: NewMemberRequest) => request<NewMemberResult>('POST', '/api/v1/members', { body: b }),
   setMemberRole: (id: string, role: Exclude<Role, 'director'>) => request<unknown>('PATCH', `/api/v1/members/${encodeURIComponent(id)}`, { body: { role } }),
   deleteMember: (id: string) => request<void>('DELETE', `/api/v1/members/${encodeURIComponent(id)}`),
-  resetMemberPassword: (id: string) => request<{ password: string }>('POST', `/api/v1/members/${encodeURIComponent(id)}/reset-password`, { body: {} }),
+  resetMemberPassword: (id: string) => request<MemberResetResult>('POST', `/api/v1/members/${encodeURIComponent(id)}/reset-password`, { body: {} }),
+
+  // ----- почта: ссылки из писем работают без входа -----
+  forgotPassword: (email: string) => request<{ ok: boolean }>('POST', '/api/v1/auth/password/forgot', { body: { email }, expect401: true }),
+  resetPassword: (b: { token: string; password: string; password_confirm: string }) =>
+    request<{ ok: boolean; email: string }>('POST', '/api/v1/auth/password/reset', { body: b, expect401: true }),
+  verifyEmail: (token: string) => request<{ ok: boolean; email: string }>('POST', '/api/v1/account/email/verify', { body: { token }, expect401: true }),
+  resendVerification: () => request<{ ok: boolean; email: string }>('POST', '/api/v1/account/email/resend', { body: {} }),
+  unsubscribe: (token: string) => request<{ ok: boolean }>('POST', '/api/v1/notifications/unsubscribe', { body: { token }, expect401: true }),
+  notificationPrefs: () => request<NotificationPrefs>('GET', '/api/v1/account/notifications'),
+  saveNotificationPrefs: (b: Partial<Pick<NotificationPrefs, 'alerts' | 'reports'>>) =>
+    request<NotificationPrefs>('PUT', '/api/v1/account/notifications', { body: b }),
+  testEmail: () => request<{ ok: boolean; email: string }>('POST', '/api/v1/account/notifications/test', { body: {} }),
 
   // ----- команда: приглашения по ссылке, передача владения, выход, журнал действий -----
   teamInvites: () => request<{ items: TeamInvite[] }>('GET', '/api/v1/team/invites'),

@@ -1,4 +1,6 @@
-"""Клиент внутренних сервисов: forecast, planfact, ledger. Суммы приходят копейками (числом или строкой)."""
+"""Клиент внутренних сервисов: forecast, planfact, ledger и почтовый шлюз notify. Суммы приходят копейками (числом или строкой)."""
+import base64
+import logging
 from dataclasses import dataclass
 from datetime import date
 
@@ -7,6 +9,7 @@ import httpx
 from . import config
 
 HEADERS = {"x-actor": "notifier"}
+log = logging.getLogger("notifier")
 
 
 class UpstreamError(Exception):
@@ -55,6 +58,45 @@ class Upstream:
                             json={"action": action, "object_id": obj}, headers={"x-actor": actor})
         except UpstreamError:
             pass
+
+    # ---------- почта (notify) ----------
+    async def mail(self, cid: str, kind: str, key: str, subject: str, html: str, path: str = "/",
+                   png: bytes | None = None, chart_alt: str = "", xlsx: bytes | None = None, xlsx_name: str = "") -> int:
+        """Письмо подписчикам компании; возвращает число получателей (повтор с тем же key письма не дублирует).
+        Недоступная почта не мешает Telegram: тогда 0."""
+        if not config.notify_url():
+            return 0
+        body = {"kind": kind, "key": key, "subject": subject, "html": html, "path": path}
+        if png:
+            body |= {"chart_png_b64": base64.b64encode(png).decode(), "chart_alt": chart_alt or "График"}
+        if xlsx:
+            body |= {"xlsx_b64": base64.b64encode(xlsx).decode(), "xlsx_name": xlsx_name or "otchet.xlsx"}
+        try:
+            r = await self._req("notify", "POST", f"{config.notify_url()}/internal/v1/companies/{cid}/broadcast", json=body)
+        except UpstreamError as e:
+            log.warning("почта %s %s: %s", kind, cid, e.status)
+            return 0
+        return int(r.get("recipients") or 0)
+
+    async def mail_recipients(self, cid: str, kind: str) -> int:
+        """Сколько участников получают этот вид рассылки письмом (alerts — gap, reports — отчёты)."""
+        if not config.notify_url():
+            return 0
+        try:
+            r = await self._req("notify", "GET", f"{config.notify_url()}/internal/v1/companies/{cid}/subscribers")
+        except UpstreamError:
+            return 0
+        return int(r.get("alerts" if kind == "gap" else "reports") or 0)
+
+    async def mail_companies(self) -> list[str]:
+        """Компании, где кто-то получает рассылки письмом: их обходим, даже если Telegram не подключён."""
+        if not config.notify_url():
+            return []
+        try:
+            r = await self._req("notify", "GET", f"{config.notify_url()}/internal/v1/companies-with-subscribers")
+        except UpstreamError:
+            return []
+        return [c for c in r.get("items", []) if isinstance(c, str)]
 
     async def company(self, cid: str) -> dict:
         return await self._req("ledger", "GET", f"{config.ledger_url()}/internal/v1/companies/{cid}")

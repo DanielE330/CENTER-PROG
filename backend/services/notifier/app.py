@@ -1,6 +1,7 @@
 """Внутренний сервис уведомлений (порт 8009): Telegram-бот, расписание, цели недели.
 uvicorn notifier.app:app --host 127.0.0.1 --port 8009
-Без TELEGRAM_BOT_TOKEN сервис работает, но рассылки и бот выключены (configured=false)."""
+Без TELEGRAM_BOT_TOKEN бот выключен (configured=false), а расписание работает: алерты и отчёты уходят письмом через notify
+тем участникам, у которых включена почта."""
 import asyncio
 import logging
 import re
@@ -11,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import config, mailer
+from . import config
 from .bot import BotApp
 from .jobs import Jobs
 from .store import KINDS, ROLES, STATUSES, Store
@@ -29,7 +30,8 @@ async def lifespan(app: FastAPI):
     token = config.bot_token()
     app.state.bot = app.state.bot or (Bot(token) if token else None)
     app.state.up = app.state.up or Upstream()
-    app.state.jobs = Jobs(app.state.store, app.state.bot, app.state.up) if app.state.bot else None
+    # расписание нужно и без бота: почтовый канал (notify) работает сам по себе
+    app.state.jobs = Jobs(app.state.store, app.state.bot, app.state.up)
     app.state.username = config.env("TELEGRAM_BOT_USERNAME")
     tasks = []
     if app.state.bot and not app.state.disable_tasks:
@@ -38,7 +40,9 @@ async def lifespan(app: FastAPI):
         except TelegramError as e:
             log.error("getMe: %s (проверьте TELEGRAM_BOT_TOKEN)", e.code)
         app.state.botapp = BotApp(app.state.store, app.state.bot, app.state.jobs, app.state.username)
-        tasks = [asyncio.create_task(app.state.botapp.poll_forever()), asyncio.create_task(app.state.jobs.run_scheduler())]
+        tasks = [asyncio.create_task(app.state.botapp.poll_forever())]
+    if not app.state.disable_tasks:
+        tasks.append(asyncio.create_task(app.state.jobs.run_scheduler()))
     yield
     for t in tasks:
         t.cancel()
@@ -62,10 +66,15 @@ async def validation_error(_: Request, e: RequestValidationError):
 
 
 def jobs(request: Request) -> Jobs:
-    j = request.app.state.jobs
-    if not j:
+    """Рассылки для Telegram: без токена бота — 503."""
+    if not request.app.state.bot:
         raise HTTPException(503, {"code": "bot_not_configured", "message": "Telegram-бот не настроен: не задан TELEGRAM_BOT_TOKEN"})
-    return j
+    return request.app.state.jobs
+
+
+def any_jobs(request: Request) -> Jobs:
+    """Рассылки, которые доходят хотя бы одним каналом: Telegram или почта."""
+    return request.app.state.jobs
 
 
 @app.get("/live")
@@ -167,10 +176,11 @@ async def test_message(cid: str, request: Request):
 
 @app.post(CO + "/send/{kind}")
 async def send_now(cid: str, kind: str, request: Request):
-    """Ручной запуск рассылки (для проверки и кнопки «Отправить сейчас» в настройках)."""
-    j = jobs(request)
-    if not request.app.state.store.chats(cid):
-        raise HTTPException(409, {"code": "no_chats", "message": "Нет подключённых чатов"})
+    """Ручной запуск рассылки (для проверки и кнопки «Отправить сейчас» в настройках): в Telegram и на почту."""
+    j = any_jobs(request)
+    has_chats = request.app.state.bot is not None and request.app.state.store.chats(cid)
+    if not has_chats and not await j.up.mail_recipients(cid, kind):
+        raise HTTPException(409, {"code": "no_chats", "message": "Некому отправить: нет подключённых чатов и подписчиков на почту"})
     try:
         if kind == "risk":
             await j.send_risk(cid)
@@ -366,31 +376,3 @@ def patch_member(cid: str, uid: int, body: MemberPatch, request: Request):
 def delete_member(cid: str, uid: int, request: Request):
     if not request.app.state.store.delete_member(cid, uid):
         raise HTTPException(404, {"code": "not_found", "message": "Участник не найден"})
-
-
-# ---------- письма с приглашениями (вызывает BFF после создания приглашения) ----------
-MAIL_PER_HOUR = 50
-
-
-class InviteMail(BaseModel):
-    company_id: str = ""
-    to: str
-    code: str = Field(min_length=8, max_length=200)
-    company: str = ""
-    role: str
-    inviter: str = ""
-
-
-@app.get("/internal/v1/mail/status")
-def mail_status():
-    return {"configured": mailer.configured()}
-
-
-@app.post("/internal/v1/mail/invite")
-async def mail_invite(body: InviteMail, request: Request):
-    """Не больше MAIL_PER_HOUR писем в час на компанию: защита от рассылки спама через приглашения."""
-    now = config.now_in(config.tz_of(config.DEFAULT_TZ))
-    if body.company_id and not request.app.state.store.hit(body.company_id, f"mail:{now:%Y%m%d%H}", MAIL_PER_HOUR):
-        return {"configured": mailer.configured(), "sent": False, "limited": True}
-    sent = await mailer.send_invite(body.to.strip().lower(), body.code, body.company, body.role, body.inviter)
-    return {"configured": mailer.configured(), "sent": sent, "limited": False}

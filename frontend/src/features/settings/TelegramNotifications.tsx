@@ -66,6 +66,7 @@ export function TelegramNotifications() {
   const zones = draft && !ZONES.includes(draft.tz) ? [draft.tz, ...ZONES] : ZONES
 
   return (
+    <div id="schedule" className="scroll-mt-6">
     <Card title={t('telegram.title')} subtitle={t('telegram.subtitle')}>
       <div className="px-5 pb-5 flex flex-col gap-4">
         {status.isPending && <LoadingState height={80} />}
@@ -174,5 +175,6 @@ export function TelegramNotifications() {
         )}
       </div>
     </Card>
+    </div>
   )
 }

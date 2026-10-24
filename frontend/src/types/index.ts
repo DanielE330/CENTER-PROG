@@ -41,6 +41,17 @@ export interface Me {
   password_required?: boolean
   company_banned?: boolean
   ban_reason?: string | null
+  /** Почта подтверждена по ссылке из письма. Без этого рассылки не приходят. Нет поля — считаем подтверждённой. */
+  email_verified?: boolean
+}
+
+/** Свои почтовые подписки: alerts — разрыв и «риск снизился», reports — риск-отчёт, итоги недели и месяца.
+ * Расписание и порог общие для компании (блок «Расписание уведомлений»). */
+export interface NotificationPrefs {
+  alerts: boolean
+  reports: boolean
+  email: string | null
+  email_verified: boolean
 }
 
 /** director — «Владелец», admin — «Администратор», editor — «Аналитик», viewer — «Наблюдатель». */
@@ -77,6 +88,15 @@ export interface NewMemberResult {
   email: string
   role: Role
   /** Только если generate=true; повторно получить нельзя. */
+  password?: string
+  /** Приглашение со ссылкой «задать пароль» ушло на почту сотрудника. */
+  invite_sent?: boolean
+}
+
+/** Сброс пароля директором: ссылка ушла на почту либо (если почта недоступна) новый пароль. */
+export interface MemberResetResult {
+  email_sent: boolean
+  email?: string | null
   password?: string
 }
 
