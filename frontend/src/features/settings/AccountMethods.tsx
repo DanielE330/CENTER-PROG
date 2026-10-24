@@ -54,7 +54,7 @@ export function AccountMethods() {
             <section className="flex flex-col gap-2" aria-label={t('account.emailTitle')}>
               <h3 className="text-[13px] font-semibold">{t('account.emailTitle')}</h3>
               {m.email ? (
-                <Row icon={<Mail size={16} aria-hidden />} title={m.email} hint={t('account.emailHint')}>
+                <Row icon={<Mail size={16} aria-hidden />} title={m.email}>
                   <Button
                     size="sm"
                     disabled={last || run.isPending}

@@ -198,9 +198,9 @@
   },
   "banner": {
     "staleTitle": "The forecast is out of date",
-    "staleText": "Data changed after the last calculation. Recalculate to see up-to-date figures.",
+    "staleText": "Data changed after the last calculation, so the figures may be out of date.",
     "recomputedTitle": "Forecast recalculated automatically",
-    "recomputedText": "Data changed, so the system recalculated the base forecast with the same horizon."
+    "recomputedText": "Reason: the data changed. The forecast horizon is unchanged."
   },
   "risk": {
     "title": "Cash gap risk",
@@ -227,7 +227,8 @@
       "low": "Low risk",
       "medium": "Noticeable risk",
       "high": "High risk"
-    }
+    },
+    "gapReasonsTitle": "Main payments before the gap date"
   },
   "chart": {
     "aria": "Cash balance forecast chart",
@@ -250,7 +251,6 @@
   },
   "dashboard": {
     "title": "Overview",
-    "descShortage": "{{days}}-day forecast. The likely cash gap date is {{date}}.",
     "descDefault": "Current liquidity and the cash flow forecast.",
     "periodAria": "Chart period",
     "import": "Import statement",
@@ -267,15 +267,14 @@
       "inflowsHint": "Known payments over {{days}} d · expectations, not fact",
       "risk": "Cash gap risk",
       "riskShortage": "{{level}} · gap ≈ {{date}}",
-      "riskNone": "{{level}}"
+      "riskNone": "Over {{days}} d"
     },
     "chartTitle": "Cash balance forecast",
-    "chartSubtitle": "Expected balance for {{days}} days and the 10–90% range",
+    "chartSubtitle": "Next {{days}} days",
     "upcomingPayments": "Upcoming payments",
     "expectedReceipts": "Expected receipts",
-    "noUpcoming": "No upcoming items found.",
-    "dataState": "Data status",
-    "modelNote": "Horizon {{days}} d · model {{version}} · {{paths}} paths. This is a model estimate, not a guarantee."
+    "noUpcoming": "No upcoming items.",
+    "modelNote": "Horizon {{days}} d · model {{version}} · {{paths}} paths."
   },
   "keyRate": {
     "title": "Central Bank key rate",
@@ -283,7 +282,6 @@
     "error": "Could not get the rate.",
     "pp": "p.p.",
     "since": "In effect since {{date}}",
-    "asOf": "As of {{date}}",
     "previous": "previous {{value}}",
     "source": "Source: cbr.ru, data as of {{date}}",
     "stale": "cached data, may be outdated"
@@ -299,7 +297,6 @@
     "cardTitle": "Daily balance",
     "caption": "Green line — expected balance (median), grey dot — balance on the data date, red zone — possible shortfall.",
     "captionBand": "The band is the 10–90% range of scenarios.",
-    "captionDeficit": "The red area is where the balance is negative.",
     "flowsTitle": "Known receipts and payments by week",
     "flowsSubtitle": "Planned flows only: recurring payments, invoices, manual events",
     "flowsAria": "Bar chart of known receipts and payments by week",
@@ -389,7 +386,6 @@
     "statusAll": "All statuses",
     "emptyTitle": "No planned items",
     "emptyText": "Payments and expected receipts will appear after a statement is uploaded.",
-    "overdueCount": "Overdue items: {{count}}.",
     "overdueNote": "Overdue receipts are moved to the next few days, overdue payments to tomorrow.",
     "upcoming": "Upcoming ({{count}})",
     "noUpcoming": "Change the filters or add a payment manually.",
@@ -405,12 +401,10 @@
     "deviation": "dev.",
     "kpi": {
       "payments": "Payments in 7 days",
-      "paymentsHint": "planned outgoing",
+      "paymentsHint": "Items: {{count}}",
       "receipts": "Receipts in 7 days",
-      "receiptsHint": "expected incoming",
+      "receiptsHint": "Items: {{count}}",
       "overdue": "Overdue",
-      "overdueHint": "need attention",
-      "overdueNone": "all on time",
       "events": "Expected events",
       "eventsHint": "entered manually and from integrations"
     },
@@ -493,7 +487,6 @@
       "subtitle": "Saved scenarios are stored in this browser only.",
       "counterparty": "Counterparty payment",
       "largestClient": "The largest client",
-      "counterpartyHint": "For outgoing payments the shift means paying later",
       "delay": "Shift the payment by, days",
       "delayIn": "The client will pay later",
       "delayOut": "You will pay later",
@@ -517,10 +510,9 @@
     "concl": {
       "title": "Conclusion",
       "safe": "Even in this scenario a cash gap is unlikely: the balance covers the mandatory payments.",
-      "risk": "The probability of a cash gap {{direction}} from {{from}} to {{to}}.{{when}} Think ahead about which payments can be postponed or how to cover the shortfall.",
+      "risk": "The probability of a cash gap {{direction}} compared with the base forecast. Think ahead about which payments can be postponed or how to cover the shortfall.",
       "up": "rises",
-      "down": "falls",
-      "when": " The likely date is {{date}}, in a bad case the shortfall is {{deficit}}."
+      "down": "falls"
     },
     "cmp": {
       "minBalance": "Minimum balance",
@@ -561,16 +553,14 @@
     "planOut": "Plan: payments",
     "factOut": "Actual: payments",
     "balanceTitle": "Balance: forecast and actual",
-    "balanceSubtitle": "A 14-day forecast made from past data only",
+    "balanceSubtitle": "A 14-day forecast made from past data only, versus the real balance on the target date",
     "balanceLoading": "Calculating the forecast for past periods…",
     "balanceNA": "Balance comparison unavailable",
     "balanceNoHistory": "Comparing the forecast and actual balance needs at least 5 months of history.",
     "balanceNoSeries": "Could not calculate the forecast balance.",
-    "balanceNote": "A forecast made from past data only versus the real balance on the target date.",
     "forecastPlan": "Forecast (plan)",
     "chartAria": "Balance chart: forecast and actual",
     "detailTitle": "Payments: plan and actual",
-    "detailSubtitle": "Recurring payments follow templates found in the history, events follow the entered dates",
     "col": {
       "date": "Date",
       "payment": "Payment",
@@ -582,13 +572,14 @@
       "deviation": "Deviation",
       "missed": "Not received",
       "pending": "Pending"
-    }
+    },
+    "planNote": "The plan for recurring payments follows templates found in the whole history (in-sample); manual events and invoices follow the entered dates."
   },
   "assistant": {
     "title": "AI assistant",
     "description": "Explains the causes of risk and helps check scenarios.",
     "rulesBadge": "Rule-based answers",
-    "welcome": "Hello! I answer from the saved forecast: gap risk, the biggest payments, what to check and how to reduce risk. Numbers come from the calculation, nothing is made up. Answers are produced by rules — no LLM provider is connected and no external services are called.",
+    "welcome": "Hello! I answer from the saved forecast: gap risk, the biggest payments, what to check and how to reduce risk. Numbers come from the calculation, nothing is made up. No LLM provider is connected and no external services are called.",
     "noForecastTitle": "No forecast to analyse",
     "noForecastText": "The assistant answers from the saved forecast. Upload a statement and build a forecast first.",
     "error": "Could not get an answer: {{reason}}",
@@ -643,7 +634,9 @@
       "scenarioProb": "Probability of a gap: {{fromPercent}} → {{toPercent}}.",
       "scenarioWhen": "The likely gap date in the scenario is {{whenDate}}.",
       "scenarioNoGap": "In the scenario a gap remains unlikely.",
-      "scenarioDeficit": "Shortfall in a bad case: {{fromKop}} → {{toKop}}."
+      "scenarioDeficit": "Shortfall in a bad case: {{fromKop}} → {{toKop}}.",
+      "scenarioProbSame": "Probability of a gap is unchanged: {{valuePercent}}.",
+      "scenarioDeficitSame": "Shortfall in a bad case is unchanged: {{valueKop}}."
     }
   },
   "settings": {
@@ -658,7 +651,6 @@
       "subtitle": "The legal entity name is stored on the server.",
       "name": "Legal entity",
       "currency": "Currency",
-      "currencyHint": "Only roubles are supported.",
       "rub": "Russian rouble (RUB)",
       "saved": "Name saved",
       "inn": "TIN (INN)",
@@ -668,7 +660,7 @@
       "title": "Preferences",
       "subtitle": "Stored in this browser only.",
       "horizon": "Forecast horizon after import",
-      "horizonHint": "Applied immediately on save and after every import."
+      "horizonHint": "Applied immediately on save."
     },
     "history": {
       "title": "Import history",
@@ -686,7 +678,7 @@
   "import": {
     "title": "Bank statement import",
     "modalTitle": "Bank statement import",
-    "subtitle": "CSV or XLSX. The file is checked, and data enters the system only after you confirm.",
+    "subtitle": "The file is checked, and data enters the system only after you confirm.",
     "dataUsedTitle": "What data is used",
     "dataUsedText": "Date, amount (or debit/credit), counterparty, tax ID, payment purpose and end-of-day balance — for the balance history, recurring payments and the forecast.",
     "fileAria": "Statement file",
@@ -718,9 +710,8 @@
   },
   "account": {
     "title": "Sign-in methods",
-    "subtitle": "Sign in with email and password or with an electronic signature. At least one method must remain.",
+    "subtitle": "Sign in with email and password or with an electronic signature.",
     "emailTitle": "Email and password",
-    "emailHint": "Password sign-in",
     "noEmail": "No email linked: you can only sign in with an electronic signature.",
     "addEmail": "Link email",
     "remove": "Remove",

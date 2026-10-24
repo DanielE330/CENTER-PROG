@@ -21,7 +21,7 @@ export function PlannedList({ items, kind, icon, limit = 5 }: Props) {
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, limit)
 
-  if (rows.length === 0) return <EmptyState title={t('common.noRecords')} description={t('dashboard.noUpcoming')} />
+  if (rows.length === 0) return <EmptyState title={t('dashboard.noUpcoming')} />
 
   return (
     <ul className="px-5 pb-4 divide-y divide-line">

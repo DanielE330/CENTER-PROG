@@ -40,11 +40,7 @@ export default function DashboardPage() {
     <PageContainer>
       <PageHeader
         title={t('dashboard.title')}
-        description={
-          view?.gapDate && view.r.risk.level !== 'none'
-            ? t('dashboard.descShortage', { days: horizon, date: formatDate(view.gapDate) })
-            : t('dashboard.descDefault')
-        }
+        description={t('dashboard.descDefault')}
         actions={
           <>
             {view && windows.length > 1 && (
@@ -52,15 +48,18 @@ export default function DashboardPage() {
                 <Select aria-label={t('dashboard.periodAria')} value={shown} onChange={(v) => setDays(Number(v))} options={windows.map((d) => ({ value: d, label: t('common.daysCount', { count: d }) }))} />
               </div>
             )}
-            {view && (
+            {view && !view.run.stale && (
               <Button disabled={recalc.isPending} onClick={() => recalc.mutate(horizon)}>
                 <RefreshCw size={16} className={recalc.isPending ? 'spin' : undefined} aria-hidden />
                 {recalc.isPending ? t('common.calculating') : t('common.recalculate')}
               </Button>
             )}
-            <Button variant="primary" onClick={() => setImportOpen(true)}>
-              <FileUp size={16} aria-hidden /> {t('dashboard.import')}
-            </Button>
+            {/* without a forecast the empty state below offers the same import button */}
+            {(view || forecast.isPending || forecast.isError) && (
+              <Button variant="primary" onClick={() => setImportOpen(true)}>
+                <FileUp size={16} aria-hidden /> {t('dashboard.import')}
+              </Button>
+            )}
           </>
         }
       />
@@ -140,7 +139,9 @@ function DashboardBody({ v, days }: { v: ForecastView; days: number }) {
           hint={
             risk.level !== 'none' && v.gapDate
               ? t('dashboard.kpi.riskShortage', { level: t(`risk.badge.${risk.level}`), date: formatDate(v.gapDate) })
-              : t('dashboard.kpi.riskNone', { level: t(`risk.badge.${risk.level}`) })
+              : risk.level === 'none'
+                ? t('dashboard.kpi.riskNone', { days: r.horizon })
+                : t(`risk.badge.${risk.level}`)
           }
         />
       </div>
@@ -167,9 +168,9 @@ function DashboardBody({ v, days }: { v: ForecastView; days: number }) {
         <div className="flex flex-col gap-5 min-w-0">
           <RiskAlert risk={risk} />
           <KeyRateCard />
-          <Card title={t('dashboard.dataState')}>
+          <Card title={t('quality.title')}>
             <div className="px-5 pb-5 flex flex-col gap-4">
-              <DataQuality quality={r.quality} />
+              <DataQuality quality={r.quality} showTitle={false} />
               <p className="flex items-center gap-1.5 text-[13px] text-muted">
                 <Clock size={14} aria-hidden />
                 {t('common.updated', { value: formatDateTime(run.created_at) })}

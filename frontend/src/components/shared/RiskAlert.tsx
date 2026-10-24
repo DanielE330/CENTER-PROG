@@ -24,6 +24,17 @@ export function RiskAlert({ risk, showLinks = true }: { risk: Risk; showLinks?: 
   const hasGap = risk.level !== 'none' && gap != null
   const titleKey = { none: 'risk.titleNone', low: 'risk.titleLow', medium: 'risk.title', high: 'risk.title' }[risk.level]
   const raw = risk.raw_shortfall_probability
+  // A warning whose only reason is the item named in its message (same date) would say the same thing twice:
+  // show the message with the amount and drop the reason line. The cash-gap warning only keeps its reasons.
+  const factors = risk.warnings
+    .map((w) => {
+      if (w.code === 'cash_gap') return { ...w, inline: null }
+      const [one] = w.reasons
+      const same = w.reasons.length === 1 && one.date === w.date && w.message.includes(one.title)
+      return same ? { ...w, reasons: [], inline: one } : { ...w, inline: null }
+    })
+    .filter((w) => w.code !== 'cash_gap' || w.reasons.length > 0)
+  const onlyGap = factors.every((w) => w.code === 'cash_gap')
   const showRaw = raw != null && Math.abs(raw - risk.shortfall_probability) >= 0.005
 
   return (
@@ -55,17 +66,27 @@ export function RiskAlert({ risk, showLinks = true }: { risk: Risk; showLinks?: 
         )}
       </dl>
 
-      {risk.warnings.length > 0 && (
+      {factors.length > 0 && (
         <div>
-          <h3 className="text-[13px] font-semibold mb-1.5">{t('risk.factorsTitle')}</h3>
+          <h3 className="text-[13px] font-semibold mb-1.5">{onlyGap ? t('risk.gapReasonsTitle') : t('risk.factorsTitle')}</h3>
           <ul className="flex flex-col gap-3">
-            {risk.warnings.map((w) => (
+            {factors.map((w) => (
               <li key={`${w.code}-${w.date ?? ''}`} className="text-sm">
-                <p className="flex flex-wrap items-center gap-2 font-medium">
-                  <Badge tone={sevTone[w.severity]}>{t(`risk.severity.${w.severity}`)}</Badge>
-                  {w.date && <span className="text-xs text-muted font-normal">{formatShortDate(w.date)}</span>}
-                </p>
-                <p className="mt-1">{w.message}</p>
+                {w.code === 'cash_gap' ? (
+                  // Message, date and level of this warning are already in the facts above; only the causes are new.
+                  !onlyGap && <p className="font-medium">{t('risk.gapReasonsTitle')}</p>
+                ) : (
+                  <>
+                    <p className="flex flex-wrap items-center gap-2 font-medium">
+                      <Badge tone={sevTone[w.severity]}>{t(`risk.severity.${w.severity}`)}</Badge>
+                      {w.date && <span className="text-xs text-muted font-normal">{formatShortDate(w.date)}</span>}
+                    </p>
+                    <p className="mt-1 flex justify-between gap-3">
+                      <span className="min-w-0">{w.message}</span>
+                      {w.inline && <span className="tnum shrink-0">{formatKop(w.inline.amount)}</span>}
+                    </p>
+                  </>
+                )}
                 {w.reasons.length > 0 && (
                   <ul className="mt-1 flex flex-col gap-0.5 text-muted text-[13px]">
                     {w.reasons.map((x, i) => (

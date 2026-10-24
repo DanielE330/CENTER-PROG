@@ -36,7 +36,7 @@ function Variance({ planned, actual, kind }: { planned: Kop; actual: Kop; kind: 
     <span className="inline-flex flex-col items-end">
       <span className={`tnum font-medium ${small ? '' : bad ? 'text-danger' : 'text-primary'}`}>{formatKop(diff.toString(), { sign: true })}</span>
       <span className="text-xs text-muted">
-        {small ? t('planVsActual.within') : bad ? t('planVsActual.worse') : t('planVsActual.better')} · {Math.round(pct)}%
+        {small ? t('planVsActual.within') : `${bad ? t('planVsActual.worse') : t('planVsActual.better')} · ${Math.round(pct)}%`}
       </span>
     </span>
   )
@@ -143,7 +143,7 @@ function Body({ d, bt }: { d: PlanFact; bt: ReturnType<typeof useBacktest> }) {
               ]}
             />
           )}
-          <p className="text-xs text-muted mt-2">{d.note}</p>
+          <p className="text-xs text-muted mt-2">{t('planVsActual.planNote')}</p>
         </div>
       </Card>
 
@@ -154,7 +154,6 @@ function Body({ d, bt }: { d: PlanFact; bt: ReturnType<typeof useBacktest> }) {
           ) : bt.data?.series_14?.length ? (
             <>
               <BalanceChart series={bt.data.series_14} />
-              <p className="text-xs text-muted mt-2">{t('planVsActual.balanceNote')}</p>
             </>
           ) : (
             <EmptyState title={t('planVsActual.balanceNA')} description={bt.isError && isNoData(bt.error) ? t('planVsActual.balanceNoHistory') : bt.isError ? errorText(t, bt.error) : t('planVsActual.balanceNoSeries')} />
@@ -162,7 +161,7 @@ function Body({ d, bt }: { d: PlanFact; bt: ReturnType<typeof useBacktest> }) {
         </div>
       </Card>
 
-      <Card title={t('planVsActual.detailTitle')} subtitle={t('planVsActual.detailSubtitle')}>
+      <Card title={t('planVsActual.detailTitle')}>
         <DataTable columns={columns} rows={[...d.items].reverse()} getRowKey={(i) => `${i.date}-${i.title}-${i.plan}`} rowClassName={(i) => (i.status === 'missed' ? 'bg-danger-soft' : undefined)} />
       </Card>
     </>

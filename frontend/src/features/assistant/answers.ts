@@ -103,8 +103,12 @@ export function scenarioAnswer(kind: 'delay' | 'revenue', days: number, o: Scena
   const when = s.possible_break_date ?? s.first_break_date
   return [
     { key: kind === 'delay' ? R + 'scenarioDelay' : R + 'scenarioRevenue', params: { days } },
-    { key: R + 'scenarioProb', params: { fromPercent: b.shortfall_probability, toPercent: s.shortfall_probability } },
+    Math.abs(b.shortfall_probability - s.shortfall_probability) < 0.005
+      ? { key: R + 'scenarioProbSame', params: { valuePercent: s.shortfall_probability } }
+      : { key: R + 'scenarioProb', params: { fromPercent: b.shortfall_probability, toPercent: s.shortfall_probability } },
     when && s.level !== 'none' ? { key: R + 'scenarioWhen', params: { whenDate: when } } : { key: R + 'scenarioNoGap' },
-    { key: R + 'scenarioDeficit', params: { fromKop: b.max_deficit_p90, toKop: s.max_deficit_p90 } },
+    b.max_deficit_p90 === s.max_deficit_p90
+      ? { key: R + 'scenarioDeficitSame', params: { valueKop: s.max_deficit_p90 } }
+      : { key: R + 'scenarioDeficit', params: { fromKop: b.max_deficit_p90, toKop: s.max_deficit_p90 } },
   ]
 }
