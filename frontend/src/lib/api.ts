@@ -1,65 +1,147 @@
 /**
- * Frontend API abstraction. Components never import mock data directly — they call these
- * functions through hooks. To connect Django, set VITE_API_URL and the `request` branch is used.
+ * Public API client. Same origin (the Vite dev server proxies /api to the backend), cookie `session`,
+ * money as kopeck strings. Components never call fetch directly — they use hooks/queries.ts.
  */
 import type {
-  AssistantMessage,
-  ForecastResponse,
-  ImportResult,
-  Obligation,
-  PlanActualResponse,
-  Transaction,
+  Backtest,
+  ExpectedEvent,
+  ForecastRun,
+  ImportPreview,
+  ImportRow,
+  KeyRate,
+  Me,
+  NewExpectedEvent,
+  PlanFact,
+  ScenarioParams,
+  ScenarioResponse,
+  SyncResult,
+  TaxCalendarResult,
+  TransactionPage,
 } from '../types'
-import { buildAssistantReply, buildForecast, buildObligations, buildPlanActual, buildTransactions } from '../mocks/data'
-import { getDemoState } from './demoState'
-import { sleep } from './utils'
 import { AppError } from '../i18n/helpers'
+import { ApiError } from './errors'
+import { demoApi } from './demoApi'
 
-const BASE_URL = import.meta.env.VITE_API_URL as string | undefined
-const USE_MOCK = !BASE_URL
+export { ApiError } from './errors'
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, { headers: { 'Content-Type': 'application/json' }, ...init })
-  if (!res.ok) throw new AppError('errors.api', { status: res.status })
-  return res.json() as Promise<T>
+let companyId = ''
+export function setCompany(id: string) {
+  companyId = id
+}
+export const getCompanyId = () => companyId
+
+type Listener = () => void
+const unauthorized = new Set<Listener>()
+/** Called when a request with a session cookie gets 401 (session expired). */
+export function onUnauthorized(cb: Listener): () => void {
+  unauthorized.add(cb)
+  return () => unauthorized.delete(cb)
 }
 
-/** Simulates network latency and the forced demo states (loading / error). */
-async function mock<T>(produce: () => T, latency = 450): Promise<T> {
-  const demo = getDemoState()
-  await sleep(demo === 'loading' ? 5000 : latency)
-  if (demo === 'error') throw new AppError('errors.demoLoad')
-  return produce()
+interface Opts {
+  body?: unknown
+  form?: FormData
+  /** 401 is an expected answer (login form, session probe) — do not treat it as an expired session. */
+  expect401?: boolean
 }
 
-export const api = {
-  getForecast: (): Promise<ForecastResponse> =>
-    USE_MOCK ? mock(() => buildForecast(getDemoState())) : request('/forecast/'),
+async function request<T>(method: string, url: string, { body, form, expect401 }: Opts = {}): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method,
+      credentials: 'same-origin',
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
+    })
+  } catch {
+    throw new AppError('errors.network')
+  }
+  if (res.status === 204) return undefined as T
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    if (res.status === 401 && !expect401) unauthorized.forEach((l) => l())
+    throw new ApiError(res.status, data?.error?.code ?? 'error', data?.error?.message ?? `HTTP ${res.status}`)
+  }
+  return data as T
+}
 
-  getTransactions: (): Promise<Transaction[]> =>
-    USE_MOCK ? mock(() => (getDemoState() === 'empty' ? [] : buildTransactions())) : request('/transactions/'),
+const co = (path = '') => `/api/v1/companies/${companyId}${path}`
 
-  getObligations: (): Promise<Obligation[]> =>
-    USE_MOCK ? mock(() => (getDemoState() === 'empty' ? [] : buildObligations())) : request('/obligations/'),
+export interface TransactionQuery {
+  limit: number
+  offset: number
+  category?: string
+  direction?: '' | 'in' | 'out'
+  q?: string
+  sort?: string
+  order?: 'asc' | 'desc'
+}
 
-  getPlanActual: (periodDays: number): Promise<PlanActualResponse> =>
-    USE_MOCK ? mock(() => buildPlanActual(periodDays, getDemoState())) : request(`/plan-vs-actual/?days=${periodDays}`),
+const realApi = {
+  // ----- auth -----
+  me: () => request<Me>('GET', '/api/v1/auth/me', { expect401: true }),
+  login: (email: string, password: string) => request<Me>('POST', '/api/v1/auth/login', { body: { email, password }, expect401: true }),
+  register: (b: { email: string; password: string; password_confirm: string; company_name: string }) =>
+    request<Me>('POST', '/api/v1/auth/register', { body: b, expect401: true }),
+  ecpChallenge: () => request<{ challenge: string }>('POST', '/api/v1/auth/ecp/challenge', { body: {}, expect401: true }),
+  ecpLogin: (challenge: string, signature: string) =>
+    request<Me>('POST', '/api/v1/auth/ecp/login', { body: { challenge, signature }, expect401: true }),
+  logout: () => request<void>('POST', '/api/v1/auth/logout', { body: {}, expect401: true }),
 
-  askAssistant: async (question: string): Promise<AssistantMessage> => {
-    if (!USE_MOCK) return request('/assistant/', { method: 'POST', body: JSON.stringify({ question }) })
-    return mock(() => {
-      const { parts, basedOn } = buildAssistantReply(question, buildForecast(getDemoState()), buildObligations())
-      return { id: crypto.randomUUID(), role: 'assistant' as const, parts, basedOn }
-    }, 900)
-  },
+  // ----- company -----
+  renameCompany: (name: string) => request<{ company_name: string }>('PATCH', co(), { body: { name } }),
 
-  /** SIMULATED — no file leaves the browser and nothing is parsed. */
-  importStatement: async (file: File, forceError = false): Promise<ImportResult> => {
-    await sleep(1400)
-    const okExt = /\.(csv|txt|xlsx?|1c)$/i.test(file.name)
-    if (forceError || !okExt || file.size > 10 * 1024 * 1024) {
-      throw new AppError(!okExt ? 'errors.unsupportedFormat' : file.size > 10 * 1024 * 1024 ? 'errors.fileTooLarge' : 'errors.parseFailed')
+  // ----- forecast -----
+  /** null when no forecast has been built yet. */
+  latestForecast: async (): Promise<ForecastRun | null> => {
+    try {
+      return await request<ForecastRun>('GET', co('/forecasts/latest'))
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null
+      throw e
     }
-    return { fileName: file.name, operations: 128, periodFrom: '2026-09-23', periodTo: '2026-10-23', simulated: true }
   },
+  createForecast: (horizonDays: number) => request<ForecastRun>('POST', co('/forecasts'), { body: { horizon_days: horizonDays } }),
+  scenario: (horizonDays: number, scenario: ScenarioParams) =>
+    request<ScenarioResponse>('POST', co('/scenarios'), { body: { horizon_days: horizonDays, scenario } }),
+  backtest: () => request<Backtest>('GET', co('/backtest')),
+
+  // ----- ledger -----
+  transactions: (q: TransactionQuery) => {
+    const p = new URLSearchParams({
+      limit: String(q.limit),
+      offset: String(q.offset),
+      category: q.category ?? '',
+      direction: q.direction ?? '',
+      q: q.q ?? '',
+      sort: q.sort ?? 'date',
+      order: q.order ?? 'desc',
+    })
+    return request<TransactionPage>('GET', co(`/transactions?${p}`))
+  },
+  setCategory: (id: number, category: string) => request<unknown>('PATCH', co(`/transactions/${id}/category`), { body: { category } }),
+  expectedEvents: () => request<{ items: ExpectedEvent[] }>('GET', co('/expected-events')),
+  createEvent: (e: NewExpectedEvent) => request<unknown>('POST', co('/expected-events'), { body: e }),
+  deleteEvent: (id: string) => request<void>('DELETE', co(`/expected-events/${id}`)),
+  taxCalendar: (amountKop?: string) =>
+    request<TaxCalendarResult>('POST', co('/expected-events/tax-calendar'), { body: amountKop ? { amount_kop: amountKop } : {} }),
+  syncIntegrations: (externalCompany: string) =>
+    request<SyncResult>('POST', co('/integrations/sync'), { body: { external_company: externalCompany } }),
+
+  // ----- imports -----
+  imports: () => request<{ items: ImportRow[] }>('GET', co('/imports')),
+  uploadStatement: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<ImportPreview>('POST', co('/imports'), { form })
+  },
+  confirmImport: (id: string) => request<{ inserted: number; skipped_duplicates: number; status: string }>('POST', co(`/imports/${id}/confirm`), { body: {} }),
+
+  // ----- plan / fact, gov -----
+  planFact: (days: number) => request<PlanFact>('GET', co(`/plan-fact?days=${days}`)),
+  keyRate: () => request<KeyRate>('GET', '/api/v1/gov/key-rate'),
 }
+
+/** `npm run dev:demo` swaps the server for an in-memory demo company: no sign-up, no network. */
+export const api: typeof realApi = import.meta.env.MODE === 'demo' ? (demoApi as unknown as typeof realApi) : realApi

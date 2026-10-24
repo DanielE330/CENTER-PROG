@@ -15,6 +15,7 @@ function read(): Theme {
 }
 
 let current: Theme = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'dark' ? 'dark' : read()
+if (typeof document !== 'undefined') document.documentElement.dataset.theme = current
 
 export const getTheme = () => current
 

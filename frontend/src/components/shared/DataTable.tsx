@@ -18,14 +18,18 @@ interface Props<T> {
   getRowKey: (row: T) => string
   defaultSort?: { key: string; dir: 'asc' | 'desc' }
   rowClassName?: (row: T) => string | undefined
+  /** Server-side sorting: the parent owns the sort state and the order of `rows`. */
+  sort?: { key: string; dir: 'asc' | 'desc' }
+  onSortChange?: (key: string) => void
 }
 
 /** Table scrolls horizontally inside its own wrapper — never the page. */
-export function DataTable<T>({ columns, rows, getRowKey, defaultSort, rowClassName }: Props<T>) {
-  const [sort, setSort] = useState(defaultSort)
+export function DataTable<T>({ columns, rows, getRowKey, defaultSort, rowClassName, sort: controlled, onSortChange }: Props<T>) {
+  const [local, setSort] = useState(defaultSort)
+  const sort = controlled ?? local
   const sorted = useMemo(() => {
     const col = columns.find((c) => c.key === sort?.key)
-    if (!col?.sortValue || !sort) return rows
+    if (controlled || !col?.sortValue || !sort) return rows
     const get = col.sortValue
     const m = sort.dir === 'asc' ? 1 : -1
     return [...rows].sort((a, b) => {
@@ -33,10 +37,10 @@ export function DataTable<T>({ columns, rows, getRowKey, defaultSort, rowClassNa
       const y = get(b)
       return (x < y ? -1 : x > y ? 1 : 0) * m
     })
-  }, [rows, columns, sort])
+  }, [rows, columns, sort, controlled])
 
   const toggle = (key: string) =>
-    setSort((s) => (s?.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
+    onSortChange ? onSortChange(key) : setSort((s) => (s?.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
 
   return (
     <div className="overflow-x-auto">
