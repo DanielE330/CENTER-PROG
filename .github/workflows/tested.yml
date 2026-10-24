@@ -69,6 +69,9 @@ jobs:
       - name: Scan the pushed image (trivy)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          # The registry is private: trivy pulls with the job token (read-only use here).
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          docker run --rm aquasec/trivy:0.76.1 image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
-            "${IMAGE}@${DIGEST}"
+          docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD aquasec/trivy:0.76.1 image \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "${IMAGE}@${DIGEST}"
