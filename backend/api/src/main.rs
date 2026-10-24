@@ -9,7 +9,7 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::Response,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, patch, post},
 };
 use common::{Upstream, mw::env};
 use std::sync::Arc;
