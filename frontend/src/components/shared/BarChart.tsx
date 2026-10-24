@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import { useTranslation } from 'react-i18next'
@@ -23,6 +23,12 @@ export function BarChart({ categories, series, height = 300, ariaLabel, weekPref
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   const theme = useTheme()
+  // A theme switch only recolours the chart: no data morphing, so nothing moves while the page cross-fades.
+  const lastTheme = useRef(theme)
+  const themeSwitched = lastTheme.current !== theme
+  useEffect(() => {
+    lastTheme.current = theme
+  }, [theme])
   const option = useMemo<EChartsOption>(() => {
     const muted = cssVar('--c-muted', '#66716A')
     const line = cssVar('--c-line', '#E2E8E3')
@@ -32,7 +38,7 @@ export function BarChart({ categories, series, height = 300, ariaLabel, weekPref
     return {
       animation: !prefersReducedMotion(),
       animationDuration: 600,
-      animationDurationUpdate: 450,
+      animationDurationUpdate: themeSwitched ? 0 : 450,
       animationEasing: 'cubicOut',
       grid: { left: 8, right: 16, top: 40, bottom: 8, containLabel: true },
       legend: { top: 0, left: 0, icon: 'roundRect', itemWidth: 14, itemHeight: 8, textStyle: { color: muted, fontSize: 12 } },
