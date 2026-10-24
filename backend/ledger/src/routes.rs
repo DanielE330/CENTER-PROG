@@ -186,8 +186,8 @@ pub async fn upload_import(State(st): State<AppState>, ctx: Ctx, Path(cid): Path
     }
     let (name, data) = file.ok_or_else(|| err(StatusCode::BAD_REQUEST, "no_file", "Файл не передан"))?;
     let lname = name.to_lowercase();
-    if !(lname.ends_with(".csv") || lname.ends_with(".xlsx") || lname.ends_with(".txt")) {
-        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_type", "Поддерживаются CSV и XLSX"));
+    if !(lname.ends_with(".csv") || lname.ends_with(".xlsx") || lname.ends_with(".txt") || lname.ends_with(".1c")) {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_type", "Поддерживаются CSV, XLSX и выписка 1С (.txt, .1c)"));
     }
     if data.len() > 25 * 1024 * 1024 {
         return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "file_too_large", "Файл больше 25 МБ"));

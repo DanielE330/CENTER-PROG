@@ -62,7 +62,7 @@ export function ImportStatement({ onDone }: { onDone?: () => void }) {
       <input
         ref={inputRef}
         type="file"
-        accept=".csv,.xlsx,.txt"
+        accept=".csv,.xlsx,.txt,.1c"
         className="sr-only"
         tabIndex={-1}
         aria-label={t('import.fileAria')}
