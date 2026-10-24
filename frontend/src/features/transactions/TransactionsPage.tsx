@@ -11,6 +11,7 @@ import { Notice } from '../../components/shared/Notice'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
+import { useEditGuard } from '../../app/perms'
 import { useSetCategory, useTransactions } from '../../hooks/queries'
 import { formatDate, formatKop, formatNumber } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
@@ -41,6 +42,7 @@ export default function TransactionsPage() {
 
   const query = useTransactions({ limit: LIMIT, offset, category, direction: dir, q, sort: sort.key, order: sort.dir })
   const setCat = useSetCategory()
+  const guard = useEditGuard()
   const data = query.data
   const filtered = category !== '' || dir !== '' || q !== ''
 
@@ -69,11 +71,11 @@ export default function TransactionsPage() {
     {
       key: 'category', header: t('transactions.col.category'), sortValue: sortable,
       render: (x) => (
-        <div className="w-[190px]">
+        <div className="w-[190px]" title={guard.lock.title}>
           <Select
             aria-label={t('transactions.categoryOf', { name: x.counterparty || x.purpose.slice(0, 40) })}
             value={x.category}
-            disabled={setCat.isPending && setCat.variables?.id === x.id}
+            disabled={guard.lock.disabled || (setCat.isPending && setCat.variables?.id === x.id)}
             onChange={(c) => setCat.mutate({ id: x.id, category: c })}
             options={[...(CATEGORIES as readonly string[]).includes(x.category) ? [] : [{ value: x.category, label: x.category }], ...CATEGORIES.map((c) => ({ value: c, label: categoryLabel(t, c) }))]}
           />

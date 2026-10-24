@@ -14,6 +14,10 @@ import type {
   ImportRow,
   KeyRate,
   Me,
+  Member,
+  NewMemberRequest,
+  NewMemberResult,
+  Role,
   NewApiToken,
   NewExpectedEvent,
   PlanFact,
@@ -45,6 +49,14 @@ export function onUnauthorized(cb: Listener): () => void {
   return () => unauthorized.delete(cb)
 }
 
+type AccessListener = (code: string) => void
+const accessChanged = new Set<AccessListener>()
+/** Called on 403 `company_banned` / `password_required`: the state of the account changed, `me` must be re-read. */
+export function onAccessChanged(cb: AccessListener): () => void {
+  accessChanged.add(cb)
+  return () => accessChanged.delete(cb)
+}
+
 interface Opts {
   body?: unknown
   form?: FormData
@@ -68,6 +80,8 @@ async function request<T>(method: string, url: string, { body, form, expect401 }
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     if (res.status === 401 && !expect401) unauthorized.forEach((l) => l())
+    const code = data?.error?.code
+    if (res.status === 403 && (code === 'company_banned' || code === 'password_required')) accessChanged.forEach((l) => l(code))
     throw new ApiError(res.status, data?.error?.code ?? 'error', data?.error?.message ?? `HTTP ${res.status}`)
   }
   return data as T
@@ -103,9 +117,22 @@ export const api = {
   removeEmail: () => request<AccountMethods>('DELETE', '/api/v1/account/email'),
   addSignature: (challenge: string, signature: string) => request<AccountMethods>('POST', '/api/v1/account/signatures', { body: { challenge, signature } }),
   removeSignature: (id: string) => request<AccountMethods>('DELETE', `/api/v1/account/signatures/${encodeURIComponent(id)}`),
-  apiTokens: () => request<{ items: ApiTokenInfo[] }>('GET', '/api/v1/account/tokens'),
+  /** `company`: директор видит токены всех сотрудников. */
+  apiTokens: (scope?: 'company') => request<{ items: ApiTokenInfo[] }>('GET', `/api/v1/account/tokens${scope ? `?scope=${scope}` : ''}`),
   createApiToken: (name: string) => request<NewApiToken>('POST', '/api/v1/account/tokens', { body: { name } }),
   deleteApiToken: (id: string) => request<void>('DELETE', `/api/v1/account/tokens/${encodeURIComponent(id)}`),
+
+  /** Смена своего пароля. `current` не нужен только при принудительной смене (must_change_password). */
+  changePassword: (b: { current?: string; new: string }) => request<unknown>('POST', '/api/v1/account/change-password', { body: b }),
+  /** Директор после регистрации по ЭЦП обязан задать email и пароль. */
+  setCredentials: (b: { email: string; password: string }) => request<unknown>('POST', '/api/v1/account/set-credentials', { body: b }),
+
+  // ----- members (сотрудники компании) -----
+  members: () => request<{ items: Member[] }>('GET', '/api/v1/members'),
+  addMember: (b: NewMemberRequest) => request<NewMemberResult>('POST', '/api/v1/members', { body: b }),
+  setMemberRole: (id: string, role: Exclude<Role, 'director'>) => request<unknown>('PATCH', `/api/v1/members/${encodeURIComponent(id)}`, { body: { role } }),
+  deleteMember: (id: string) => request<void>('DELETE', `/api/v1/members/${encodeURIComponent(id)}`),
+  resetMemberPassword: (id: string) => request<{ password: string }>('POST', `/api/v1/members/${encodeURIComponent(id)}/reset-password`, { body: {} }),
 
   // ----- company -----
   renameCompany: (name: string) => request<{ company_name: string }>('PATCH', co(), { body: { name } }),

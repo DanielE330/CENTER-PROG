@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { api, onUnauthorized, setCompany } from '../lib/api'
+import { api, onAccessChanged, onUnauthorized, setCompany } from '../lib/api'
 import type { Me } from '../types'
 
 type Status = 'loading' | 'anon' | 'user'
@@ -43,6 +43,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => onUnauthorized(() => setMe(null)), [setMe])
+
+  // 403 company_banned / password_required in the middle of a session: re-read `me`, the gate screens take over.
+  useEffect(
+    () =>
+      onAccessChanged(() => {
+        api.me().then(setMe).catch(() => {})
+      }),
+    [setMe],
+  )
 
   const logout = useCallback(async () => {
     try {

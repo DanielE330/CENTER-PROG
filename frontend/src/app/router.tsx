@@ -11,10 +11,13 @@ const ScenariosPage = lazy(() => import('../features/scenarios/ScenariosPage'))
 const PlanVsActualPage = lazy(() => import('../features/plan-vs-actual/PlanVsActualPage'))
 const AssistantPage = lazy(() => import('../features/assistant/AssistantPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
+const OperatorPage = lazy(() => import('../features/operator/OperatorPage'))
 
 const page = (el: React.ReactNode) => <Suspense fallback={<LoadingState height={300} />}>{el}</Suspense>
 
 export const router = createBrowserRouter([
+  // панель оператора платформы: вне оболочки компании, со своей сессией (cookie op_session)
+  { path: '/operator', element: page(<OperatorPage />) },
   {
     element: <AppLayout />,
     children: [

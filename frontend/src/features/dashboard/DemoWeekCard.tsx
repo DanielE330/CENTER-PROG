@@ -6,6 +6,7 @@ import { Notice } from '../../components/shared/Notice'
 import { useAdvanceWeek, useDemoStatus } from '../../hooks/queries'
 import { formatDate, formatKop } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
+import { useEditGuard } from '../../app/perms'
 
 /**
  * Demo «A week has passed»: shown only to the demo user (`demo/status.enabled`). The button feeds the next week of
@@ -15,6 +16,7 @@ export function DemoWeekCard() {
   const { t } = useTranslation()
   const status = useDemoStatus()
   const advance = useAdvanceWeek()
+  const guard = useEditGuard()
   const s = status.data
   if (!s?.enabled) return null
 
@@ -35,7 +37,7 @@ export function DemoWeekCard() {
             {!finished && !unavailable && s.weeks_left != null ? ` · ${t('demo.weeksLeft', { count: s.weeks_left })}` : ''}
           </p>
         </div>
-        <Button variant="primary" disabled={advance.isPending || finished || unavailable || !s.as_of} onClick={() => advance.mutate()}>
+        <Button variant="primary" title={guard.lock.title} disabled={guard.lock.disabled || advance.isPending || finished || unavailable || !s.as_of} onClick={() => advance.mutate()}>
           {advance.isPending ? <Loader2 size={16} className="spin" aria-hidden /> : <FastForward size={16} aria-hidden />}
           {advance.isPending ? t('demo.advancing') : finished ? t('demo.finished') : t('demo.advance')}
         </Button>

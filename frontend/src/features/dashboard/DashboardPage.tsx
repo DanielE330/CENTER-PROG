@@ -13,6 +13,7 @@ import { Button } from '../../components/ui/Button'
 import { Modal } from '../../components/ui/Modal'
 import { Select } from '../../components/ui/Select'
 import { useForecast, useRecalc } from '../../hooks/queries'
+import { useEditGuard } from '../../app/perms'
 import { formatDate, formatDateTime, formatKop, formatPercent } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
 import { loadPrefs } from '../../lib/prefs'
@@ -30,6 +31,7 @@ export default function DashboardPage() {
   const { t } = useTranslation()
   const forecast = useForecast()
   const recalc = useRecalc()
+  const guard = useEditGuard()
   const [days, setDays] = useState<number | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const view = forecast.view
@@ -57,7 +59,7 @@ export default function DashboardPage() {
             )}
             {/* without a forecast the empty state below offers the same import button */}
             {(view || forecast.isPending || forecast.isError) && (
-              <Button variant="primary" onClick={() => setImportOpen(true)}>
+              <Button variant="primary" onClick={() => setImportOpen(true)} {...guard.lock}>
                 <FileUp size={16} aria-hidden /> {t('dashboard.import')}
               </Button>
             )}
@@ -80,7 +82,7 @@ export default function DashboardPage() {
             description={t('dashboard.emptyText')}
             action={
               <div className="flex flex-wrap justify-center gap-2">
-                <Button variant="primary" onClick={() => setImportOpen(true)}><FileUp size={16} aria-hidden /> {t('dashboard.import')}</Button>
+                <Button variant="primary" onClick={() => setImportOpen(true)} {...guard.lock}><FileUp size={16} aria-hidden /> {t('dashboard.import')}</Button>
                 <Button disabled={recalc.isPending} onClick={() => recalc.mutate(loadPrefs().horizon)}>
                   {recalc.isPending ? t('common.calculating') : t('dashboard.buildFromLoaded')}
                 </Button>

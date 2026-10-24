@@ -9,18 +9,22 @@ import { Notice } from '../../components/shared/Notice'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { api } from '../../lib/api'
+import { usePerms } from '../../app/perms'
 import { formatDateTime } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
 import type { NewApiToken } from '../../types'
 
 const KEY = ['account', 'tokens'] as const
+const keyOf = (company: boolean) => [...KEY, company ? 'company' : 'mine'] as const
 const iso = (sec: number) => new Date(sec * 1000).toISOString()
 
 /** Tokens for the external API (`/api/ext/v1`): the token identifies the company, so no company id is needed. */
 export function ApiTokens() {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const list = useQuery({ queryKey: KEY, queryFn: api.apiTokens })
+  const { role, manage, edit } = usePerms()
+  // The director sees the tokens of every employee and can revoke them.
+  const list = useQuery({ queryKey: keyOf(manage), queryFn: () => api.apiTokens(manage ? 'company' : undefined) })
   const [name, setName] = useState('')
   const [fresh, setFresh] = useState<NewApiToken | null>(null)
   const [copied, setCopied] = useState(false)
@@ -58,6 +62,10 @@ export function ApiTokens() {
   return (
     <Card title={t('apiTokens.title')} subtitle={t('apiTokens.subtitle')}>
       <div className="px-5 pb-5 flex flex-col gap-4">
+        <p className="text-[13px] rounded-control bg-app border border-line px-3 py-2" data-testid="token-rights">
+          <span className="font-medium">{t('apiTokens.rights', { role: t(`role.${role}`) })}</span>{' '}
+          <span className="text-muted">{edit ? t('apiTokens.rightsWrite') : t('apiTokens.rightsRead')}</span>
+        </p>
         {fresh && (
           <Notice tone="success" title={t('apiTokens.createdTitle')}>
             <p className="mb-2">{t('apiTokens.createdText')}</p>
@@ -82,6 +90,9 @@ export function ApiTokens() {
                   <KeyRound size={16} className="text-muted shrink-0" aria-hidden />
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{k.name} <span className="tnum text-xs text-muted font-normal">{k.prefix}…</span></p>
+                    {manage && (k.owner_email || k.mine) && (
+                      <p className="text-xs text-muted truncate">{t('apiTokens.owner', { value: k.mine ? t('apiTokens.ownerMe') : k.owner_email })}{k.scope ? ` · ${k.scope === 'read' ? t('apiTokens.scopeRead') : t('apiTokens.scopeWrite')}` : ''}</p>
+                    )}
                     <p className="text-xs text-muted truncate">
                       {t('apiTokens.created', { value: formatDateTime(iso(k.created_at)) })} · {k.last_used ? t('apiTokens.lastUsed', { value: formatDateTime(iso(k.last_used)) }) : t('apiTokens.neverUsed')}
                     </p>

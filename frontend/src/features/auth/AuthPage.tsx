@@ -61,6 +61,7 @@ export default function AuthPage() {
           <div>
             <h1 className="text-2xl font-semibold">{reg ? t('auth.registerTitle') : t('auth.loginTitle')}</h1>
             <p className="text-muted mt-1">{t('auth.subtitle')}</p>
+            <p className="text-[13px] text-muted mt-2">{reg ? t('auth.directorNoteRegister') : t('auth.directorNoteLogin')}</p>
           </div>
 
           {reg && (

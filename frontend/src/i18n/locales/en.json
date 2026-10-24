@@ -41,6 +41,8 @@
     "haveAccount": "Already have an account? Sign in",
     "or": "or",
     "logout": "Sign out",
+    "directorNoteLogin": "The director signs in with email and password or with an e-signature. Employees sign in with the email and password given by the director.",
+    "directorNoteRegister": "The director must have a password: after registering with an e-signature you will be asked to set an email and password.",
     "ecp": {
       "button": "Sign in with e-signature",
       "searching": "Looking for certificates…",
@@ -148,6 +150,81 @@
     "refunds": "Refunds",
     "other_expense": "Other expenses"
   },
+  "operator": {
+    "title": "Operator panel",
+    "brand": "Platform operator panel",
+    "description": "Companies registered on the platform: statistics and blocking. The contents of company data are not available.",
+    "signedInAs": "Operator: {{email}}",
+    "privacy": "The operator sees only registration details and aggregates. Customers' transactions and payments are not shown here.",
+    "noName": "Unnamed",
+    "noForecast": "No forecast",
+    "login": {
+      "title": "Operator sign-in",
+      "subtitle": "Staff sign-in for the platform team.",
+      "submit": "Sign in"
+    },
+    "stats": {
+      "title": "Platform statistics",
+      "total": "Total companies",
+      "active": "Active",
+      "banned": "Blocked",
+      "new7": "New in 7 days",
+      "new30": "New in 30 days",
+      "users": "Users"
+    },
+    "status": {
+      "active": "Active",
+      "banned": "Blocked"
+    },
+    "col": {
+      "company": "Company",
+      "inn": "Tax ID",
+      "status": "Status",
+      "risk": "Gap risk",
+      "members": "Users",
+      "registered": "Registered",
+      "lastImport": "Last import"
+    },
+    "companies": {
+      "title": "Companies",
+      "subtitle": "Click a name to open the company card.",
+      "search": "Search companies",
+      "onlyBanned": "Blocked only",
+      "empty": "No companies found",
+      "pages": "List pages",
+      "range": "{{from}}–{{to}} of {{total}}"
+    },
+    "detail": {
+      "back": "Back to companies",
+      "about": "About the company",
+      "director": "Director",
+      "ogrn": "Registration no. (OGRN)",
+      "lastOperation": "Date of the last transaction",
+      "loaded": "Transactions loaded (count)",
+      "planned": "Expected payments (count)",
+      "members": "Members",
+      "role": "Role",
+      "memberSince": "Added",
+      "noMembers": "No member data.",
+      "bannedAt": "Blocked: {{date}}",
+      "reason": "Reason: {{reason}}"
+    },
+    "ban": {
+      "action": "Block",
+      "title": "Block “{{name}}”?",
+      "effect": "All users of the company and their API tokens will lose access and active sessions will be ended. The company's data is kept.",
+      "reason": "Reason for blocking",
+      "reasonHint": "Company users will see it. Up to {{max}} characters.",
+      "reasonRequired": "Enter a reason (at least {{min}} characters)",
+      "submit": "Block"
+    },
+    "unban": {
+      "action": "Unblock",
+      "title": "Unblock “{{name}}”?",
+      "effect": "The company's users will be able to sign in and use API tokens again.",
+      "submit": "Unblock"
+    }
+  },
   "errors": {
     "loadTitle": "Could not load data",
     "loadDefault": "An error occurred while contacting the server.",
@@ -155,6 +232,11 @@
     "unknown": "Unknown error"
   },
   "apiErrors": {
+    "invalid_reason": "Enter a reason for blocking (3 to 500 characters)",
+    "unauthenticated": "Sign-in required",
+    "invalid_session": "The session is no longer valid, sign in again",
+    "backoffice_unavailable": "The operator service is unavailable",
+    "already_banned": "The company is already blocked",
     "invalid_credentials": "Wrong email or password",
     "too_many_attempts": "Too many attempts, please wait a few minutes",
     "email_taken": "This email is already registered",
@@ -196,7 +278,13 @@
     "too_many_signatures": "Signature limit reached",
     "too_many_tokens": "Token limit reached, delete unused ones",
     "invalid_token_name": "Token name must be 1 to 80 characters",
-    "invalid_token": "The token is invalid or revoked"
+    "invalid_token": "The token is invalid or revoked",
+    "forbidden": "You do not have permission for this action",
+    "password_required": "Set the director email and password first",
+    "company_banned": "The company has been blocked by the operator",
+    "invalid_current_password": "The current password is incorrect",
+    "user_not_found": "Employee not found",
+    "token_not_found": "Token not found"
   },
   "quality": {
     "title": "Data quality",
@@ -788,6 +876,81 @@
     "copy": "Copy",
     "copied": "Copied",
     "usage": "Example request:",
-    "endpoints": "Available: GET /api/ext/v1/company, forecast, transactions, expected-events, plan-fact; POST forecast and expected-events."
+    "endpoints": "Available: GET /api/ext/v1/company, forecast, transactions, expected-events, plan-fact; POST forecast and expected-events.",
+    "rights": "Token permissions = permissions of your role: {{role}}.",
+    "rightsWrite": "The token can read and write data (read and write).",
+    "rightsRead": "The token can only read data (GET requests). If your role changes, token permissions change immediately.",
+    "owner": "owner: {{value}}",
+    "ownerMe": "you",
+    "scopeRead": "read",
+    "scopeWrite": "read and write"
+  },
+  "role": {
+    "director": "Director",
+    "editor": "Editor",
+    "viewer": "Viewer",
+    "editorHint": "Sees all data and can change it: import, payments, categories, calendar, sync.",
+    "viewerHint": "View data and calculations only, no changes."
+  },
+  "perms": {
+    "denied": "Not enough permissions: this action needs the Editor role",
+    "directorOnly": "Only the director can change this",
+    "importDenied": "Not enough permissions: statement import is available to Director and Editor roles.",
+    "readOnlyBanner": "You have read-only access: company data cannot be changed."
+  },
+  "password": {
+    "title": "Change your password",
+    "textForced": "You were given a temporary password. Set your own before continuing.",
+    "textOptional": "The director set this password. We recommend changing it to your own; you can do it later.",
+    "current": "Current password",
+    "new": "New password",
+    "submit": "Change password",
+    "skip": "Skip",
+    "change": "Change password",
+    "changed": "Password changed"
+  },
+  "credentials": {
+    "title": "Set the director email and password",
+    "text": "You signed in with an e-signature. A company director must have a password: you cannot continue without it. The signature still works for signing in.",
+    "submit": "Save and continue"
+  },
+  "banned": {
+    "title": "The company has been blocked by the operator",
+    "text": "Access to the data of \"{{company}}\" is suspended for all employees.",
+    "reason": "Reason",
+    "noReason": "not specified",
+    "contact": "If you think this is a mistake, contact the platform operator."
+  },
+  "members": {
+    "title": "Employees",
+    "subtitleManage": "Add employees, assign roles and reset passwords.",
+    "subtitleView": "Company members. Only the director can manage employees.",
+    "empty": "No employees yet",
+    "you": "you",
+    "added": "added {{date}}",
+    "add": "Add employee",
+    "addTitle": "New employee",
+    "addSubmit": "Add",
+    "role": "Role",
+    "roleOf": "Role of {{email}}",
+    "generate": "Generate a password",
+    "generateHint": "The password is shown once, right after adding. The employee must change it at first sign-in.",
+    "manualHint": "8 to 128 characters. The employee can change it at first sign-in.",
+    "reset": "Reset password",
+    "resetAria": "Reset password of {{email}}",
+    "delete": "Delete",
+    "deleteAria": "Delete employee {{email}}",
+    "deleteTitle": "Delete employee?",
+    "deleteText": "{{email}} will lose access, and their sessions and API tokens will be revoked. This cannot be undone.",
+    "deleteConfirm": "Delete employee",
+    "createdTitle": "Employee added",
+    "createdText": "Pass the password to {{email}}. They must change it at first sign-in.",
+    "resetDoneTitle": "Password reset",
+    "resetDoneText": "New password for {{email}}. All their sessions were ended; they must change the password at sign-in.",
+    "passwordAria": "Generated password",
+    "onceTitle": "The password is shown only once",
+    "onceText": "After you close this window the password cannot be shown again: copy it now. If you lose it, reset the password again.",
+    "savedIt": "I saved the password",
+    "rolesNote": "The director can do everything. Editor: read and change data. Viewer: read only. The director cannot be deleted or demoted."
   }
 }

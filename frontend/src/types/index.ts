@@ -15,6 +15,48 @@ export interface Me {
   company_inn?: string
   company_ogrn?: string
   ecp?: boolean
+  /** Роль в компании. Старый бэкенд мог не отдавать поле — тогда считаем пользователя директором. */
+  role?: Role
+  permissions?: Permissions
+  /** Нужно сменить пароль (первый вход сотрудника / сброс директором). */
+  must_change_password?: boolean
+  /** Пароль сгенерирован сервером: смена обязательна. Если поля нет — считаем смену обязательной. */
+  password_generated?: boolean
+  /** Директор, вошедший по ЭЦП, ещё не задал email и пароль. */
+  password_required?: boolean
+  company_banned?: boolean
+  ban_reason?: string | null
+}
+
+export type Role = 'director' | 'editor' | 'viewer'
+export interface Permissions {
+  read: boolean
+  edit: boolean
+  manage: boolean
+}
+
+export interface Member {
+  user_id: string
+  email: string
+  role: Role
+  created_at: string
+}
+
+export interface NewMemberRequest {
+  email: string
+  role: Exclude<Role, 'director'>
+  /** Пароль задаёт директор. */
+  password?: string
+  /** Либо пароль генерирует сервер и возвращает его один раз. */
+  generate?: boolean
+}
+
+export interface NewMemberResult {
+  user_id: string
+  email: string
+  role: Role
+  /** Только если generate=true; повторно получить нельзя. */
+  password?: string
 }
 
 // ---------- forecast ----------
@@ -371,6 +413,11 @@ export interface ApiTokenInfo {
   prefix: string
   created_at: number
   last_used: number | null
+  /** Только в списке директора (`scope=company`): владелец токена. */
+  owner_email?: string | null
+  user_id?: string | null
+  scope?: 'read' | 'write' | string
+  mine?: boolean
 }
 
 /** `token` is returned once, at creation. */

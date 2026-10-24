@@ -14,6 +14,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
 import { useAuth, useMe } from '../../app/auth'
+import { usePerms } from '../../app/perms'
 import { api } from '../../lib/api'
 import { useForecastRun, useImports, useRecalc } from '../../hooks/queries'
 import { HORIZONS, loadPrefs, savePrefs } from '../../lib/prefs'
@@ -23,11 +24,13 @@ import type { ImportRow } from '../../types'
 import { ImportStatement } from './ImportStatement'
 import { AccountMethods } from './AccountMethods'
 import { ApiTokens } from './ApiTokens'
+import { MembersPanel } from '../account/MembersPanel'
 
 export default function SettingsPage() {
   const { t } = useTranslation()
   const me = useMe()
   const { setMe, logout } = useAuth()
+  const { manage } = usePerms()
   const imports = useImports()
   const [name, setName] = useState(me.company_name)
   const [horizon, setHorizon] = useState(() => loadPrefs().horizon)
@@ -83,21 +86,25 @@ export default function SettingsPage() {
 
           <Card title={t('settings.org.title')} subtitle={t('settings.org.subtitle')}>
             <form className="px-5 pb-5 flex flex-col gap-4" onSubmit={submitName}>
-              <Input label={t('settings.org.name')} value={name} onChange={(e) => { setName(e.target.value); rename.reset() }} required minLength={2} maxLength={200} />
+              <Input label={t('settings.org.name')} value={name} onChange={(e) => { setName(e.target.value); rename.reset() }} required minLength={2} maxLength={200} readOnly={!manage} hint={manage ? undefined : t('perms.directorOnly')} />
               {me.company_inn && <Input label={t('settings.org.inn')} value={me.company_inn} readOnly className="tnum" />}
               {me.company_ogrn && <Input label={t('settings.org.ogrn')} value={me.company_ogrn} readOnly className="tnum" />}
               <Select label={t('settings.org.currency')} disabled onChange={() => {}} value="RUB" options={[{ value: 'RUB', label: t('settings.org.rub') }]} />
               {rename.isSuccess && <Notice tone="success">{t('settings.org.saved')}</Notice>}
               {rename.isError && <Notice tone="danger">{errorText(t, rename.error)}</Notice>}
+              {manage && (
               <div>
                 <Button type="submit" variant="primary" disabled={rename.isPending || name.trim() === me.company_name || name.trim().length < 2}>
                   {rename.isPending ? t('common.saving') : t('common.save')}
                 </Button>
               </div>
+              )}
             </form>
           </Card>
 
-          <AccountMethods />
+          <MembersPanel />
+
+          {manage && <AccountMethods />}
 
           <ApiTokens />
 

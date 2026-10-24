@@ -9,6 +9,7 @@ import { useConfirmImport, useRecalc, useUploadStatement } from '../../hooks/que
 import { formatDate, formatKop, formatNumber } from '../../lib/formatters'
 import { loadPrefs } from '../../lib/prefs'
 import { errorText } from '../../i18n/helpers'
+import { usePerms } from '../../app/perms'
 import { categoryLabel } from '../../i18n/categories'
 
 /** Upload -> preview -> confirm. After confirming, the forecast is rebuilt. */
@@ -18,6 +19,7 @@ export function ImportStatement({ onDone }: { onDone?: () => void }) {
   const upload = useUploadStatement()
   const confirm = useConfirmImport()
   const recalc = useRecalc()
+  const { edit } = usePerms()
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [done, setDone] = useState<{ inserted: number; skipped: number } | null>(null)
   const [error, setError] = useState<unknown>(null)
@@ -53,6 +55,8 @@ export function ImportStatement({ onDone }: { onDone?: () => void }) {
       setError(e)
     }
   }
+
+  if (!edit) return <Notice tone="warning">{t('perms.importDenied')}</Notice>
 
   const s = preview?.summary
   const st = s?.stats

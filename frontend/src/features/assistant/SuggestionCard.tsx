@@ -4,6 +4,7 @@ import { Check, Lightbulb, X } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
 import { useApplySuggestion } from '../../hooks/queries'
 import { errorText } from '../../i18n/helpers'
+import { useEditGuard } from '../../app/perms'
 import { formatDate, formatKop } from '../../lib/formatters'
 import type { AdvisorSuggestion } from './advisorTypes'
 
@@ -13,6 +14,7 @@ type State = 'new' | 'applied' | 'dismissed'
 export function SuggestionCard({ s }: { s: AdvisorSuggestion }) {
   const { t } = useTranslation()
   const apply = useApplySuggestion()
+  const guard = useEditGuard()
   const [state, setState] = useState<State>('new')
   const [error, setError] = useState<string | null>(null)
   const p = s.params
@@ -38,7 +40,7 @@ export function SuggestionCard({ s }: { s: AdvisorSuggestion }) {
       {p.counterparty && <p className="text-muted">{t('assistant.suggestionCounterparty', { name: p.counterparty })}</p>}
       {state === 'new' && (
         <div className="flex gap-2">
-          <Button variant="primary" size="sm" onClick={() => void add()} disabled={apply.isPending}>
+          <Button variant="primary" size="sm" onClick={() => void add()} disabled={apply.isPending || guard.lock.disabled} title={guard.lock.title}>
             <Check size={14} aria-hidden /> {t('assistant.add')}
           </Button>
           <Button size="sm" onClick={() => setState('dismissed')} disabled={apply.isPending}>
