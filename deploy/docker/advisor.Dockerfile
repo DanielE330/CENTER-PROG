@@ -19,7 +19,9 @@ COPY services/advisor services/advisor
 # then our packages go on top of the same environment.
 WORKDIR /opt/hermes
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_PROJECT_ENVIRONMENT=/venv uv sync --frozen --no-dev --extra mcp --python /usr/local/bin/python3.14
+    UV_PROJECT_ENVIRONMENT=/venv uv sync --frozen --no-dev --extra mcp --python /usr/local/bin/python3.14 \
+ # Hermes' lock pins these below their security fixes; lift them to the fixed releases.
+ && uv pip install --python /venv/bin/python "msgpack>=1.2.1" "urllib3>=2.8.0" "setuptools>=78.1.1"
 WORKDIR /src
 # Wheels built from our sources: a plain `pip install ci-common` could resolve a same-named
 # package from PyPI (dependency confusion), and an editable install would point at /src.
@@ -30,7 +32,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
  && uv pip install --python /venv/bin/python --no-deps /wheels/advisor-*.whl
 
 FROM python:3.14-slim-bookworm
-RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+# pip is not needed at runtime, and its vendored urllib3/msgpack lag behind security fixes.
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip* /usr/local/lib/python3.14/ensurepip /usr/local/bin/pip* \
+ && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
 COPY --from=build /venv /venv
 COPY --from=build /opt/hermes /opt/hermes
 COPY deploy/docker/hermes-config.yaml /opt/hermes-config.yaml

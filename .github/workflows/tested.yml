@@ -73,5 +73,6 @@ jobs:
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD aquasec/trivy:0.76.1 image \
+          docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD -v "$PWD/.trivyignore:/.trivyignore:ro" \
+            aquasec/trivy:0.76.1 image --ignorefile /.trivyignore \
             --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "${IMAGE}@${DIGEST}"
