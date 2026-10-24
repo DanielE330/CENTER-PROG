@@ -1,5 +1,6 @@
-mod db;
-mod forecast;
+//! api (BFF): единственный публичный Rust-сервис. Проверка сессии через auth, CSRF, заголовки безопасности,
+//! раздача SPA и маршрутизация/оркестрация вызовов к внутренним сервисам. Собственной БД нет.
+
 mod http;
 
 use axum::{
@@ -10,38 +11,38 @@ use axum::{
     response::Response,
     routing::{delete, get, patch, post},
 };
+use common::{Upstream, mw::env};
 use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
 
-#[derive(Clone)]
 pub struct Config {
-    pub auth_url: String,
-    pub parser_url: String,
     pub cookie_secure: bool,
 }
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: db::Db,
-    pub http: reqwest::Client,
+    pub auth: Upstream,
+    pub ecp: Upstream,
+    pub gov: Upstream,
+    pub ledger: Upstream,
+    pub forecast: Upstream,
+    pub planfact: Upstream,
+    pub integrator: Upstream,
     pub cfg: Arc<Config>,
-}
-
-fn env(k: &str, d: &str) -> String {
-    std::env::var(k).unwrap_or_else(|_| d.to_string())
 }
 
 #[tokio::main]
 async fn main() {
-    let cfg = Config {
-        auth_url: env("AUTH_URL", "http://127.0.0.1:8001"),
-        parser_url: env("PARSER_URL", "http://127.0.0.1:8002"),
-        cookie_secure: env("COOKIE_SECURE", "0") == "1",
-    };
     let state = AppState {
-        db: db::open(&env("DB_PATH", "data/core.db")),
-        http: reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build().unwrap(),
-        cfg: Arc::new(cfg),
+        // ecp и auth для SPA — один «сервис входа» (те же коды ошибок, что и раньше)
+        auth: Upstream::new("auth", "Сервис входа", &env("AUTH_URL", "http://127.0.0.1:8001"), 30),
+        ecp: Upstream::new("auth", "Сервис входа", &env("ECP_URL", "http://127.0.0.1:8007"), 60),
+        gov: Upstream::new("gov", "Сервис государственных данных", &env("GOV_URL", "http://127.0.0.1:8003"), 60),
+        ledger: Upstream::new("ledger", "Сервис данных", &env("LEDGER_URL", "http://127.0.0.1:3002"), 60),
+        forecast: Upstream::new("forecast", "Сервис прогноза", &env("FORECAST_URL", "http://127.0.0.1:3003"), 80),
+        planfact: Upstream::new("planfact", "Сервис план-факта", &env("PLANFACT_URL", "http://127.0.0.1:3004"), 60),
+        integrator: Upstream::new("integrator", "Сервис интеграций", &env("INTEGRATOR_URL", "http://127.0.0.1:8008"), 30),
+        cfg: Arc::new(Config { cookie_secure: env("COOKIE_SECURE", "0") == "1" }),
     };
 
     let co = "/api/v1/companies/{cid}";
@@ -52,21 +53,23 @@ async fn main() {
         .route("/api/v1/auth/ecp/login", post(http::ecp_login))
         .route("/api/v1/auth/logout", post(http::logout))
         .route("/api/v1/auth/me", get(http::me))
-        .route(co, patch(http::update_company))
-        .route(&format!("{co}/imports"), get(http::list_imports).post(http::upload_import).layer(axum::extract::DefaultBodyLimit::max(26 * 1024 * 1024)))
-        .route(&format!("{co}/imports/{{iid}}"), get(http::get_import))
-        .route(&format!("{co}/imports/{{iid}}/confirm"), post(http::confirm_import))
-        .route(&format!("{co}/transactions"), get(http::list_transactions))
-        .route(&format!("{co}/transactions/{{id}}/category"), patch(http::set_category))
-        .route(&format!("{co}/expected-events"), get(http::list_events).post(http::create_event))
+        .route(co, patch(http::to_ledger))
+        .route(&format!("{co}/imports"), get(http::to_ledger).post(http::to_ledger))
+        .route(&format!("{co}/imports/{{iid}}"), get(http::to_ledger))
+        .route(&format!("{co}/imports/{{iid}}/confirm"), post(http::to_ledger))
+        .route(&format!("{co}/transactions"), get(http::to_ledger))
+        .route(&format!("{co}/transactions/{{id}}/category"), patch(http::to_ledger))
+        .route(&format!("{co}/expected-events"), get(http::to_ledger).post(http::to_ledger))
         .route(&format!("{co}/expected-events/tax-calendar"), post(http::tax_calendar))
-        .route(&format!("{co}/expected-events/{{eid}}"), delete(http::delete_event))
+        .route(&format!("{co}/expected-events/{{eid}}"), delete(http::to_ledger))
+        .route(&format!("{co}/integrations/sync"), post(http::integrations_sync))
+        .route("/api/v1/gov/key-rate", get(http::gov_key_rate))
         .route(&format!("{co}/forecasts"), post(http::create_forecast))
-        .route(&format!("{co}/forecasts/latest"), get(http::latest_forecast))
-        .route(&format!("{co}/forecasts/{{rid}}"), get(http::get_forecast))
-        .route(&format!("{co}/backtest"), get(http::run_backtest))
+        .route(&format!("{co}/forecasts/latest"), get(http::to_forecast))
+        .route(&format!("{co}/forecasts/{{rid}}"), get(http::to_forecast))
+        .route(&format!("{co}/backtest"), get(http::to_forecast))
         .route(&format!("{co}/scenarios"), post(http::create_scenario))
-        .route(&format!("{co}/plan-fact"), get(http::plan_fact))
+        .route(&format!("{co}/plan-fact"), get(http::to_planfact))
         .layer(middleware::from_fn(security_layer))
         .with_state(state.clone());
 
@@ -78,7 +81,7 @@ async fn main() {
         .fallback_service(spa)
         .layer(middleware::from_fn(static_headers));
 
-    // Внутренний API: только loopback / служебная сеть, без cookie-сессий
+    // Внутренний API: только служебная сеть, без cookie-сессий
     let internal = Router::new()
         .route("/internal/v1/health", get(|| async { "ok" }))
         .route("/internal/v1/companies/{cid}/summary", get(http::internal_summary))
@@ -112,7 +115,8 @@ async fn static_headers(req: Request, next: Next) -> Response {
 }
 
 /// CSRF (проверка Origin для изменяющих запросов), request id, no-store, лог без тел и query.
-async fn security_layer(req: Request, next: Next) -> Response {
+/// request id кладётся в заголовок запроса: оттуда его берут обработчики и пробрасывают во внутренние сервисы.
+async fn security_layer(mut req: Request, next: Next) -> Response {
     let rid = uuid::Uuid::new_v4().to_string();
     let method = req.method().clone();
     let path = req.uri().path().to_string();
@@ -121,10 +125,12 @@ async fn security_layer(req: Request, next: Next) -> Response {
             let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
             let origin_host = origin.split("://").nth(1).unwrap_or("");
             if origin_host != host {
-                return http::error_response(StatusCode::FORBIDDEN, "bad_origin", "Запрос с чужого origin отклонён", &rid);
+                return common::error_response(StatusCode::FORBIDDEN, "bad_origin", "Запрос с чужого origin отклонён", &rid);
             }
         }
     }
+    req.headers_mut().insert("x-request-id", HeaderValue::from_str(&rid).unwrap());
+    req.headers_mut().remove("x-actor"); // актора выставляет только сам api
     let mut res = next.run(req).await;
     res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     res.headers_mut().insert("x-request-id", HeaderValue::from_str(&rid).unwrap());

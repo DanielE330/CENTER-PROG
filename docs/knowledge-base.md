@@ -29,19 +29,23 @@
 | Граничные случаи | есть: пропуски выписки, овердрафт, короткая история |
 | Сравнение подходов | есть, `docs/forecast_evaluation.md` |
 | Схема архитектуры | нет готовой картинки; диаграмма в `architecture.md` описывает целевую систему |
-| Тесты | есть: Rust 13, pytest 63 |
+| Тесты | есть: Rust 23 (workspace), pytest, smoke через curl |
 | Безопасность | сессии в HttpOnly-cookie, scrypt, lockout, CSRF по Origin, заголовки, нет данных в логах |
 | AI-консультант | демо без LLM: ответы правилами по сохранённому прогнозу |
 
 ## 3. Как устроен код
 
 ```
-backend/api/        Rust (Axum, rusqlite): публичный API :3000 + внутренний :3100, финансовое ядро
+backend/Cargo.toml   Cargo workspace (общий Cargo.lock, rust-toolchain.toml)
+backend/common/     Rust lib: Tx/Event/Snapshot, деньги (строки в JSON), ошибки API, клиент межсервисных вызовов (таймауты, 503, x-request-id)
+backend/api/        Rust BFF :3000 + внутренний :3100, без БД: сессия через auth, CSRF, заголовки, SPA, проксирование и оркестрация
   src/main.rs        маршруты, middleware (CSRF по Origin, заголовки, request id, лог без тел)
-  src/http.rs        обработчики, авторизация, импорт, события, прогнозы, сценарии, план-факт
-  src/forecast.rs    регулярности, остаточный поток, траектории, риск, backtest
-  src/db.rs          схема SQLite
-  src/bin/eval.rs    оценка на всём датасете (cargo run --release --bin eval)
+  src/http.rs        вход/ЭЦП, проксирование к ledger/forecast/planfact, налоговый календарь, sync интеграций, ключевая ставка
+backend/ledger/     Rust :3002, владелец ledger.db: компании, импорты (staging + parser), операции, события, data_revision, аудит
+backend/forecast/   Rust :3003, владелец forecast.db (forecast_runs): прогноз, риск, сценарии, backtest
+  src/model.rs       регулярности, остаточный поток, траектории, риск, backtest (lib fc_model, 18 тестов)
+  src/bin/eval.rs    оценка на всём датасете (cargo run --release -p forecast --bin eval)
+backend/planfact/   Rust :3004, без БД: план-факт (история и события из ledger, регулярные платежи из forecast)
 backend/services/auth/     Python FastAPI :8001 — пользователи, сессии (scrypt, sha256 токена, lockout)
 backend/services/parser/   Python FastAPI :8002 — разбор CSV/XLSX, категоризация
 backend/services/tests/    pytest
@@ -52,7 +56,7 @@ docs/              документы
 data/              в .gitignore: dataset/ (из data/raw/*.zip), run/ (БД и логи локального запуска), eval/
 ```
 
-Поток данных: браузер → (Caddy в Docker) → Rust API → Python `auth` (сессия) / `parser` (разбор файла) → SQLite. Прогноз считается в Rust синхронно в `spawn_blocking`.
+Поток данных: браузер → (Caddy в Docker) → api (BFF) → `auth` (сессия) → ledger (данные, SQLite) / forecast (прогноз; историю берёт у ledger) / planfact; импорт: ledger → `parser`. Подробности и карта сервисов — `docs/microservices.md`. Прогноз считается в Rust синхронно в `spawn_blocking`.
 
 ### Что изменено относительно `architecture.md`
 - SQLite вместо PostgreSQL; нет RLS, очереди заданий (`jobs`), SSE, Idempotency-Key.
@@ -65,7 +69,7 @@ data/              в .gitignore: dataset/ (из data/raw/*.zip), run/ (БД и 
 
 Без Docker (проверено):
 ```
-infra/scripts/dev.sh        # сборка web и api, запуск auth, parser, api; http://localhost:3000
+infra/scripts/dev.sh        # сборка web и Rust-workspace, запуск всех сервисов; http://localhost:3000
 infra/scripts/dev.sh stop
 ```
 Демо-логин: `demo@example.com` / `demo12345` (`DEMO_SEED=1`). Состояние локального запуска — `data/run/` (БД, логи, pid).
@@ -75,13 +79,14 @@ Docker (написано, но не собиралось): `make -C infra up` �
 
 Тесты:
 ```
-cd backend/api && RUSTUP_TOOLCHAIN=stable cargo test       # 13 тестов
+cd backend && RUSTUP_TOOLCHAIN=stable cargo test           # workspace: 18 (fc_model) + 3 (eval) + 2 (api)
+infra/scripts/smoke.sh                                            # интеграционный smoke через curl (нужен запущенный dev.sh)
 cd backend/services && uv run pytest -q                           # 63 теста
 cd web && npx tsc --noEmit && npm run build
 ```
-Оценка на датасете: `cd backend/api && cargo run --release --bin eval -- --compare --csv` (запускать из корня репозитория, ~2 с на все 150 компаний).
+Оценка на датасете: `cd backend && cargo run --release -p forecast --bin eval -- --compare --csv` (запускать из корня репозитория, ~2 с на все 150 компаний).
 
-Переменные окружения API: `PUBLIC_ADDR`, `INTERNAL_ADDR`, `AUTH_URL`, `PARSER_URL`, `DB_PATH`, `WEB_DIR`, `COOKIE_SECURE`. Для auth: `AUTH_DB`, `DEMO_SEED`.
+Переменные окружения: api — `PUBLIC_ADDR`, `INTERNAL_ADDR`, `AUTH_URL`, `ECP_URL`, `GOV_URL`, `LEDGER_URL`, `FORECAST_URL`, `PLANFACT_URL`, `INTEGRATOR_URL`, `WEB_DIR`, `COOKIE_SECURE`; ledger — `INTERNAL_ADDR`, `DB_PATH`, `PARSER_URL`; forecast — `INTERNAL_ADDR`, `DB_PATH`, `LEDGER_URL`; planfact — `INTERNAL_ADDR`, `LEDGER_URL`, `FORECAST_URL`. Для auth: `AUTH_DB`, `DEMO_SEED`.
 
 ## 5. Публичный API (все под cookie `session`, кроме auth)
 
@@ -93,7 +98,8 @@ GET /…/transactions?limit&offset&category&direction&q&sort&order    PATCH /…
 GET|POST /…/expected-events   DELETE /…/expected-events/{id}   POST /…/expected-events/tax-calendar
 POST /…/forecasts {horizon_days}   GET /…/forecasts/latest   GET /…/forecasts/{run_id}
 POST /…/scenarios   GET /…/backtest   GET /…/plan-fact?days=
-Внутренний :3100: /internal/v1/health, /internal/v1/companies/{cid}/summary
+Внутренний :3100: /internal/v1/health, /internal/v1/companies/{cid}/summary (отдаёт forecast)
+POST /api/v1/companies/{cid}/integrations/sync   {"external_company":"C001"} -> {created, skipped, sources}: обязательства из integrator -> ожидаемые события (идемпотентно по external_id)
 ```
 Правила: суммы — копейки, в JSON десятичными строками (BigInt на фронте); ошибки `{"error":{"code","message"}}`; 422 для недопустимых значений; 409 для дубля файла; 404 для чужой компании.
 
@@ -141,7 +147,7 @@ POST /…/scenarios   GET /…/backtest   GET /…/plan-fact?days=
 
 - Модель лучше обоих базовых подходов у ~78 % компаний, но по доле точек только ~46–50 %: выигрыш над наивным прогнозом небольшой (3–5 % на 30 дней).
 - Тревога «P(разрыв) ≥ 0,5»: precision 0,22, recall 0,80 (229 реальных окон разрыва). При пороге 0,9: precision 0,75, recall 0,66.
-- **Вероятности плохо откалиброваны:** прогнозы 0,2–0,8 сбываются в 4–12 % случаев; ≥0,95 — в 85 %. Причина, вероятно, в поведении владельцев (пополнения и вывод средств удерживают счёт около нуля). В интерфейсе это названо «модельной оценкой».
+- **Калибровка (добавлена):** сырая доля траекторий калибруется логистикой по признакам истории (доля дней в минусе, минимум/медиана остатка за 120 дн., открытие); leave-company-out: Brier 0,083 -> 0,015, ECE 0,14 -> 0,002; порог 0,5: precision 0,93, recall 0,66. Подробности — `docs/forecast_evaluation.md`. До калибровки (сырая P): прогнозы 0,2–0,8 сбываются в 4–12 % случаев; ≥0,95 — в 85 %. Причина, вероятно, в поведении владельцев (пополнения и вывод средств удерживают счёт около нуля). В интерфейсе это названо «модельной оценкой».
 - Скорость: один прогноз на 222 тыс. операций ≈ 0,6 с (release).
 
 ## 10. Безопасность

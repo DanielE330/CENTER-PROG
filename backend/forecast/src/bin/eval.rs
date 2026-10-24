@@ -8,11 +8,10 @@
 //! (медиана по неделям суммы |операций|), т.е. MAE выражен в «недельных оборотах» компании.
 #![allow(dead_code)]
 
-#[path = "../forecast.rs"]
-mod forecast;
+use fc_model as forecast;
 
 use chrono::NaiveDate;
-use forecast::{Backtest, Params, ResidualMode, Tx};
+use fc_model::{Backtest, Params, ResidualMode, Tx};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -155,6 +154,8 @@ struct Agg {
     curve: Vec<(f64, f64, f64)>,
     /// (нижняя граница корзины, число, доля фактических разрывов)
     calib: Vec<(f64, usize, f64)>,
+    /// Brier/ECE/precision-recall/reliability активной вероятности (калиброванной, если Params.calibrate)
+    risk_m: Option<Metrics>,
 }
 
 fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
@@ -222,7 +223,9 @@ fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
             (lo, b.len(), if b.is_empty() { f64::NAN } else { b.iter().filter(|x| x.1).count() as f64 / b.len() as f64 })
         })
         .collect();
+    let risk_m = if samples.is_empty() { None } else { Some(metrics(&samples)) };
     Agg {
+        risk_m,
         curve,
         calib,
         name: name.to_string(),
@@ -253,6 +256,9 @@ fn print_agg(a: &Agg) {
     println!("alarm threshold sweep: {}", c.join(" | "));
     let c: Vec<String> = a.calib.iter().map(|(lo, n, f)| format!("[{lo}..): n={n} actual {f:.2}")).collect();
     println!("calibration of P(gap in 30d): {}", c.join(" | "));
+    if let Some(m) = &a.risk_m {
+        print_metrics("risk probability (active)", m);
+    }
     println!("alarm (P(gap in 30d)>=0.5) pooled: precision {} recall {} (tp {} fp {} fn {}); actual gap windows {}", f(a.prec), f(a.rec), a.tp, a.fp, a.fnn, a.gaps);
 }
 
@@ -321,7 +327,7 @@ fn main() {
         println!("perf: {} ops, forecast (1000 paths, 30d) = {:.3}s, ok={}", txs.len(), t0.elapsed().as_secs_f64(), r.is_ok());
         return;
     }
-    let mk = |mode: ResidualMode, keep: f64, tau: f64, shape: f64, rev: f64| Params { revert: rev, horizon: 30, seed: 1, n_paths: paths, residual: mode, drift_keep: keep, drift_tau: tau, shape_keep: shape };
+    let mk = |mode: ResidualMode, keep: f64, tau: f64, shape: f64, rev: f64| Params { revert: rev, horizon: 30, seed: 1, n_paths: paths, residual: mode, drift_keep: keep, drift_tau: tau, shape_keep: shape, calibrate: true };
     let nm = |mode: ResidualMode, keep: f64, tau: f64, shape: f64, rev: f64| {
         let mut n = mode.name().to_string();
         if keep < 1.0 { n += &format!("+keep{keep}"); }
@@ -330,6 +336,10 @@ fn main() {
         if shape < 1.0 { n += &format!("+shape{shape}"); }
         n
     };
+    if has("--calibrate") {
+        calibration_study(&companies, step, paths, threads);
+        return;
+    }
     let mut variants: Vec<(String, Params)> = vec![];
     if has("--compare") {
         use ResidualMode::*;
@@ -382,4 +392,294 @@ fn main() {
 
 fn fmt_base(h: &HAgg, last: bool) -> String {
     if last { format!("{:>6.1} {:>6.1}", h.mean_last, h.med_last) } else { format!("{:>6.1} {:>6.1}", h.mean_drift, h.med_drift) }
+}
+
+// ---------- калибровка вероятности разрыва ----------
+
+/// Выборка для калибровки: компания, номер origin, признаки (первый — logit сырой вероятности), факт.
+struct Sample {
+    company: usize,
+    origin: usize,
+    x: Vec<f64>,
+    y: bool,
+}
+
+fn sigmoid(z: f64) -> f64 {
+    1.0 / (1.0 + (-z).exp())
+}
+
+/// Решение A x = b гауссом с выбором ведущего элемента.
+fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+    let n = b.len();
+    for i in 0..n {
+        let piv = (i..n).max_by(|&r, &c| a[r][i].abs().partial_cmp(&a[c][i].abs()).unwrap()).unwrap();
+        a.swap(i, piv);
+        b.swap(i, piv);
+        let d = a[i][i];
+        if d.abs() < 1e-12 {
+            continue;
+        }
+        for r in i + 1..n {
+            let f = a[r][i] / d;
+            for c in i..n {
+                a[r][c] -= f * a[i][c];
+            }
+            b[r] -= f * b[i];
+        }
+    }
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut v = b[i];
+        for c in i + 1..n {
+            v -= a[i][c] * x[c];
+        }
+        x[i] = if a[i][i].abs() < 1e-12 { 0.0 } else { v / a[i][i] };
+    }
+    x
+}
+
+/// Логистическая регрессия (Ньютон, L2 на стандартизованных признаках). Возвращает (b, w) для исходных признаков.
+/// `cols` — какие признаки использовать.
+fn fit_logistic(train: &[&Sample], cols: &[usize], l2: f64) -> (f64, Vec<f64>) {
+    let k = cols.len();
+    let n = train.len() as f64;
+    let mut mu = vec![0.0; k];
+    let mut sd = vec![1.0; k];
+    for (j, &c) in cols.iter().enumerate() {
+        mu[j] = train.iter().map(|s| s.x[c]).sum::<f64>() / n;
+        let var = train.iter().map(|s| (s.x[c] - mu[j]).powi(2)).sum::<f64>() / n;
+        sd[j] = var.sqrt().max(1e-6);
+    }
+    let z = |s: &Sample| -> Vec<f64> { cols.iter().enumerate().map(|(j, &c)| (s.x[c] - mu[j]) / sd[j]).collect() };
+    let zs: Vec<Vec<f64>> = train.iter().map(|s| z(s)).collect();
+    let mut beta = vec![0.0; k + 1];
+    for _ in 0..50 {
+        let mut g = vec![0.0; k + 1];
+        let mut h = vec![vec![0.0; k + 1]; k + 1];
+        for (s, zv) in train.iter().zip(&zs) {
+            let mut xv = vec![1.0];
+            xv.extend(zv.iter().copied());
+            let p = sigmoid(xv.iter().zip(&beta).map(|(a, b)| a * b).sum());
+            let y = if s.y { 1.0 } else { 0.0 };
+            for i in 0..=k {
+                g[i] += (p - y) * xv[i];
+                for j in 0..=k {
+                    h[i][j] += p * (1.0 - p) * xv[i] * xv[j];
+                }
+            }
+        }
+        for i in 1..=k {
+            g[i] += l2 * beta[i];
+            h[i][i] += l2;
+        }
+        h[0][0] += 1e-6;
+        let step = solve(h, g);
+        let mut mx: f64 = 0.0;
+        for i in 0..=k {
+            beta[i] -= step[i];
+            mx = mx.max(step[i].abs());
+        }
+        if mx < 1e-8 {
+            break;
+        }
+    }
+    let mut w = vec![0.0; 8];
+    let mut b = beta[0];
+    for (j, &c) in cols.iter().enumerate() {
+        w[c] = beta[j + 1] / sd[j];
+        b -= beta[j + 1] * mu[j] / sd[j];
+    }
+    (b, w)
+}
+
+/// Изотоническая регрессия (PAV) по сырой вероятности; возвращает функцию-ступеньку с линейной интерполяцией.
+fn fit_isotonic(train: &[&Sample]) -> Vec<(f64, f64)> {
+    let mut v: Vec<(f64, f64)> = train.iter().map(|s| (sigmoid(s.x[0]), if s.y { 1.0 } else { 0.0 })).collect();
+    v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    // блоки: (сумма y, вес, мин x, макс x)
+    let mut blocks: Vec<(f64, f64, f64, f64)> = vec![];
+    for (x, y) in v {
+        blocks.push((y, 1.0, x, x));
+        while blocks.len() > 1 {
+            let l = blocks.len();
+            if blocks[l - 2].0 / blocks[l - 2].1 >= blocks[l - 1].0 / blocks[l - 1].1 {
+                let b = blocks.pop().unwrap();
+                let a = blocks.last_mut().unwrap();
+                a.0 += b.0;
+                a.1 += b.1;
+                a.3 = b.3;
+            } else {
+                break;
+            }
+        }
+    }
+    blocks.iter().map(|b| ((b.2 + b.3) / 2.0, b.0 / b.1)).collect()
+}
+
+fn iso_apply(f: &[(f64, f64)], p: f64) -> f64 {
+    if f.is_empty() {
+        return p;
+    }
+    if p <= f[0].0 {
+        return f[0].1;
+    }
+    for w in f.windows(2) {
+        if p <= w[1].0 {
+            let t = (p - w[0].0) / (w[1].0 - w[0].0).max(1e-12);
+            return w[0].1 + t * (w[1].1 - w[0].1);
+        }
+    }
+    f[f.len() - 1].1
+}
+
+struct Metrics {
+    n: usize,
+    brier: f64,
+    ece: f64,
+    pr: Vec<(f64, f64, f64)>,
+    rel: Vec<(usize, f64, f64)>,
+}
+
+fn metrics(pred: &[(f64, bool)]) -> Metrics {
+    let n = pred.len();
+    let brier = pred.iter().map(|(p, y)| (p - if *y { 1.0 } else { 0.0 }).powi(2)).sum::<f64>() / n as f64;
+    let edges = [0.0, 0.05, 0.2, 0.5, 0.8, 0.95, 1.0001];
+    let mut ece = 0.0;
+    let mut rel = vec![];
+    for w in edges.windows(2) {
+        let b: Vec<&(f64, bool)> = pred.iter().filter(|(p, _)| *p >= w[0] && *p < w[1]).collect();
+        if b.is_empty() {
+            rel.push((0, f64::NAN, f64::NAN));
+            continue;
+        }
+        let mp = b.iter().map(|x| x.0).sum::<f64>() / b.len() as f64;
+        let fr = b.iter().filter(|x| x.1).count() as f64 / b.len() as f64;
+        ece += (mp - fr).abs() * b.len() as f64 / n as f64;
+        rel.push((b.len(), mp, fr));
+    }
+    let pr = [0.5, 0.7, 0.9]
+        .iter()
+        .map(|&th| {
+            let tp = pred.iter().filter(|(p, y)| *p >= th && *y).count() as f64;
+            let fp = pred.iter().filter(|(p, y)| *p >= th && !*y).count() as f64;
+            let fnn = pred.iter().filter(|(p, y)| *p < th && *y).count() as f64;
+            (th, if tp + fp > 0.0 { tp / (tp + fp) } else { f64::NAN }, if tp + fnn > 0.0 { tp / (tp + fnn) } else { f64::NAN })
+        })
+        .collect();
+    Metrics { n, brier, ece, pr, rel }
+}
+
+fn print_metrics(name: &str, m: &Metrics) {
+    let pr: Vec<String> = m.pr.iter().map(|(t, p, r)| format!("@{t}: P {p:.2} R {r:.2}")).collect();
+    let rel: Vec<String> = m.rel.iter().map(|(n, mp, f)| format!("n={n} {mp:.2}->{f:.2}")).collect();
+    println!("{name:<28} n={} Brier {:.4} ECE {:.4} | {} | rel[0-.05,-.2,-.5,-.8,-.95,1]: {}", m.n, m.brier, m.ece, pr.join(" "), rel.join("; "));
+}
+
+fn calibration_study(companies: &[Company], step: i64, paths: usize, threads: usize) {
+    let params = Params { calibrate: false, horizon: 30, seed: 1, n_paths: paths, ..Default::default() };
+    let res = run_variant(companies, &params, step, threads);
+    let mut samples: Vec<Sample> = vec![];
+    for (ci, r) in res.iter().enumerate() {
+        let Some(bt) = &r.bt else { continue };
+        for ((oi, x), (_, y)) in bt.risk_feats.iter().zip(&bt.risk_samples) {
+            samples.push(Sample { company: ci, origin: *oi, x: x.clone(), y: *y });
+        }
+    }
+    println!("calibration samples: {}, positives {}", samples.len(), samples.iter().filter(|s| s.y).count());
+    let sets: Vec<(&str, Vec<usize>)> = vec![
+        ("platt(raw)", vec![0]),
+        ("logit(raw+opening)", vec![0, 1]),
+        ("logit(raw+opening+frac_neg)", vec![0, 1, 2]),
+        ("logit(raw+opening+hist)", vec![0, 1, 2, 3, 7]),
+        ("logit(all)", vec![0, 1, 2, 3, 4, 5, 6, 7]),
+    ];
+    let l2 = 5.0;
+    let folds = 5;
+    for (proto, test_of) in [("leave-company-out (5 folds)", 0), ("temporal (train origin<20, test >=23)", 1)] {
+        println!("\n##### {proto}");
+        let in_test = |s: &Sample| if test_of == 0 { false } else { s.origin >= 23 };
+        let all_idx: Vec<&Sample> = if test_of == 0 { samples.iter().collect() } else { samples.iter().filter(|s| in_test(s)).collect() };
+        let raw: Vec<(f64, bool)> = all_idx.iter().map(|s| (sigmoid(s.x[0]), s.y)).collect();
+        print_metrics("raw (before)", &metrics(&raw));
+        // изотоника
+        let mut preds: Vec<(f64, bool)> = vec![];
+        let mut pl: Vec<Vec<(f64, bool)>> = vec![vec![]; sets.len()];
+        let mut pg: Vec<Vec<(f64, bool)>> = vec![vec![]; sets.len()];
+        let n_iter = if test_of == 0 { folds } else { 1 };
+        for f in 0..n_iter {
+            let (train, test): (Vec<&Sample>, Vec<&Sample>) = if test_of == 0 {
+                (samples.iter().filter(|s| s.company % folds != f).collect(), samples.iter().filter(|s| s.company % folds == f).collect())
+            } else {
+                (samples.iter().filter(|s| s.origin < 20).collect(), samples.iter().filter(|s| s.origin >= 23).collect())
+            };
+            let iso = fit_isotonic(&train);
+            preds.extend(test.iter().map(|s| (iso_apply(&iso, sigmoid(s.x[0])), s.y)));
+            for (k, (_, cols)) in sets.iter().enumerate() {
+                let (b, w) = fit_logistic(&train, cols, l2);
+                pl[k].extend(test.iter().map(|s| (forecast::calibrate_with(&s.x, b, &w), s.y)));
+                pg[k].extend(test.iter().map(|s| (forecast::guard_risk(forecast::calibrate_with(&s.x, b, &w), &s.x), s.y)));
+            }
+        }
+        print_metrics("isotonic(raw)", &metrics(&preds));
+        for (k, (nm, _)) in sets.iter().enumerate() {
+            print_metrics(nm, &metrics(&pl[k]));
+            print_metrics(&format!("  +guard {nm}"), &metrics(&pg[k]));
+        }
+    }
+    println!("\n##### fit on all data (for embedding)");
+    let all: Vec<&Sample> = samples.iter().collect();
+    for (nm, cols) in &sets {
+        let (b, w) = fit_logistic(&all, cols, l2);
+        println!("{nm}: CAL_B = {b:.6}; CAL_W = {:?}", w.iter().map(|x| (x * 1e6).round() / 1e6).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn smp(company: usize, origin: usize, raw: f64, y: bool) -> Sample {
+        let mut x = vec![0.0; 8];
+        x[0] = (raw / (1.0 - raw)).ln();
+        Sample { company, origin, x, y }
+    }
+
+    #[test]
+    fn isotonic_is_monotone_and_fixes_overconfidence() {
+        // сырая вероятность 0.8, факт 10 % -> изотоника ~0.1
+        let mut v = vec![];
+        for i in 0..200 {
+            v.push(smp(0, i, 0.8, i % 10 == 0));
+            v.push(smp(0, i, 0.2, i % 50 == 0));
+            v.push(smp(0, i, 0.99, i % 10 != 0));
+        }
+        let refs: Vec<&Sample> = v.iter().collect();
+        let f = fit_isotonic(&refs);
+        assert!(f.windows(2).all(|w| w[0].1 <= w[1].1 + 1e-12));
+        assert!((iso_apply(&f, 0.8) - 0.1).abs() < 0.03);
+        assert!(iso_apply(&f, 0.99) > 0.85);
+    }
+
+    #[test]
+    fn logistic_recovers_platt_scaling_and_improves_brier() {
+        let mut v = vec![];
+        for i in 0..600 {
+            v.push(smp(0, i, 0.6, i % 20 == 0)); // 5 %
+            v.push(smp(0, i, 0.98, i % 5 != 0)); // 80 %
+        }
+        let refs: Vec<&Sample> = v.iter().collect();
+        let (b, w) = fit_logistic(&refs, &[0], 0.1);
+        let before = metrics(&v.iter().map(|s| (sigmoid(s.x[0]), s.y)).collect::<Vec<_>>());
+        let after = metrics(&v.iter().map(|s| (forecast::calibrate_with(&s.x, b, &w), s.y)).collect::<Vec<_>>());
+        assert!(after.brier < before.brier * 0.5, "{} vs {}", after.brier, before.brier);
+        assert!(after.ece < 0.02);
+    }
+
+    #[test]
+    fn metrics_perfect_and_worst() {
+        let m = metrics(&[(1.0, true), (0.0, false)]);
+        assert!(m.brier < 1e-12 && m.ece < 1e-12);
+        let m = metrics(&[(1.0, false), (0.0, true)]);
+        assert!((m.brier - 1.0).abs() < 1e-12);
+    }
 }

@@ -226,10 +226,10 @@ function AddModal({ base, onClose, onDone }: { base: string; onClose: () => void
   async function addTax(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    const kop = parseKop(tax);
-    if (!kop) return setError("Введите сумму налога");
+    const kop = tax.trim() ? parseKop(tax) : null;
+    if (tax.trim() && !kop) return setError("Введите сумму налога, например 250 000");
     setBusy(true);
-    try { await api.post(`${base}/expected-events/tax-calendar`, { amount_kop: kop }); onDone(); }
+    try { await api.post(`${base}/expected-events/tax-calendar`, kop ? { amount_kop: kop } : {}); onDone(); }
     catch (err) { setError((err as Error).message); setBusy(false); }
   }
   return (
@@ -255,8 +255,8 @@ function AddModal({ base, onClose, onDone }: { base: string; onClose: () => void
         </form>
         <hr style={{ border: 0, borderTop: "1px solid var(--line)", width: "100%" }} />
         <form className="form-grid" onSubmit={addTax}>
-          <Field label="Налоговый календарь: ЕНП до 28-го, сумма, ₽" hint="Добавит два ближайших срока"><input inputMode="decimal" value={tax} onChange={(e) => setTax(e.target.value)} /></Field>
-          <div><button className="btn secondary" disabled={busy}>Добавить ЕНП</button></div>
+          <Field label="Налоговый календарь ФНС: ЕНП, сумма, ₽" hint="Сроки берутся с nalog.gov.ru. Без суммы возьмём типичный платёж из вашей выписки"><input inputMode="decimal" value={tax} onChange={(e) => setTax(e.target.value)} /></Field>
+          <div><button className="btn secondary" disabled={busy}>Подтянуть сроки ЕНП</button></div>
         </form>
         {error && <Notice tone="risk">{error}</Notice>}
       </div>

@@ -12,6 +12,12 @@ x-pyhealth: &pyhealth
   retries: 5
   start_period: 5s
 
+x-rshealth: &rshealth
+  interval: 10s
+  timeout: 3s
+  retries: 5
+  start_period: 5s
+
 services:
   auth:
     <<: *hardening
@@ -42,23 +48,138 @@ services:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8003/live', timeout=2)"]
 
+  ecp:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: ecp}
+    environment:
+      ECP_DB: /data/ecp.db
+      AUTH_URL: http://auth:8001
+    volumes: [ecp-data:/data]
+    networks: [internal]
+    depends_on:
+      auth: {condition: service_healthy}
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8007/live', timeout=2)"]
+
+  onec:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: onec}
+    environment:
+      MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
+    networks: [internal]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8004/live', timeout=2)"]
+
+  edo:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: edo}
+    environment:
+      MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
+    networks: [internal]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8005/live', timeout=2)"]
+
+  bank:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: bank}
+    environment:
+      MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
+    networks: [internal]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8006/live', timeout=2)"]
+
+  integrator:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: integrator}
+    # имитаторы 1С/ЭДО/банка и integrator живут только во внутренней сети
+    environment:
+      ONEC_URL: http://onec:8004
+      EDO_URL: http://edo:8005
+      BANK_URL: http://bank:8006
+      MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
+      INTEGRATOR_TODAY: ${MOCK_TODAY:-2026-09-29}
+    networks: [internal]
+    depends_on:
+      onec: {condition: service_healthy}
+      edo: {condition: service_healthy}
+      bank: {condition: service_healthy}
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8008/live', timeout=2)"]
+
+  ledger:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/rust.Dockerfile, target: ledger}
+    environment:
+      INTERNAL_ADDR: 0.0.0.0:3002
+      DB_PATH: /data/ledger.db
+      PARSER_URL: http://parser:8002
+    volumes: [ledger-data:/data]
+    networks: [internal]
+    depends_on:
+      parser: {condition: service_healthy}
+    healthcheck:
+      <<: *rshealth
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3002/live"]
+
+  forecast:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/rust.Dockerfile, target: forecast}
+    environment:
+      INTERNAL_ADDR: 0.0.0.0:3003
+      DB_PATH: /data/forecast.db
+      LEDGER_URL: http://ledger:3002
+    volumes: [forecast-data:/data]
+    networks: [internal]
+    depends_on:
+      ledger: {condition: service_healthy}
+    healthcheck:
+      <<: *rshealth
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3003/live"]
+
+  planfact:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/rust.Dockerfile, target: planfact}
+    environment:
+      INTERNAL_ADDR: 0.0.0.0:3004
+      LEDGER_URL: http://ledger:3002
+      FORECAST_URL: http://forecast:3003
+    networks: [internal]
+    depends_on:
+      ledger: {condition: service_healthy}
+      forecast: {condition: service_healthy}
+    healthcheck:
+      <<: *rshealth
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3004/live"]
+
   web-api:
     <<: *hardening
-    build: {context: .., dockerfile: infra/docker/api.Dockerfile}
-    # порты не публикуются: наружу смотрит только gateway; internal API :3100 доступен лишь внутри сети
+    build: {context: .., dockerfile: infra/docker/rust.Dockerfile, target: api}
+    # порты не публикуются: наружу смотрит только gateway; internal API :3100 доступен лишь внутри сети.
+    # Собственной БД у api нет.
     environment:
       PUBLIC_ADDR: 0.0.0.0:3000
       INTERNAL_ADDR: 0.0.0.0:3100
       AUTH_URL: http://auth:8001
-      PARSER_URL: http://parser:8002
-      DB_PATH: /data/core.db
+      ECP_URL: http://ecp:8007
+      GOV_URL: http://gov:8003
+      LEDGER_URL: http://ledger:3002
+      FORECAST_URL: http://forecast:3003
+      PLANFACT_URL: http://planfact:3004
+      INTEGRATOR_URL: http://integrator:8008
       WEB_DIR: /app/web/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
-    volumes: [api-data:/data]
     networks: [internal, edge]
     depends_on:
       auth: {condition: service_healthy}
-      parser: {condition: service_healthy}
+      ecp: {condition: service_healthy}
+      ledger: {condition: service_healthy}
+      forecast: {condition: service_healthy}
+      planfact: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/live"]
       interval: 10s
@@ -79,9 +200,11 @@ services:
       web-api: {condition: service_healthy}
 
 networks:
-  internal: {internal: true}   # auth, parser, api — без выхода наружу
+  internal: {internal: true}   # все сервисы, кроме gateway и gov/api на edge — без выхода наружу
   edge: {}                     # gateway <-> api
 
 volumes:
   auth-data:
-  api-data:
+  ecp-data:
+  ledger-data:
+  forecast-data:

@@ -1,4 +1,4 @@
-//! Хранилище (SQLite для стенда разработки; схема совместима по смыслу с PostgreSQL-сущностями из архитектуры).
+//! Хранилище ledger.db — единственный владелец данных компаний (SQLite для стенда разработки; схема совместима по смыслу с PostgreSQL-сущностями из архитектуры).
 
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
@@ -32,12 +32,9 @@ pub fn open(path: &str) -> Db {
             id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES companies(id),
             date TEXT NOT NULL, amount_kop INTEGER NOT NULL, title TEXT NOT NULL,
             counterparty TEXT NOT NULL DEFAULT '', source TEXT NOT NULL,
-            confidence REAL NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS forecast_runs(
-            id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES companies(id),
-            created_at TEXT NOT NULL, data_revision INTEGER NOT NULL,
-            scenario TEXT, params TEXT NOT NULL, result TEXT NOT NULL);
-        CREATE INDEX IF NOT EXISTS runs_company ON forecast_runs(company_id, created_at);
+            confidence REAL NOT NULL, created_at TEXT NOT NULL,
+            external_id TEXT);
+        CREATE UNIQUE INDEX IF NOT EXISTS events_external ON expected_events(company_id, external_id);
         CREATE TABLE IF NOT EXISTS audit_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
             company_id TEXT, action TEXT NOT NULL, object_id TEXT, outcome TEXT NOT NULL, request_id TEXT);",

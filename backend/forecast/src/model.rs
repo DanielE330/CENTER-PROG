@@ -21,26 +21,7 @@ const GAP_MIN_SPAN_DAYS: i64 = 5;
 const DEFAULT_PAY_DELAY: [i64; 7] = [0, 0, 1, 2, 3, 5, 7];
 const OVERDUE_IN_DELAY: [i64; 6] = [1, 2, 3, 5, 7, 10];
 
-#[derive(Clone, Debug)]
-pub struct Tx {
-    pub date: NaiveDate,
-    pub amount: i64,
-    pub counterparty: String,
-    pub inn: String,
-    pub purpose: String,
-    pub category: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Event {
-    pub id: String,
-    pub date: NaiveDate,
-    pub amount: i64,
-    pub title: String,
-    pub source: String,
-    pub confidence: f64,
-    pub counterparty: String,
-}
+pub use common::{Event, Tx};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Scenario {
@@ -142,6 +123,8 @@ pub struct Risk {
     /// медиана максимального дефицита среди траекторий с разрывом
     pub deficit_given_break_median: i64,
     pub warnings: Vec<Warning>,
+    /// «сырая» вероятность разрыва по доле траекторий (до калибровки); `shortfall_probability` — после неё
+    pub raw_shortfall_probability: f64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -164,6 +147,9 @@ pub struct ForecastResult {
     pub risk: Risk,
     pub rules: Vec<Rule>,
     pub planned: Vec<PlannedItem>,
+    /// признаки калибровки риска (см. `risk_features`); в JSON не выводятся
+    #[serde(skip)]
+    pub risk_feats: Vec<f64>,
 }
 
 #[derive(Debug)]
@@ -210,11 +196,13 @@ pub struct Params {
     pub shape_keep: f64,
     /// Возврат остатка к типичному уровню: доля разрыва, закрываемая за рабочий день (0 — выключено).
     pub revert: f64,
+    /// Калибровать вероятность разрыва (см. `calibrate_risk`); false — отдавать долю траекторий как есть.
+    pub calibrate: bool,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { horizon: 30, seed: 42, n_paths: N_PATHS, residual: ResidualMode::Block, drift_keep: 0.0, drift_tau: 0.0, shape_keep: 0.5, revert: 0.015 }
+        Params { horizon: 30, seed: 42, n_paths: N_PATHS, residual: ResidualMode::Block, drift_keep: 0.0, drift_tau: 0.0, shape_keep: 0.5, revert: 0.015, calibrate: true }
     }
 }
 
@@ -1011,7 +999,7 @@ pub fn forecast(
         });
     }
     let breaks: Vec<usize> = first_break.iter().flatten().copied().collect();
-    let shortfall_probability = breaks.len() as f64 / n as f64;
+    let raw_probability = breaks.len() as f64 / n as f64;
     let first_break_date = if breaks.is_empty() {
         None
     } else {
@@ -1027,6 +1015,10 @@ pub fn forecast(
     given.sort_unstable();
     let deficit_given_break_median = median_i64(&given);
     let median_path_deficit = (-median_path.iter().copied().min().unwrap_or(0)).max(0);
+
+    let scale = weekly_turnover(txs);
+    let risk_feats = risk_features(raw_probability, n, opening, scale, balances, as_of, &days);
+    let shortfall_probability = if p.calibrate && opening >= 0 { calibrate_risk(&risk_feats) } else { raw_probability };
 
     let level = if shortfall_probability >= 0.5 {
         "high"
@@ -1119,10 +1111,95 @@ pub fn forecast(
         n_paths: n,
         quality: Quality { level: level_q, history_days, notes },
         days,
-        risk: Risk { level, shortfall_probability, first_break_date, possible_break_date, median_path_deficit, max_deficit_p90, deficit_given_break_median, warnings },
+        risk: Risk { level, shortfall_probability, first_break_date, possible_break_date, median_path_deficit, max_deficit_p90, deficit_given_break_median, warnings, raw_shortfall_probability: raw_probability },
         rules,
         planned,
+        risk_feats,
     })
+}
+
+// ---------- калибровка вероятности разрыва ----------
+/// Названия признаков калибровки (порядок = порядок в `risk_features`).
+pub const RISK_FEATURE_NAMES: [&str; 8] = [
+    "logit(raw)",
+    "asinh(opening/scale)",
+    "frac_neg_120d",
+    "asinh(min_120d/scale)",
+    "asinh(min p10 path/scale)",
+    "asinh(min p50 path/scale)",
+    "asinh(spread p90-p10 @h/scale)",
+    "asinh(median_120d/scale)",
+];
+
+fn asinh_s(x: f64) -> f64 {
+    x.asinh()
+}
+
+/// Безразмерные признаки для калибровки P(разрыв): «сырая» доля траекторий и положение остатка
+/// относительно типичного масштаба компании (медианного недельного оборота).
+pub fn risk_features(raw: f64, n_paths: usize, opening: i64, scale: f64, balances: &BTreeMap<NaiveDate, i64>, as_of: NaiveDate, days: &[DayPoint]) -> Vec<f64> {
+    let eps = 0.5 / n_paths.max(1) as f64;
+    let rp = raw.clamp(eps, 1.0 - eps);
+    let hist: Vec<i64> = balances.range(as_of - Duration::days(120)..=as_of).map(|(_, b)| *b).collect();
+    let (frac_neg, hmin, hmed) = if hist.is_empty() {
+        (0.0, opening as f64, opening as f64)
+    } else {
+        let mut v = hist.clone();
+        v.sort_unstable();
+        (hist.iter().filter(|b| **b < 0).count() as f64 / hist.len() as f64, v[0] as f64, v[v.len() / 2] as f64)
+    };
+    let min_p10 = days.iter().map(|d| d.p10).min().unwrap_or(opening) as f64;
+    let min_p50 = days.iter().map(|d| d.p50).min().unwrap_or(opening) as f64;
+    let spread = days.last().map_or(0.0, |d| (d.p90 - d.p10) as f64);
+    vec![
+        (rp / (1.0 - rp)).ln(),
+        asinh_s(opening as f64 / scale),
+        frac_neg,
+        asinh_s(hmin / scale),
+        asinh_s(min_p10 / scale),
+        asinh_s(min_p50 / scale),
+        asinh_s(spread / scale),
+        asinh_s(hmed / scale),
+    ]
+}
+
+/// Логистическая калибровка: коэффициенты подобраны офлайн на rolling-origin backtest датасета
+/// (`eval --calibrate`), проверены leave-company-out.
+/// Используются только logit(raw) и признаки истории (не зависят от сценария), поэтому калиброванная вероятность
+/// монотонна по сырой: сценарий, повышающий сырой риск, не может понизить итоговый.
+const CAL_B: f64 = -3.553637;
+const CAL_W: [f64; 8] = [0.203115, -1.207358, 6.198203, -1.72879, 0.0, 0.0, 0.0, 1.008703];
+
+pub fn calibrate_with(feats: &[f64], b: f64, w: &[f64]) -> f64 {
+    let z: f64 = b + feats.iter().zip(w).map(|(x, c)| x * c).sum::<f64>();
+    1.0 / (1.0 + (-z).exp())
+}
+
+/// Калибровка + страховка от неправдоподобно низкой оценки при «глубоком» медианном дефиците.
+/// Если медианная траектория уходит ниже нуля больше чем на 0.5 недельного оборота, это уже не колебание около нуля
+/// (на нём училась калибровка), а структурный провал (крупный известный платёж, сценарий): доверяем сырой доле траекторий,
+/// с плавным переходом до полного доверия при дефиците 2 недельных оборота.
+pub fn guard_risk(cal: f64, feats: &[f64]) -> f64 {
+    let raw = 1.0 / (1.0 + (-feats[0]).exp());
+    let deficit = -feats[5].sinh(); // в недельных оборотах
+    let g = ((deficit - 0.5) / 1.5).clamp(0.0, 1.0);
+    cal.max(raw * g)
+}
+
+pub fn calibrate_risk(feats: &[f64]) -> f64 {
+    guard_risk(calibrate_with(feats, CAL_B, &CAL_W), feats)
+}
+
+/// Медианный недельный оборот (сумма |операций| по неделям), коп.; масштаб для безразмерных признаков.
+fn weekly_turnover(txs: &[Tx]) -> f64 {
+    let base = NaiveDate::from_ymd_opt(1970, 1, 5).unwrap();
+    let mut w: BTreeMap<i64, i64> = BTreeMap::new();
+    for t in txs {
+        *w.entry((t.date - base).num_days().div_euclid(7)).or_default() += t.amount.abs();
+    }
+    let mut v: Vec<i64> = w.values().copied().collect();
+    v.sort_unstable();
+    v.get(v.len() / 2).copied().unwrap_or(1).max(1) as f64
 }
 
 fn scale_amount(a: i64, in_scale: f64, out_scale: f64, is_rule: bool) -> i64 {
@@ -1163,6 +1240,10 @@ pub struct Backtest {
     #[serde(skip)]
     #[allow(dead_code)]
     pub risk_samples: Vec<(f64, bool)>,
+    /// признаки калибровки (`risk_features`) на тех же контрольных датах и порядковый номер origin
+    #[serde(skip)]
+    #[allow(dead_code)]
+    pub risk_feats: Vec<(usize, Vec<f64>)>,
     /// Прогноз на 14 дней вперёд, сделанный на каждой контрольной дате, против факта на целевую дату.
     pub series_14: Vec<SeriesPoint>,
     pub note: String,
@@ -1191,6 +1272,7 @@ pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days:
     let (mut tp, mut fp, mut fn_, mut gaps, mut n_orig) = (0, 0, 0, 0, 0);
     let mut series_14: Vec<SeriesPoint> = vec![];
     let mut risk_samples: Vec<(f64, bool)> = vec![];
+    let mut risk_feats: Vec<(usize, Vec<f64>)> = vec![];
     let bal_at = |d: NaiveDate| balances.range(..=d).next_back().map(|x| *x.1);
     let hs = [7usize, 14, 30];
     while origin + Duration::days(max_h) <= last {
@@ -1222,6 +1304,7 @@ pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days:
             }
             let actual_gap = (1..=30).any(|k| bal_at(origin + Duration::days(k)).map_or(false, |b| b < 0));
             risk_samples.push((fc.risk.shortfall_probability, actual_gap));
+            risk_feats.push((n_orig - 1, fc.risk_feats.clone()));
             let alarm = fc.risk.shortfall_probability >= 0.5;
             if actual_gap {
                 gaps += 1;
@@ -1266,6 +1349,7 @@ pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days:
         alarm_fp: fp,
         alarm_fn: fn_,
         risk_samples,
+        risk_feats,
         series_14,
         note: "Rolling-origin: модель обучается только на данных до точки прогноза; регулярности пересчитываются на каждом срезе. MAE в копейках.".into(),
     })
@@ -1484,5 +1568,61 @@ mod tests {
             assert!(fc.risk.shortfall_probability > 0.5, "overdraft opening means high risk");
             assert!(fc.quality.notes.iter().any(|n| n.contains("овердрафт")));
         }
+    }
+
+    #[test]
+    fn calibration_is_monotone_in_raw_and_lowers_mid_range_for_healthy_history() {
+        // здоровая история: остаток выше нуля, дней в минусе нет
+        let mk = |raw: f64| vec![(raw / (1.0 - raw)).ln(), 2.0f64, 0.0, 1.5, 0.0, 0.0, 0.0, 2.0];
+        let mut prev = 0.0;
+        for r in [0.01, 0.1, 0.3, 0.5, 0.7, 0.9, 0.99] {
+            let c = calibrate_risk(&mk(r));
+            assert!(c >= prev, "monotone: {c} < {prev} at raw {r}");
+            prev = c;
+        }
+        // исторически «завышенная» середина: 0.5 сырых -> заметно меньше
+        assert!(calibrate_risk(&mk(0.5)) < 0.25);
+    }
+
+    #[test]
+    fn habitual_overdraft_history_raises_calibrated_risk() {
+        let mk = |frac_neg: f64, hmin: f64| vec![0.0f64, 0.3, frac_neg, hmin, 0.0, 0.0, 0.0, 0.5];
+        let healthy = calibrate_risk(&mk(0.0, 1.0));
+        let pinned = calibrate_risk(&mk(0.4, -0.5));
+        assert!(pinned > healthy * 3.0, "{pinned} vs {healthy}");
+    }
+
+    #[test]
+    fn deep_median_deficit_keeps_raw_probability() {
+        // медиана уходит на 3 недельных оборота ниже нуля: калибровка (обученная на колебаниях около нуля) не должна «успокаивать»
+        let mut f = vec![(0.97f64 / 0.03).ln(), 3.0, 0.0, 3.0, 0.0, (-3.0f64).asinh(), 0.0, 3.0];
+        let p = calibrate_risk(&f);
+        assert!(p > 0.95, "{p}");
+        f[5] = 0.0;
+        assert!(calibrate_risk(&f) < 0.5);
+    }
+
+    #[test]
+    fn result_exposes_raw_and_calibrated_probability() {
+        let (v, mut b) = sample();
+        let last = *b.keys().last().unwrap();
+        b.insert(last, 12_000_000);
+        let on = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 3, n_paths: 200, ..Default::default() }).unwrap();
+        let off = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 3, n_paths: 200, calibrate: false, ..Default::default() }).unwrap();
+        assert_eq!(on.risk.raw_shortfall_probability, off.risk.shortfall_probability);
+        assert_eq!(off.risk.raw_shortfall_probability, off.risk.shortfall_probability);
+        assert_eq!(on.risk_feats.len(), RISK_FEATURE_NAMES.len());
+        assert!((0.0..=1.0).contains(&on.risk.shortfall_probability));
+        let j = serde_json::to_value(&on.risk).unwrap();
+        assert!(j.get("shortfall_probability").is_some() && j.get("level").is_some() && j.get("raw_shortfall_probability").is_some());
+    }
+
+    #[test]
+    fn negative_opening_keeps_raw_probability_even_when_calibrating() {
+        let (v, mut b) = sample();
+        let last = *b.keys().last().unwrap();
+        b.insert(last, -1_000);
+        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 5, seed: 1, n_paths: 50, ..Default::default() }).unwrap();
+        assert_eq!(fc.risk.shortfall_probability, fc.risk.raw_shortfall_probability);
     }
 }
