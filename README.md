@@ -19,6 +19,7 @@
 ## Запуск без Docker
     infra/scripts/dev.sh    # собирает frontend и Rust workspace, поднимает все сервисы на http://localhost:3000
     infra/scripts/smoke.sh  # сквозной тест через curl на запущенном стеке (регистрация, импорт, прогноз, налоговый календарь, sync)
+    infra/scripts/seed_demo.sh  # загружает выписку C001 демо-пользователю (demo@example.com) и строит прогноз
     infra/scripts/dev.sh stop
 
 ## Запуск (только Docker)
@@ -27,6 +28,7 @@
     make -C infra demo-data   # создаёт data/demo_statement.csv для загрузки
     make -C infra test        # pytest + cargo test (workspace) в контейнерах
     make -C infra smoke       # сквозной тест на http://localhost:3000
+    make -C infra seed        # демо-данные для demo@example.com (стек должен быть запущен)
     make -C infra down
 
 Откройте http://localhost:3000. Демо-вход: `demo@example.com` / `demo12345` (создаётся при `DEMO_SEED=1`, это значение по умолчанию; для отключения задайте `DEMO_SEED=0`).

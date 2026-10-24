@@ -1,4 +1,4 @@
-.PHONY: up down logs demo-data test smoke
+.PHONY: up down logs demo-data seed test smoke
 ROOT := $(abspath $(CURDIR)/..)
 up:
 	docker compose up --build -d
@@ -13,3 +13,5 @@ test:
 	docker run --rm -v $(ROOT):/src -w /src/backend -e CARGO_TARGET_DIR=/tmp/target rust:1-bookworm cargo test
 smoke:
 	./scripts/smoke.sh
+seed:
+	$(ROOT)/infra/scripts/seed_demo.sh
