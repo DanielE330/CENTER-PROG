@@ -99,6 +99,20 @@ services:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8006/live', timeout=2)"]
 
+  demo-feed:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: demo_feed}
+    # лента демо «Прошла неделя»: операции датасета после даты отсечки, только во внутренней сети
+    environment:
+      DEMO_DATASET_DIR: /dataset
+      DEMO_COMPANY: ${DEMO_COMPANY:-C001}
+      DEMO_CUTOFF: ${DEMO_CUTOFF:-2026-07-12}
+    networks: [internal]
+    volumes: ["${DATASET_DIR:-../data/demo}:/dataset:ro"]  # тот же датасет, из которого seed_demo.sh грузит выписку
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8012/live', timeout=2)"]
+
   integrator:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: integrator}
@@ -117,6 +131,46 @@ services:
     healthcheck:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8008/live', timeout=2)"]
+
+  llm-gateway:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: llm_gateway}
+    # единственный сервис с выходом к облачным LLM (edge). Ключи только из окружения хоста/infra/.env, в репозитории их нет.
+    # Без LLM_PROVIDER и ключа консультант отвечает шаблоном из прогноза.
+    environment:
+      LLM_GATEWAY_DB: /data/llm_gateway.db
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_DAILY_TOKEN_BUDGET: ${LLM_DAILY_TOKEN_BUDGET:-200000}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes: [llm-gateway-data:/data]
+    networks: [internal, edge]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8010/live', timeout=2)"]
+
+  advisor:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: advisor}
+    # консультант читает ledger/forecast/planfact и вызывает llm-gateway; сам ничего не записывает
+    environment:
+      LLM_GATEWAY_URL: http://llm-gateway:8010
+      LEDGER_URL: http://ledger:3002
+      FORECAST_URL: http://forecast:3003
+      PLANFACT_URL: http://planfact:3004
+    networks: [internal]
+    depends_on:
+      llm-gateway: {condition: service_healthy}
+      ledger: {condition: service_healthy}
+      forecast: {condition: service_healthy}
+      planfact: {condition: service_healthy}
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8011/live', timeout=2)"]
 
   ledger:
     <<: *hardening
@@ -178,6 +232,9 @@ services:
       FORECAST_URL: http://forecast:3003
       PLANFACT_URL: http://planfact:3004
       INTEGRATOR_URL: http://integrator:8008
+      ADVISOR_URL: http://advisor:8011
+      DEMO_FEED_URL: http://demo-feed:8012
+      DEMO_FEED_ENABLED: ${DEMO_FEED_ENABLED:-${DEMO_SEED:-1}}  # демо «Прошла неделя» только для demo@example.com
       WEB_DIR: /app/frontend/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     networks: [internal, edge]
@@ -215,3 +272,4 @@ volumes:
   ecp-data:
   ledger-data:
   forecast-data:
+  llm-gateway-data:

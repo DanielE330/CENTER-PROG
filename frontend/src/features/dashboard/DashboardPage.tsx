@@ -22,6 +22,7 @@ import type { ForecastView } from '../forecast/model'
 import { ImportStatement } from '../settings/ImportStatement'
 import { PlannedList } from './PlannedList'
 import { KeyRateCard } from './KeyRateCard'
+import { DemoWeekCard } from './DemoWeekCard'
 
 const WINDOWS = [7, 14, 30, 60, 90]
 
@@ -63,6 +64,8 @@ export default function DashboardPage() {
           </>
         }
       />
+
+      <DemoWeekCard />
 
       {recalc.isError && <Notice tone="danger">{errorText(t, recalc.error)}</Notice>}
 

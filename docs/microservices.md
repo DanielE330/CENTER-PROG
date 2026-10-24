@@ -14,6 +14,9 @@
 | planfact | Rust, 3004 | Сравнение плана и факта (история и события из ledger, регулярные платежи из forecast) | — |
 | gov | Python, 8003 | Получение публичных данных госсайтов: ключевая ставка ЦБ, календари, налоговый календарь ФНС | кэш |
 | integrator | Python, 8008 | Забор счетов, договоров и документов из 1С, ЭДО и банка и приведение к ожидаемым событиям | — |
+| llm_gateway | Python, 8010 | Единственный выход к облачным LLM (Anthropic, OpenAI, Gemini, OpenRouter через httpx): маскирование ИНН/счетов/карт/контрагентов/ФИО перед отправкой и обратная подстановка в ответе, суточный бюджет токенов на пользователя, аудит обращений без содержимого, таймауты | `llm_gateway.db` (расход токенов, аудит) |
+| advisor | Python, 8011 | Консультант: агентный цикл с инструментами (прогноз и риск, ближайшие платежи и просрочки, план-факт, сценарий «что если», операции по категориям) поверх forecast/ledger/planfact и llm_gateway; только предлагает действия; без провайдера отвечает шаблоном из прогноза | — |
+| demo_feed | Python, 8012 | Лента демо «Прошла неделя»: по курсору (дате последней операции) отдаёт операции следующей недели демо-компании из датасета | — |
 | onec | Python, 8004 | Имитация 1С (OData) | — |
 | edo | Python, 8005 | Имитация ЭДО | — |
 | bank | Python, 8006 | Имитация банковского API выписок | — |
@@ -33,6 +36,25 @@ Cargo workspace в `backend/` (общие `Cargo.lock`, `rust-toolchain.toml`): 
 
 Внутренние сервисы доверяют api: проверка сессии и принадлежности компании выполняется только в api (чужая компания -> 404), ответы ledger/forecast/planfact передаются в SPA без изменений. Сервисы ledger/forecast/planfact слушают только адреса из env (в Docker — только внутренняя сеть); Caddy отдаёт 404 на `/internal/*`.
 
-Запуск: `infra/scripts/dev.sh` (собирает workspace, поднимает всё; `dev.sh stop`). Проверка: `cd backend && cargo test`, `infra/scripts/smoke.sh`. Docker: `make -C infra up`; образы — `infra/docker/rust.Dockerfile` (targets `ledger`, `forecast`, `planfact`, `api`) и `infra/docker/python.Dockerfile` (`auth`, `parser`, `gov`, `ecp`, `onec`, `edo`, `bank`, `integrator`). Сеть `edge` у gateway, api и gov; имитаторы, integrator и все Rust-сервисы кроме api — только `internal`.
+Запуск: `infra/scripts/dev.sh` (собирает workspace, поднимает всё; `dev.sh stop`). Проверка: `cd backend && cargo test`, `infra/scripts/smoke.sh`. Docker: `make -C infra up`; образы — `infra/docker/rust.Dockerfile` (targets `ledger`, `forecast`, `planfact`, `api`) и `infra/docker/python.Dockerfile` (`auth`, `parser`, `gov`, `ecp`, `onec`, `edo`, `bank`, `integrator`, `demo_feed`, `llm_gateway`, `advisor`). Сеть `edge` у gateway, api, gov и llm_gateway (выход к провайдерам); имитаторы, integrator и все Rust-сервисы кроме api — только `internal`.
 
 `POST /api/v1/companies/{cid}/integrations/sync` `{"external_company":"C001"}`: api запрашивает у integrator `GET /internal/v1/obligations?company=...` (`INTEGRATOR_URL`, `http://127.0.0.1:8008`), превращает обязательства в ожидаемые события (`source`: `contract` для kind=contract, иначе `invoice`) и записывает их в ledger через `expected-events/bulk`; ключ идемпотентности — уникальный индекс `(company_id, external_id)`. Ответ `{created, skipped, sources}`.
+
+## Демо «Прошла неделя»
+
+У демо-пользователя `demo@example.com` «сегодня» — дата отсечки внутри выписки: `seed_demo.sh` грузит C001 только до `DEMO_CUTOFF` (по умолчанию 2026-07-12; после неё 131 операция, около 13 недель), остальное лежит «в будущем» и отдаётся сервисом `demo_feed` (:8012; env `DEMO_DATASET_DIR`/`MOCK_DATASET_DIR`, `DEMO_CUTOFF`, `DEMO_COMPANY`; для `seed_demo.sh` и `demo_feed` нужен один и тот же датасет). `demo_feed`: `/live`, `/internal/v1/feed/status?company=&after=`, `/internal/v1/feed/week?company=&after=` (JSON: `from`, `to`, `count`, `weeks_left`, `filename`, `csv`) и `/internal/v1/feed/week.csv`. Курсор `after` — дата последней операции в ledger: лента отдаёт следующие 7 дней (пустые недели пропускаются), CSV той же структуры, что и загружаемая выписка; когда данные кончились — 409 `feed_exhausted`.
+
+api (`backend/api/src/demo.rs`, `DEMO_FEED_URL`, `DEMO_FEED_ENABLED=1`, `DEMO_EMAIL`, `DEMO_COMPANY`):
+- `GET /api/v1/companies/{cid}/demo/status` -> `{enabled:false}` для всех, кроме демо-компании; для демо `{enabled, available, as_of, cutoff, next_from, weeks_left, ops_left, finished}`.
+- `POST /api/v1/companies/{cid}/demo/advance-week` -> 201 `{added, from, to, new_as_of, previous_as_of, rows, skipped_duplicates, weeks_left, import_id, recalc_ms, forecast_vs_fact}`. Берёт неделю у ленты, прогоняет через обычный импорт ledger (upload, затем confirm), затем читает `forecasts/latest` (forecast сам пересчитывает устаревший базовый прогноз, это время и есть `recalc_ms`). `forecast_vs_fact` — прежний прогноз (P10/P50/P90) на `new_as_of` против фактического остатка. Параллельные вызовы выполняются по очереди. Ошибки: 403 `demo_disabled` (не демо-компания или флаг выключен), 404 (чужая компания), 409 `demo_not_seeded` / `feed_exhausted`, 503 `demo_feed_unavailable`.
+- Демо-компания: у ledger нет признака «демо», поэтому это компания пользователя с e-mail `DEMO_EMAIL` (по умолчанию `demo@example.com`) при `DEMO_FEED_ENABLED=1`; в compose флаг по умолчанию равен `DEMO_SEED`.
+
+В интерфейсе плашка на «Обзоре» (`DemoWeekCard`) видна только при `demo/status.enabled`; после кнопки обновляются все запросы (TanStack Query), на «Плане и факте» виден новый отрезок. Чтобы пройти демо заново: `./run.sh reset && ./run.sh` (или `DEMO_CUTOFF=none` для выписки целиком). Имитаторы 1С/ЭДО/банка по-прежнему живут на `MOCK_TODAY`.
+
+## Консультант с ИИ: llm_gateway (:8010) и advisor (:8011)
+
+Публичный API (api, `backend/api/src/advisor.rs`, сессия и принадлежность компании проверяет api):
+- `POST /api/v1/companies/{cid}/advisor/ask` `{question, history?:[{role,content}], lang?:"ru"|"en"}` -> `{answer, suggestions:[{id,type,params,title}], provider, model, notice, usage, tools_used}`. `provider:"none"` — ответ по шаблону из прогноза (дата и сумма ближайшего разрыва, причины, три действия); `notice`: `provider_not_configured` | `provider_unavailable` | `budget_exceeded`.
+- `POST /api/v1/companies/{cid}/advisor/suggestions/apply` `{type:"add_expected_payment", params:{direction:"in"|"out", amount_kop, date, title, counterparty?}}` -> 201 `{id,type}`: api заново проверяет параметры и создаёт ожидаемое событие в ledger (`source: manual`). Консультант сам ничего не записывает.
+
+Внутренние: `advisor` `POST /internal/v1/companies/{cid}/ask` (env `LLM_GATEWAY_URL`, `LEDGER_URL`, `FORECAST_URL`, `PLANFACT_URL`, `ADVISOR_TIMEOUT_SECONDS`=75); `llm_gateway` `POST /internal/v1/chat {user,messages,tools?,protect?,max_tokens?}`, `GET /internal/v1/status`, `GET /internal/v1/audit`. Ошибки шлюза: `provider_not_configured` (503), `budget_exceeded` (429), `provider_unavailable` (503/502). Env шлюза: `LLM_PROVIDER` (anthropic|openai|gemini|openrouter), `LLM_MODEL`, ключи `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`GEMINI_API_KEY`/`OPENROUTER_API_KEY` (только из окружения, в репозитории их нет), `LLM_DAILY_TOKEN_BUDGET` (по умолчанию 200000, 0 — без лимита), `LLM_TIMEOUT_SECONDS`, `LLM_GATEWAY_DB`. Включение: задать `LLM_PROVIDER` и ключ в `infra/.env` (или в окружении) и перезапустить `llm-gateway`.

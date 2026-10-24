@@ -18,3 +18,16 @@ dev = ["pytest>=8", "httpx>=0.27"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = [".venv", "**/__pycache__"]
+
+[tool.ruff.lint]
+# TODO: расширить набор (S, B, UP, I) после разбора существующих замечаний; сейчас только ошибки и предупреждения pycodestyle/pyflakes.
+select = ["E", "F", "W"]
+ignore = ["E501"]  # длину строк пока не проверяем
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402"]

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Build context: repo root. Targets: auth, parser, gov, ecp, onec, edo, bank, integrator, test.
+# Build context: repo root. Targets: auth, parser, gov, ecp, onec, edo, bank, integrator, demo_feed, llm_gateway, advisor, test.
 ARG SVC=auth
 FROM python:3.12-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
@@ -54,6 +54,22 @@ FROM base AS integrator
 USER app
 EXPOSE 8008
 CMD ["uvicorn", "integrator.app:app", "--host", "0.0.0.0", "--port", "8008"]
+
+FROM base AS demo_feed
+USER app
+EXPOSE 8012
+CMD ["uvicorn", "demo_feed.app:app", "--host", "0.0.0.0", "--port", "8012"]
+
+FROM base AS llm_gateway
+ENV LLM_GATEWAY_DB=/data/llm_gateway.db
+USER app
+EXPOSE 8010
+CMD ["uvicorn", "llm_gateway.app:app", "--host", "0.0.0.0", "--port", "8010"]
+
+FROM base AS advisor
+USER app
+EXPOSE 8011
+CMD ["uvicorn", "advisor.app:app", "--host", "0.0.0.0", "--port", "8011"]
 
 FROM base AS test
 RUN uv sync --frozen

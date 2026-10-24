@@ -197,6 +197,33 @@ export interface TaxCalendarRequest {
   usnObject?: 'income' | 'income_expenses'
 }
 
+/** Demo «Прошла неделя» (docs/microservices.md): `enabled=false` for everyone except the demo user. */
+export interface DemoStatus {
+  enabled: boolean
+  available?: boolean
+  as_of?: string | null
+  cutoff?: string
+  next_from?: string | null
+  weeks_left?: number
+  ops_left?: number
+  finished?: boolean
+}
+
+export interface DemoAdvance {
+  added: number
+  skipped_duplicates: number
+  rows: number
+  from: string
+  to: string
+  new_as_of: string
+  previous_as_of: string
+  weeks_left: number
+  /** How long the server took to recompute the forecast after the import. */
+  recalc_ms: number
+  /** The previous forecast against the actual balance on the new date; null outside its horizon. */
+  forecast_vs_fact: { date: string; p10: Kop; p50: Kop; p90: Kop; actual: Kop; error: Kop; within_band: boolean } | null
+}
+
 export interface SyncResult {
   created: number
   skipped: number

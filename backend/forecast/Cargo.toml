@@ -2,6 +2,7 @@
 name = "forecast"
 version.workspace = true
 edition.workspace = true
+publish = false
 default-run = "forecast"
 
 [lib]

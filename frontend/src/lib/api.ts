@@ -9,6 +9,8 @@ import type {
   ExpectedEvent,
   ForecastRun,
   ImportPreview,
+  DemoAdvance,
+  DemoStatus,
   ImportRow,
   KeyRate,
   Me,
@@ -24,6 +26,8 @@ import type {
 } from '../types'
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
+
+import type { AdvisorAnswer, AdvisorHistoryItem, AdvisorSuggestion } from '../features/assistant/advisorTypes'
 
 export { ApiError } from './errors'
 
@@ -153,6 +157,16 @@ export const api = {
     return request<ImportPreview>('POST', co('/imports'), { form })
   },
   confirmImport: (id: string) => request<{ inserted: number; skipped_duplicates: number; status: string }>('POST', co(`/imports/${id}/confirm`), { body: {} }),
+
+  // ----- demo «Прошла неделя» -----
+  demoStatus: () => request<DemoStatus>('GET', co('/demo/status')),
+  demoAdvanceWeek: () => request<DemoAdvance>('POST', co('/demo/advance-week'), { body: {} }),
+
+  // ----- advisor (LLM assistant; it only proposes, the user applies) -----
+  advisorAsk: (question: string, history: AdvisorHistoryItem[], lang: string) =>
+    request<AdvisorAnswer>('POST', co('/advisor/ask'), { body: { question, history, lang } }),
+  advisorApply: (s: Pick<AdvisorSuggestion, 'type' | 'params'>) =>
+    request<{ id: string; type: string }>('POST', co('/advisor/suggestions/apply'), { body: { type: s.type, params: s.params } }),
 
   // ----- plan / fact, gov -----
   planFact: (days: number) => request<PlanFact>('GET', co(`/plan-fact?days=${days}`)),

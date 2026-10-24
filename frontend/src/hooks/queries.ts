@@ -5,6 +5,7 @@ import type { TransactionQuery } from '../lib/api'
 import { useAuth } from '../app/auth'
 import { buildView } from '../features/forecast/model'
 import type { ForecastView } from '../features/forecast/model'
+import type { AdvisorHistoryItem, AdvisorSuggestion } from '../features/assistant/advisorTypes'
 import type { NewExpectedEvent, ScenarioParams, TaxCalendarRequest } from '../types'
 
 /** All company data lives under ['co', companyId, ...], so one call refreshes everything after a data change. */
@@ -89,6 +90,16 @@ export function useSyncIntegrations() {
   return useMutation({ mutationFn: (ext: string) => api.syncIntegrations(ext), onSuccess: () => void all() })
 }
 
+export function useAdvisorAsk() {
+  return useMutation({ mutationFn: (v: { question: string; history: AdvisorHistoryItem[]; lang: string }) => api.advisorAsk(v.question, v.history, v.lang) })
+}
+
+/** Applying a suggestion creates an expected event, so every cached screen is refreshed. */
+export function useApplySuggestion() {
+  const all = useInvalidateAll()
+  return useMutation({ mutationFn: (s: AdvisorSuggestion) => api.advisorApply(s), onSuccess: () => void all() })
+}
+
 export function usePlanFact(days: number) {
   const key = useKey()
   return useQuery({ queryKey: key('plan-fact', days), queryFn: () => api.planFact(days) })
@@ -106,6 +117,18 @@ export function useUploadStatement() {
 export function useConfirmImport() {
   const all = useInvalidateAll()
   return useMutation({ mutationFn: (id: string) => api.confirmImport(id), onSuccess: () => void all() })
+}
+
+/** Demo status; `enabled=false` hides the demo card. Errors (e.g. old backend) are treated as «no demo». */
+export function useDemoStatus() {
+  const key = useKey()
+  return useQuery({ queryKey: key('demo-status'), queryFn: api.demoStatus, retry: false, staleTime: 30_000 })
+}
+
+/** One demo week goes through the regular import on the server; then every cached screen is refreshed. */
+export function useAdvanceWeek() {
+  const all = useInvalidateAll()
+  return useMutation({ mutationFn: () => api.demoAdvanceWeek(), onSuccess: () => void all() })
 }
 
 export function useKeyRate() {

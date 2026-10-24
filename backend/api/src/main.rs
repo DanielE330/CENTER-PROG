@@ -1,6 +1,8 @@
 //! api (BFF): единственный публичный Rust-сервис. Проверка сессии через auth, CSRF, заголовки безопасности,
 //! раздача SPA и маршрутизация/оркестрация вызовов к внутренним сервисам. Собственной БД нет.
 
+mod advisor;
+mod demo;
 mod http;
 
 use axum::{
@@ -28,6 +30,8 @@ pub struct AppState {
     pub forecast: Upstream,
     pub planfact: Upstream,
     pub integrator: Upstream,
+    pub advisor: Upstream,
+    pub demo: Arc<demo::Demo>,
     pub cfg: Arc<Config>,
 }
 
@@ -42,6 +46,8 @@ async fn main() {
         forecast: Upstream::new("forecast", "Сервис прогноза", &env("FORECAST_URL", "http://127.0.0.1:3003"), 80),
         planfact: Upstream::new("planfact", "Сервис план-факта", &env("PLANFACT_URL", "http://127.0.0.1:3004"), 60),
         integrator: Upstream::new("integrator", "Сервис интеграций", &env("INTEGRATOR_URL", "http://127.0.0.1:8008"), 30),
+        advisor: Upstream::new("advisor", "Сервис консультанта", &env("ADVISOR_URL", "http://127.0.0.1:8011"), 85),
+        demo: Arc::new(demo::Demo::from_env()),
         cfg: Arc::new(Config { cookie_secure: env("COOKIE_SECURE", "0") == "1" }),
     };
 
@@ -75,6 +81,11 @@ async fn main() {
         .route(&format!("{co}/expected-events/tax-calendar"), post(http::tax_calendar))
         .route(&format!("{co}/expected-events/{{eid}}"), delete(http::to_ledger))
         .route(&format!("{co}/integrations/sync"), post(http::integrations_sync))
+        .route(&format!("{co}/advisor/ask"), post(advisor::ask))
+        .route(&format!("{co}/advisor/suggestions/apply"), post(advisor::apply))
+        // демо «Прошла неделя»: только для демо-пользователя при DEMO_FEED_ENABLED=1
+        .route(&format!("{co}/demo/status"), get(demo::status))
+        .route(&format!("{co}/demo/advance-week"), post(demo::advance_week))
         .route("/api/v1/gov/key-rate", get(http::gov_key_rate))
         .route(&format!("{co}/forecasts"), post(http::create_forecast))
         .route(&format!("{co}/forecasts/latest"), get(http::to_forecast))
