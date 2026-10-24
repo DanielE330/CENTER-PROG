@@ -164,9 +164,15 @@ async fn anthropic(clients: &Clients, key: &str, model: &str, request: &Value) -
     Ok(result)
 }
 
-fn rub(kop: i64) -> String {
-    let rub = (kop.abs() + 50) / 100;
-    let s = rub.to_string();
+/// Whole rubles from `<name>_rub`, or from `<name>_kop` when the caller did not convert.
+fn amount(v: &Value, name: &str) -> i64 {
+    v[format!("{name}_rub")]
+        .as_i64()
+        .unwrap_or_else(|| (v[format!("{name}_kop")].as_i64().unwrap_or(0) + 50) / 100)
+}
+
+fn rub(rubles: i64) -> String {
+    let s = rubles.abs().to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
         if i > 0 && (s.len() - i).is_multiple_of(3) {
@@ -227,27 +233,21 @@ pub fn template(request: &Value) -> Value {
         if let Some(points) = v["points"].as_array() {
             min_point = points
                 .iter()
-                .filter_map(|p| Some((p["date"].as_str()?.to_owned(), p["p50_kop"].as_i64()?)))
+                .filter_map(|p| Some((p["date"].as_str()?.to_owned(), amount(p, "p50"))))
                 .min_by_key(|(_, v)| *v);
         }
     }
     let text = if let Some(g) = gaps.first() {
         let date = g["start_date"].as_str().unwrap_or("?");
         let prob = (g["probability"].as_f64().unwrap_or(0.0) * 100.0).round();
-        let p50 = g["shortfall_p50_kop"].as_i64().unwrap_or(0);
-        let p90 = g["shortfall_p90_kop"].as_i64().unwrap_or(0);
+        let p50 = amount(g, "shortfall_p50");
+        let p90 = amount(g, "shortfall_p90");
         let drivers: Vec<String> = g["drivers"]
             .as_array()
             .map(|d| {
                 d.iter()
                     .take(3)
-                    .filter_map(|x| {
-                        Some(format!(
-                            "{} ({})",
-                            x["label"].as_str()?,
-                            rub(x["amount_kop"].as_i64().unwrap_or(0))
-                        ))
-                    })
+                    .filter_map(|x| Some(format!("{} ({})", x["label"].as_str()?, rub(amount(x, "amount")))))
                     .collect()
             })
             .unwrap_or_default();

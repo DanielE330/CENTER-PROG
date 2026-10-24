@@ -1419,7 +1419,7 @@ services:
     profiles:
     - gpu
   llm-local:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b11610@sha256:b0baccbe2e00b5d74e63f85f9f023c93d61d0f329475269e1e7002e87eb875ea
     profiles:
     - gpu
     command:
@@ -1431,6 +1431,14 @@ services:
     - /models/model.gguf
     - -c
     - '8192'
+    - --cache-type-k
+    - q8_0
+    - --cache-type-v
+    - q8_0
+    - --flash-attn
+    - 'on'
+    - --reasoning-budget
+    - '0'
     - -ngl
     - '99'
     - --jinja

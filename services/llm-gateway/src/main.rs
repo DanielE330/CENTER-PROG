@@ -132,7 +132,10 @@ async fn main() -> Result<()> {
     )
     .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
-    let internal = MtlsClient::from_dir(&config.cert_dir)?;
+    let internal = MtlsClient::with_timeout(
+        ci_core::tls::CertPaths::in_dir(&config.cert_dir),
+        Duration::from_secs(180),
+    )?;
     let kc = std::env::var("KEYCLOAK_INTERNAL_URL")?;
     let providers = build_providers();
     tracing::info!(providers = ?providers.keys().collect::<Vec<_>>(), "providers configured");
@@ -232,6 +235,21 @@ async fn route(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<J
     })))
 }
 
+/// Reasoning models sometimes leak `<think>…</think>` (or a lone closing tag) into the answer.
+fn strip_reasoning(text: &str) -> String {
+    let mut out = text.to_owned();
+    while let (Some(a), Some(b)) = (out.find("<think>"), out.find("</think>")) {
+        if b < a {
+            break;
+        }
+        out.replace_range(a..b + "</think>".len(), "");
+    }
+    if let Some(b) = out.find("</think>") {
+        out = out[b + "</think>".len()..].to_owned();
+    }
+    out.trim().to_owned()
+}
+
 /// Masks prose as text and tool results as JSON: only string values are masked there,
 /// so amounts in kopecks (10+ digits) are not mistaken for INN or account numbers.
 fn mask_request(request: &Value, masker: &mut Masker) -> Value {
@@ -300,7 +318,7 @@ async fn chat(State(state): State<AppState>, headers: HeaderMap, Json(request): 
         match provider.complete(&s.clients, &body).await {
             Ok(mut resp) => {
                 if let Some(text) = resp["choices"][0]["message"]["content"].as_str() {
-                    resp["choices"][0]["message"]["content"] = json!(masker.unmask(text));
+                    resp["choices"][0]["message"]["content"] = json!(strip_reasoning(&masker.unmask(text)));
                 }
                 let total = resp["usage"]["total_tokens"].as_i64().unwrap_or(0);
                 sqlx::query(
@@ -361,6 +379,13 @@ fn as_sse(resp: &Value) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_tags_are_removed() {
+        assert_eq!(strip_reasoning("<think>долго</think>\n\nОтвет"), "Ответ");
+        assert_eq!(strip_reasoning("</think>\n\nОтвет"), "Ответ");
+        assert_eq!(strip_reasoning("Просто ответ"), "Просто ответ");
+    }
 
     #[test]
     fn amounts_in_tool_json_survive_masking() {

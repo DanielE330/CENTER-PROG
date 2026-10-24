@@ -91,7 +91,11 @@ async fn main() -> Result<()> {
     let kc_internal = std::env::var("KEYCLOAK_INTERNAL_URL").context("KEYCLOAK_INTERNAL_URL")?;
     let issuer = CoreConfig::require(&config.oidc_issuer, "OIDC_ISSUER")?.to_owned();
     let jwks = CoreConfig::require(&config.oidc_jwks_url, "OIDC_JWKS_URL")?.to_owned();
-    let client = MtlsClient::from_dir(&config.cert_dir)?;
+    // Long enough for an agent answer from the local model; other services answer in milliseconds.
+    let client = MtlsClient::with_timeout(
+        ci_core::tls::CertPaths::in_dir(&config.cert_dir),
+        std::time::Duration::from_secs(240),
+    )?;
     let nats_url = CoreConfig::require(&config.nats_url, "NATS_URL")?;
     let nats = events::connect_client(nats_url, &config.cert_dir).await?;
     let js = async_nats::jetstream::new(nats.clone());

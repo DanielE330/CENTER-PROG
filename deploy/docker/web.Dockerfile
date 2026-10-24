@@ -13,3 +13,4 @@ FROM caddy:2.10-alpine
 # A plain copy does not carry the security.capability xattr.
 RUN cp /usr/bin/caddy /tmp/caddy && mv /tmp/caddy /usr/bin/caddy && chmod 755 /usr/bin/caddy
 COPY --from=build /web/dist /srv
+USER 1000:1000

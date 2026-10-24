@@ -89,10 +89,10 @@ pub async fn handle(
             let name = req.params["name"].as_str().unwrap_or_default().to_owned();
             let args = req.params["arguments"].clone();
             match call_tool(&state, user, &name, &args).await {
-                Ok(v) => ok(
-                    id,
-                    json!({ "content": [{ "type": "text", "text": v.to_string() }], "isError": false }),
-                ),
+                Ok(mut v) => ok(id, {
+                    to_rubles(&mut v);
+                    json!({ "content": [{ "type": "text", "text": v.to_string() }], "isError": false })
+                }),
                 Err(e) => {
                     tracing::warn!(tool = %name, error = %e, "tool failed");
                     ok(
@@ -110,6 +110,26 @@ pub async fn handle(
     });
     resp.headers_mut().insert("mcp-session-id", session);
     resp
+}
+
+/// Models are bad at dividing by 100: every `*_kop` integer reaches the agent as whole
+/// rubles in `*_rub`. Storage and the APIs keep kopecks.
+fn to_rubles(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let keys: Vec<String> = map.keys().filter(|k| k.ends_with("_kop")).cloned().collect();
+            for k in keys {
+                if let Some(kop) = map.get(&k).and_then(Value::as_i64) {
+                    map.remove(&k);
+                    let rub = (kop as f64 / 100.0).round() as i64;
+                    map.insert(format!("{}_rub", k.trim_end_matches("_kop")), json!(rub));
+                }
+            }
+            map.values_mut().for_each(to_rubles);
+        }
+        Value::Array(items) => items.iter_mut().for_each(to_rubles),
+        _ => {}
+    }
 }
 
 fn arg_i64(args: &Value, key: &str, default: i64, min: i64, max: i64) -> i64 {
@@ -208,6 +228,14 @@ mod tests {
         let list = tools.as_array().unwrap();
         assert_eq!(list.len(), 8);
         assert!(list.iter().all(|t| t["inputSchema"]["type"] == "object"));
+    }
+
+    #[test]
+    fn kopecks_become_rubles_for_the_agent() {
+        let mut v = json!({"gaps": [{"shortfall_p50_kop": 465_443_650, "probability": 0.7}]});
+        to_rubles(&mut v);
+        assert_eq!(v["gaps"][0]["shortfall_p50_rub"], 4_654_437);
+        assert!(v["gaps"][0].get("shortfall_p50_kop").is_none());
     }
 
     #[test]

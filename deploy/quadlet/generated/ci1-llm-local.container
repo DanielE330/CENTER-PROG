@@ -6,9 +6,9 @@ After=ci1-llm-local-tls.service
 
 [Container]
 ContainerName=llm-local
-Image=ghcr.io/ggml-org/llama.cpp:server-cuda
+Image=ghcr.io/ggml-org/llama.cpp:server-cuda-b11610@sha256:b0baccbe2e00b5d74e63f85f9f023c93d61d0f329475269e1e7002e87eb875ea
 Volume=%h/ci1/models:-../../models}:/models:ro
-Exec=--host 127.0.0.1 --port 8080 -m /models/model.gguf -c 8192 -ngl 99 --jinja --alias local
+Exec=--host 127.0.0.1 --port 8080 -m /models/model.gguf -c 8192 --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on --reasoning-budget 0 -ngl 99 --jinja --alias local
 
 [Service]
 Restart=always

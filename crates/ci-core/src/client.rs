@@ -1,7 +1,12 @@
 //! HTTP client that presents this service's certificate and trusts only our CA.
 //! It is rebuilt when the cert-agent renews the certificate.
 
-use std::{fs, path::Path, sync::Arc, time::SystemTime};
+use std::{
+    fs,
+    path::Path,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
@@ -13,9 +18,12 @@ struct Built {
     stamp: Option<SystemTime>,
 }
 
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Clone)]
 pub struct MtlsClient {
     paths: CertPaths,
+    timeout: Duration,
     inner: Arc<ArcSwap<Built>>,
 }
 
@@ -23,7 +31,7 @@ fn stamp(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-fn build(paths: &CertPaths) -> Result<reqwest::Client> {
+fn build(paths: &CertPaths, timeout: Duration) -> Result<reqwest::Client> {
     let mut identity_pem = fs::read(&paths.cert).context("reading client cert")?;
     identity_pem.extend_from_slice(b"\n");
     identity_pem.extend(fs::read(&paths.key).context("reading client key")?);
@@ -35,20 +43,26 @@ fn build(paths: &CertPaths) -> Result<reqwest::Client> {
         .add_root_certificate(ca)
         .identity(identity)
         .https_only(true)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(timeout)
         .build()
         .context("building mTLS client")
 }
 
 impl MtlsClient {
     pub fn new(paths: CertPaths) -> Result<Self> {
+        Self::with_timeout(paths, DEFAULT_TIMEOUT)
+    }
+
+    /// For calls that legitimately take long (the agent and the local model).
+    pub fn with_timeout(paths: CertPaths, timeout: Duration) -> Result<Self> {
         crate::tls::ensure_crypto_provider();
-        let client = build(&paths)?;
+        let client = build(&paths, timeout)?;
         Ok(Self {
             inner: Arc::new(ArcSwap::from_pointee(Built {
                 client,
                 stamp: stamp(&paths.cert),
             })),
+            timeout,
             paths,
         })
     }
@@ -62,7 +76,7 @@ impl MtlsClient {
         let current = self.inner.load();
         let now = stamp(&self.paths.cert);
         if now != current.stamp {
-            match build(&self.paths) {
+            match build(&self.paths, self.timeout) {
                 Ok(client) => {
                     self.inner.store(Arc::new(Built {
                         client: client.clone(),

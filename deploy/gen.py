@@ -335,7 +335,7 @@ def compose(cfg: dict) -> dict:
 def llm_local(spec: dict, uid: int) -> dict:
     """llama.cpp server on the GPU behind an mTLS terminator (llama.cpp has no client-cert auth)."""
     return {
-        "image": "ghcr.io/ggml-org/llama.cpp:server-cuda",
+        "image": "ghcr.io/ggml-org/llama.cpp:server-cuda-b11610@sha256:b0baccbe2e00b5d74e63f85f9f023c93d61d0f329475269e1e7002e87eb875ea",
         "profiles": [spec["profile"]],
         "command": [
             "--host",
@@ -346,6 +346,16 @@ def llm_local(spec: dict, uid: int) -> dict:
             "/models/model.gguf",
             "-c",
             "8192",
+            # 4B in Q4 (~2.5 GB) plus a q8 KV cache for 8K tokens fits a 4 GB laptop GPU.
+            "--cache-type-k",
+            "q8_0",
+            "--cache-type-v",
+            "q8_0",
+            "--flash-attn",
+            "on",
+            # Qwen3 thinks before answering by default; for explaining a forecast it only costs time.
+            "--reasoning-budget",
+            "0",
             "-ngl",
             "99",
             "--jinja",
