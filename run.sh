@@ -6,6 +6,8 @@
 #   ./run.sh logs [svc] логи
 #   ./run.sh status     состояние контейнеров
 # Первая установка «под ключ» (секреты, оператор с обязательной 2FA): ./install.sh
+# Демо «Прошла неделя»: выписка демо-пользователя грузится до DEMO_CUTOFF (infra/.env, по умолчанию 2026-07-12), остальное отдаёт demo-feed.
+#   Если демо-пользователь уже получил выписку целиком (старый стенд), начните заново: ./run.sh reset && ./run.sh
 # Настройки: infra/.env.example (скопируйте в infra/.env). Полный датасет: DATASET_DIR=../data/dataset ./run.sh
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -21,7 +23,12 @@ need_docker() {
   fi
 }
 
-port() { grep -E '^GATEWAY_PORT=' infra/.env 2>/dev/null | cut -d= -f2 || true; }
+port() { grep -E '^GATEWAY_PORT=' infra/.env 2>/dev/null | cut -d= -f2 | sed 's/[[:space:]#].*//' || true; }
+# дата отсечки демо: seed_demo.sh и контейнер demo-feed должны видеть одно и то же значение
+if [ -z "${DEMO_CUTOFF:-}" ]; then
+  DEMO_CUTOFF=$(grep -E '^DEMO_CUTOFF=' infra/.env 2>/dev/null | cut -d= -f2 | sed 's/[[:space:]#].*//' || true)
+fi
+export DEMO_CUTOFF=${DEMO_CUTOFF:-2026-07-12}
 
 case "${1:-up}" in
   up)

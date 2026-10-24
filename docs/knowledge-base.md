@@ -101,6 +101,7 @@ GET|POST /…/expected-events   DELETE /…/expected-events/{id}   POST /…/exp
 POST /…/forecasts {horizon_days}   GET /…/forecasts/latest   GET /…/forecasts/{run_id}
 POST /…/scenarios   GET /…/backtest   GET /…/plan-fact?days=
 Внутренний :3100: /internal/v1/health, /internal/v1/companies/{cid}/summary (отдаёт forecast)
+GET /…/demo/status   POST /…/demo/advance-week -> {added, from, to, new_as_of, recalc_ms, forecast_vs_fact}: демо «Прошла неделя», только для demo@example.com при DEMO_FEED_ENABLED=1 (docs/microservices.md)
 POST /api/v1/companies/{cid}/integrations/sync   {"external_company":"C001"} -> {created, skipped, sources}: обязательства из integrator -> ожидаемые события (идемпотентно по external_id)
 ```
 Аккаунт и внешний API: `/api/v1/account/*` (способы входа, токены) и `/api/ext/v1/*` по `Authorization: Bearer` — см. `docs/external-api.md`.

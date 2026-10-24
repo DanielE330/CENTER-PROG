@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Установка «под ключ»: ./install.sh [--email EMAIL] [--port PORT] [--domain HOST] [--demo]
 #   создаёт infra/.env с новыми секретами (если файла нет; существующий не перезаписывается),
-#   поднимает сервисы (./run.sh up), создаёт оператора с обязательной 2FA и печатает адрес, логин и пароль.
+#   поднимает сервисы (./run.sh up), создаёт оператора платформы (страница /operator) с обязательной 2FA
+#   и печатает ссылку на страницу оператора, логин и пароль.
 # Можно запускать повторно: секреты, оператор и его пароль сохраняются.
 # Необязательные переменные окружения: TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_USERNAME, HERMES_URL, HERMES_API_KEY,
 #   OPERATOR_EMAIL. Токен бота в репозиторий не попадает: он записывается только в infra/.env (в .gitignore).
@@ -26,9 +27,22 @@ rand() {
   if command -v openssl >/dev/null; then openssl rand -base64 "$1" | tr -d '/+=\n'
   else python3 -c 'import secrets,sys; print(secrets.token_urlsafe(int(sys.argv[1])))' "$1" | tr -d '-_\n'; fi
 }
-# set_kv KEY VALUE: добавляет ключ, если его ещё нет (существующие значения не трогаем)
-set_kv() { grep -qE "^$1=" "$ENV" 2>/dev/null || printf '%s=%s\n' "$1" "$2" >> "$ENV"; }
 get_kv() { grep -E "^$1=" "$ENV" 2>/dev/null | head -1 | cut -d= -f2- | cut -d' ' -f1 || true; }
+# set_kv KEY VALUE: задаёт ключ, если его нет или он пустой (заполненные значения не трогаем)
+set_kv() {
+  if [ -n "$(get_kv "$1")" ]; then return 0; fi
+  if grep -qE "^$1=" "$ENV" 2>/dev/null; then
+    V=$2 python3 - "$ENV" "$1" <<'PY'
+import os, re, sys
+path, key = sys.argv[1], sys.argv[2]
+s = open(path).read()
+s = re.sub(rf"^{re.escape(key)}=[^\n#]*", lambda m: f"{key}={os.environ['V']}" + (" " if "#" in s[m.end():m.end() + 1] else ""), s, count=1, flags=re.M)
+open(path, "w").write(s)
+PY
+  else
+    printf '%s=%s\n' "$1" "$2" >> "$ENV"
+  fi
+}
 
 say "Проверка Docker"
 command -v docker >/dev/null || { echo "Не найден docker. Установите: https://docs.docker.com/get-docker/"; exit 1; }
@@ -46,8 +60,10 @@ if [ -n "$DOMAIN" ]; then
   done
 fi
 sed -i.bak "s/^DEMO_SEED=[^ ]*/DEMO_SEED=$DEMO/" "$ENV"; rm -f "$ENV.bak"
-set_kv AUTH_MFA_KEY "$(rand 32)"      # ключ шифрования секретов 2FA; не теряйте: без него 2FA придётся сбросить
+set_kv AUTH_MFA_KEY "$(rand 32)"           # ключ шифрования секретов 2FA пользователей компаний (необязательной, AUTH_REQUIRE_2FA=1 делает её обязательной)
 set_kv AUTH_REQUIRE_2FA 0
+set_kv BACKOFFICE_MFA_KEY "$(rand 32)"     # ключ шифрования секретов 2FA операторов; не теряйте: без него 2FA придётся сбросить
+set_kv BACKOFFICE_REQUIRE_2FA 1            # второй фактор оператора обязателен
 for v in TELEGRAM_BOT_USERNAME HERMES_URL HERMES_API_KEY; do
   [ -n "${!v:-}" ] && set_kv "$v" "${!v}"
 done
@@ -63,11 +79,13 @@ say "Оператор"
 C="docker compose -f infra/docker-compose.yml"
 PASS=""; [ -f "$CRED" ] && PASS=$(grep -E '^password=' "$CRED" | cut -d= -f2- || true)
 [ -n "$PASS" ] || PASS=$(rand 18 | cut -c1-20)
-RES=$($C exec -T -e OPERATOR_PASSWORD="$PASS" auth python -m auth.cli create-operator --email "$EMAIL" | tail -1)
+# пароль уходит оператору через стандартный ввод: не в аргументах (ps), не в окружении контейнера и не в .env
+if printf '%s\n' "$PASS" | $C exec -T backoffice python -m backoffice.create_operator --stdin "$EMAIL" >/dev/null 2>&1; then RES=created
+else RES=exists; fi
 
 PORT=$(get_kv GATEWAY_PORT); PORT=${PORT:-3000}
 SITE=$(get_kv SITE_ADDRESS)
-case "$SITE" in :*|"") URL="http://localhost:$PORT" ;; *) URL="https://$SITE" ;; esac
+case "$SITE" in :*|"") URL="http://localhost:$PORT/operator" ;; *) URL="https://$SITE/operator" ;; esac
 if [ "$RES" = "created" ]; then
   ( umask 077; printf 'url=%s\nlogin=%s\npassword=%s\n' "$URL" "$EMAIL" "$PASS" > "$CRED" )
 fi
@@ -83,8 +101,10 @@ else
   echo "Пароль:             не менялся (оператор уже существовал)"
 fi
 echo
-echo "При первом входе откройте страницу, введите логин и пароль, отсканируйте QR в приложении-аутентификаторе"
+echo "При первом входе откройте страницу оператора, введите логин и пароль, отсканируйте QR в приложении-аутентификаторе"
 echo "(Google Authenticator, Microsoft Authenticator и т.п.), введите код и сохраните резервные коды."
 echo "Дальше вход только по паролю и коду из приложения."
 echo "Потеряли телефон и резервные коды? Сбросить 2FA (при следующем входе настроится заново):"
-echo "  docker compose -f infra/docker-compose.yml exec auth python -m auth.cli reset-2fa --email $EMAIL"
+echo "  docker compose -f infra/docker-compose.yml exec backoffice python -m backoffice.create_operator --reset-2fa $EMAIL"
+echo
+echo "Сайт для компаний: ${URL%/operator}  (вход и регистрация; пользователи компаний видят свою компанию, а не панель оператора)"

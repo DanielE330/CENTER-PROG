@@ -23,11 +23,30 @@ class Jobs:
     def __init__(self, store: Store, bot: Bot, up: Upstream, advisor: Advisor | None = None):
         self.store, self.bot, self.up, self.advisor = store, bot, up, advisor or Advisor()
         self._bundles: dict[str, tuple[float, Bundle]] = {}
+        self._bans: dict[str, tuple[float, str | None]] = {}
+
+    BAN_TTL = 60
+
+    async def banned(self, cid: str) -> str | None:
+        """Причина блокировки компании оператором платформы или None. Заблокированной компании не шлём ничего и не отвечаем в боте.
+        Если ledger недоступен, считаем компанию доступной: сбой не должен глушить уведомления всем."""
+        hit = self._bans.get(cid)
+        if hit and time.time() - hit[0] < self.BAN_TTL:
+            return hit[1]
+        try:
+            c = await self.up.company(cid)
+        except Exception:
+            return None
+        reason = (c.get("ban_reason") or "без указания причины") if c.get("banned") else None
+        self._bans[cid] = (time.time(), reason)
+        return reason
 
     # ---------- доставка ----------
     async def broadcast(self, cid: str, fn, kind: str | None = None, excel_only: bool = False) -> int:
         """Вызывает fn(chat_id) для каждого активного чата компании, которому политика отдела разрешает этот вид рассылки.
         Возвращает число доставленных."""
+        if await self.banned(cid):
+            return 0
         ok = 0
         for ch in self.store.chats(cid):
             pol = self.store.policy(ch)
@@ -96,6 +115,8 @@ class Jobs:
 
     async def ask(self, cid: str, chat_id: int, question: str) -> str:
         """Ответ консультанта на вопрос. Возвращает готовый текст для чата (HTML)."""
+        if await self.banned(cid):
+            return "Компания заблокирована оператором платформы."
         p = self.store.prefs(cid)
         if not self.advisor.enabled:
             return "Консультант Hermes не подключён администратором сервиса."
@@ -205,6 +226,8 @@ class Jobs:
                 log.warning("tick %s: %s", cid, type(e).__name__)
 
     async def tick_company(self, cid: str) -> None:
+        if await self.banned(cid):
+            return
         p = self.store.prefs(cid)
         local = config.now_in(config.tz_of(p["tz"]))
         day_key = local.date().isoformat()

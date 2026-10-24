@@ -349,10 +349,11 @@ class Store:
         return bool(row) and time.time() - row["created_at"] <= max_age
 
     # ---------- связь с веб-ролями ----------
-    WEB_TO_TG = {"owner": "admin", "admin": "admin", "analyst": "rater", "observer": "viewer"}
+    # веб-роли: director/admin/editor/viewer (прежние названия owner/analyst/observer понимаем для старых записей)
+    WEB_TO_TG = {"director": "admin", "owner": "admin", "admin": "admin", "editor": "rater", "analyst": "rater", "viewer": "viewer", "observer": "viewer"}
 
     def bind_web_member(self, company_id: str, tg_uid: int, name: str, web_user_id: str, web_role: str) -> None:
-        """Telegram-роль выводится из веб-роли: админ и владелец — admin, аналитик — rater, наблюдатель — viewer."""
+        """Telegram-роль выводится из веб-роли: владелец (director) и администратор — admin, аналитик (editor) — rater, наблюдатель (viewer) — viewer."""
         role = self.WEB_TO_TG.get(web_role, "viewer")
         self.touch_member(company_id, tg_uid, name, role)
         self.x("UPDATE members SET role=?, web_user_id=? WHERE company_id=? AND tg_user_id=?", (role, web_user_id, company_id, tg_uid))

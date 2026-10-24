@@ -13,3 +13,8 @@ git_token.md
 
 # логин и пароль оператора, создаются install.sh
 infra/.operator-credentials
+# ключи LLM-провайдеров и локальные БД шлюза не коммитим
+infra/.env
+.env
+*.env.local
+llm_gateway.db*

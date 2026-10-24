@@ -13,12 +13,18 @@ import type {
   GoalStatus,
   ForecastRun,
   ImportPreview,
+  DemoAdvance,
+  DemoStatus,
   ImportRow,
   KeyRate,
   Me,
   MeWithCodes,
   MfaChallenge,
   MfaSetup,
+  Member,
+  NewMemberRequest,
+  NewMemberResult,
+  Role,
   NewApiToken,
   NewInvite,
   NewExpectedEvent,
@@ -39,13 +45,13 @@ import type {
   TaxCalendarRequest,
   TaxCalendarResult,
   TeamInvite,
-  TeamMember,
   Taxonomy,
   TransactionPage,
-  WebRole,
 } from '../types'
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
+
+import type { AdvisorAnswer, AdvisorHistoryItem, AdvisorSuggestion } from '../features/assistant/advisorTypes'
 
 export { ApiError } from './errors'
 
@@ -61,6 +67,14 @@ const unauthorized = new Set<Listener>()
 export function onUnauthorized(cb: Listener): () => void {
   unauthorized.add(cb)
   return () => unauthorized.delete(cb)
+}
+
+type AccessListener = (code: string) => void
+const accessChanged = new Set<AccessListener>()
+/** Called on 403 `company_banned` / `password_required`: the state of the account changed, `me` must be re-read. */
+export function onAccessChanged(cb: AccessListener): () => void {
+  accessChanged.add(cb)
+  return () => accessChanged.delete(cb)
 }
 
 interface Opts {
@@ -86,6 +100,8 @@ async function request<T>(method: string, url: string, { body, form, expect401 }
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     if (res.status === 401 && !expect401) unauthorized.forEach((l) => l())
+    const code = data?.error?.code
+    if (res.status === 403 && (code === 'company_banned' || code === 'password_required')) accessChanged.forEach((l) => l(code))
     throw new ApiError(res.status, data?.error?.code ?? 'error', data?.error?.message ?? `HTTP ${res.status}`)
   }
   return data as T
@@ -124,25 +140,35 @@ export const api = {
   removeEmail: () => request<AccountMethods>('DELETE', '/api/v1/account/email'),
   addSignature: (challenge: string, signature: string) => request<AccountMethods>('POST', '/api/v1/account/signatures', { body: { challenge, signature } }),
   removeSignature: (id: string) => request<AccountMethods>('DELETE', `/api/v1/account/signatures/${encodeURIComponent(id)}`),
-  apiTokens: () => request<{ items: ApiTokenInfo[] }>('GET', '/api/v1/account/tokens'),
+  /** `company`: директор видит токены всех сотрудников. */
+  apiTokens: (scope?: 'company') => request<{ items: ApiTokenInfo[] }>('GET', `/api/v1/account/tokens${scope ? `?scope=${scope}` : ''}`),
   createApiToken: (name: string) => request<NewApiToken>('POST', '/api/v1/account/tokens', { body: { name } }),
   deleteApiToken: (id: string) => request<void>('DELETE', `/api/v1/account/tokens/${encodeURIComponent(id)}`),
 
-  // ----- company team: members, invites, roles -----
-  teamMembers: () => request<{ items: TeamMember[] }>('GET', '/api/v1/team/members'),
+  /** Смена своего пароля. `current` не нужен только при принудительной смене (must_change_password). */
+  changePassword: (b: { current?: string; new: string }) => request<unknown>('POST', '/api/v1/account/change-password', { body: b }),
+  /** Директор после регистрации по ЭЦП обязан задать email и пароль. */
+  setCredentials: (b: { email: string; password: string }) => request<unknown>('POST', '/api/v1/account/set-credentials', { body: b }),
+
+  // ----- members (сотрудники компании) -----
+  members: () => request<{ items: Member[] }>('GET', '/api/v1/members'),
+  addMember: (b: NewMemberRequest) => request<NewMemberResult>('POST', '/api/v1/members', { body: b }),
+  setMemberRole: (id: string, role: Exclude<Role, 'director'>) => request<unknown>('PATCH', `/api/v1/members/${encodeURIComponent(id)}`, { body: { role } }),
+  deleteMember: (id: string) => request<void>('DELETE', `/api/v1/members/${encodeURIComponent(id)}`),
+  resetMemberPassword: (id: string) => request<{ password: string }>('POST', `/api/v1/members/${encodeURIComponent(id)}/reset-password`, { body: {} }),
+
+  // ----- команда: приглашения по ссылке, передача владения, выход, журнал действий -----
   teamInvites: () => request<{ items: TeamInvite[] }>('GET', '/api/v1/team/invites'),
-  createInvite: (role: Exclude<WebRole, 'owner'>, email?: string) =>
+  createInvite: (role: Exclude<Role, 'director'>, email?: string) =>
     request<NewInvite>('POST', '/api/v1/team/invites', { body: { role, ...(email ? { email } : {}) } }),
+  deleteInvite: (id: string) => request<void>('DELETE', `/api/v1/team/invites/${encodeURIComponent(id)}`),
   transferOwnership: (userId: string) => request<unknown>('POST', '/api/v1/team/transfer', { body: { user_id: userId } }),
   activity: (q: { limit: number; offset: number; q?: string }) => {
     const p = new URLSearchParams({ limit: String(q.limit), offset: String(q.offset), q: q.q ?? '' })
     return request<AuditPage>('GET', `/api/v1/team/activity?${p}`)
   },
-  deleteInvite: (id: string) => request<void>('DELETE', `/api/v1/team/invites/${encodeURIComponent(id)}`),
-  setMemberRole: (uid: string, role: Exclude<WebRole, 'owner'>) => request<unknown>('PATCH', `/api/v1/team/members/${encodeURIComponent(uid)}`, { body: { role } }),
-  removeMember: (uid: string) => request<void>('DELETE', `/api/v1/team/members/${encodeURIComponent(uid)}`),
   leaveTeam: () => request<void>('POST', '/api/v1/team/leave', { body: {} }),
-  acceptInvite: (code: string) => request<{ tenant_id: string; role: WebRole }>('POST', '/api/v1/team/accept', { body: { code } }),
+  acceptInvite: (code: string) => request<{ company_id: string; role: Role }>('POST', '/api/v1/team/accept', { body: { code } }),
 
   // ----- company -----
   renameCompany: (name: string) => request<{ company_name: string }>('PATCH', co(), { body: { name } }),
@@ -221,6 +247,16 @@ export const api = {
   tgChatDepartment: (chatId: number, departmentId: number | null) => request<unknown>('PATCH', co(`/notifications/chats/${chatId}`), { body: { department_id: departmentId } }),
   tgPatchMember: (uid: number, b: { role?: TgRole | ''; department_id?: number | null }) => request<TgMember>('PATCH', co(`/notifications/members/${uid}`), { body: b }),
   tgDeleteMember: (uid: number) => request<void>('DELETE', co(`/notifications/members/${uid}`)),
+
+  // ----- demo «Прошла неделя» -----
+  demoStatus: () => request<DemoStatus>('GET', co('/demo/status')),
+  demoAdvanceWeek: () => request<DemoAdvance>('POST', co('/demo/advance-week'), { body: {} }),
+
+  // ----- advisor (LLM assistant; it only proposes, the user applies) -----
+  advisorAsk: (question: string, history: AdvisorHistoryItem[], lang: string) =>
+    request<AdvisorAnswer>('POST', co('/advisor/ask'), { body: { question, history, lang } }),
+  advisorApply: (s: Pick<AdvisorSuggestion, 'type' | 'params'>) =>
+    request<{ id: string; type: string }>('POST', co('/advisor/suggestions/apply'), { body: { type: s.type, params: s.params } }),
 
   // ----- plan / fact, gov -----
   planFact: (days: number) => request<PlanFact>('GET', co(`/plan-fact?days=${days}`)),

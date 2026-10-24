@@ -14,7 +14,7 @@ import { errorText } from '../../i18n/helpers'
 import type { AuditItem } from '../../types'
 
 const PAGE = 50
-const FILTERS = ['', 'team', 'goal', 'notifications', 'telegram', 'import', 'event', 'forecast', 'account'] as const
+const FILTERS = ['', 'team', 'member', 'goal', 'notifications', 'telegram', 'import', 'event', 'forecast', 'account'] as const
 
 /** Who did what: team changes, goals, Telegram settings, imports. Admins and the owner only (the API enforces it). */
 export default function ActivityPage() {

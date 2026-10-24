@@ -1,0 +1,44 @@
+name: rust
+on:
+  push:
+    branches: [main, testing]
+    paths: ["backend/**", "deny.toml", "rustfmt.toml", "clippy.toml", ".github/workflows/rust.yml"]
+  pull_request:
+    paths: ["backend/**", "deny.toml", "rustfmt.toml", "clippy.toml", ".github/workflows/rust.yml"]
+
+permissions: {}
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: backend
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-deny
+      # TODO: ~380 мест не по rustfmt (код писался длинными строками). Прогнать `cargo fmt --all` одним коммитом и убрать continue-on-error.
+      - name: Format
+        continue-on-error: true
+        run: cargo fmt --all --check
+      # TODO: 7 замечаний clippy в существующем коде (forecast/src/model.rs: collapsible_if, should_implement_trait, needless_range_loop, unnecessary_map_or;
+      # api/src/main.rs: collapsible_if). Исправить и убрать continue-on-error.
+      - name: Clippy
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Licenses, advisories, bans
+        run: cargo deny --manifest-path Cargo.toml --config ../deny.toml check

@@ -6,11 +6,14 @@ import { PageContainer, PageHeader } from '../../components/shared/Page'
 import { EmptyState, ErrorState, LoadingState } from '../../components/shared/States'
 import { Badge } from '../../components/shared/StatusBadge'
 import { Button } from '../../components/ui/Button'
-import { useForecast, useScenario } from '../../hooks/queries'
+import { useAdvisorAsk, useForecast, useScenario } from '../../hooks/queries'
 import { cn } from '../../lib/utils'
 import { errorText, tm } from '../../i18n/helpers'
+import { Notice } from '../../components/shared/Notice'
 import type { AssistantMessage } from '../../types'
 import { classify, localAnswer, scenarioAnswer } from './answers'
+import { SuggestionCard } from './SuggestionCard'
+import type { AdvisorAnswer, AdvisorHistoryItem } from './advisorTypes'
 import type { Intent } from './answers'
 
 const suggestions: Array<{ key: string; intent: Intent; days?: number }> = [
@@ -21,13 +24,34 @@ const suggestions: Array<{ key: string; intent: Intent; days?: number }> = [
   { key: 'reduce', intent: 'reduce' },
 ]
 
-const welcome: AssistantMessage = { id: 'welcome', role: 'assistant', parts: [{ key: 'assistant.welcome' }] }
+/** Chat message: either rule-based `parts`, or an advisor answer (`advisor`). `fallback`: the advisor was unreachable, rules answered. */
+type ChatMessage = AssistantMessage & { advisor?: AdvisorAnswer; fallback?: boolean }
+
+/** Banner over a template/rule answer: why the model did not answer (gleb docs/MVP.md). */
+function ProviderNotice({ m }: { m: ChatMessage }) {
+  const { t } = useTranslation()
+  let kind: 'noProvider' | 'providerDown' | 'budget' | 'advisorDown' | null = null
+  if (m.fallback) kind = 'advisorDown'
+  else if (m.advisor?.provider === 'none') {
+    kind = m.advisor.notice === 'provider_unavailable' ? 'providerDown' : m.advisor.notice === 'budget_exceeded' ? 'budget' : 'noProvider'
+  }
+  if (!kind) return null
+  return (
+    <Notice tone={kind === 'noProvider' ? 'info' : 'warning'} title={t(`assistant.${kind}Title`)} className="mb-2">
+      {t(`assistant.${kind}Text`)}
+    </Notice>
+  )
+}
+
+const welcome: ChatMessage = { id: 'welcome', role: 'assistant', parts: [{ key: 'assistant.welcome' }] }
 
 export default function AssistantPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const q = useForecast()
   const scenario = useScenario()
-  const [messages, setMessages] = useState<AssistantMessage[]>([welcome])
+  const advisor = useAdvisorAsk()
+  const [messages, setMessages] = useState<ChatMessage[]>([welcome])
+  const [aiProvider, setAiProvider] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
@@ -38,31 +62,62 @@ export default function AssistantPage() {
 
   const v = q.view
 
+  function historyOf(all: ChatMessage[]): AdvisorHistoryItem[] {
+    return all
+      .slice(-10)
+      .map((m): AdvisorHistoryItem | null => {
+        if (m.role === 'user') return m.text ? { role: 'user', content: m.text } : null
+        const text = m.advisor ? m.advisor.answer : m.parts?.map((p) => tm(t, p.key, p.params)).join('\n')
+        return text && m.id !== 'welcome' ? { role: 'assistant', content: text } : null
+      })
+      .filter((x): x is AdvisorHistoryItem => x !== null)
+  }
+
+  /** Rule-based answer from the saved forecast: the fallback when the advisor service is unreachable. */
+  async function ruleAnswer(question: string, hint?: { intent: Intent; days?: number }, fallback = false) {
+    if (!v) return
+    const { intent, days } = hint ?? classify(question)
+    const source = { key: 'assistant.source', params: { asOfDate: v.r.as_of, id: v.run.run_id.slice(0, 8) } }
+    let parts
+    if (intent === 'delay' || intent === 'revenue') {
+      const d = intent === 'delay' ? Math.min(days || 14, 90) : 20
+      const o = await scenario.mutateAsync({
+        horizon: v.r.horizon,
+        params: {
+          delay_days: intent === 'delay' ? d : 0, delay_counterparty: null,
+          revenue_drop_pct: intent === 'revenue' ? 20 : 0, fixed_cost_growth_pct: 0,
+          extra_expense_kop: null, extra_expense_date: null, extra_income_kop: null, extra_income_date: null,
+        },
+      })
+      parts = scenarioAnswer(intent, d, o)
+    } else {
+      parts = localAnswer(intent, v.r)
+    }
+    setMessages((all) => [...all, { id: crypto.randomUUID(), role: 'assistant', fallback, parts: [...parts, ...(intent === 'help' ? [] : [source])] }])
+  }
+
   async function ask(text: string, hint?: { intent: Intent; days?: number }) {
     const question = text.trim()
     if (!question || busy || !v) return
-    const { intent, days } = hint ?? classify(question)
+    const history = historyOf(messages)
     setMessages((all) => [...all, { id: crypto.randomUUID(), role: 'user', text: question }])
     setInput('')
     setBusy(true)
-    const source = { key: 'assistant.source', params: { asOfDate: v.r.as_of, id: v.run.run_id.slice(0, 8) } }
     try {
-      let parts
-      if (intent === 'delay' || intent === 'revenue') {
-        const d = intent === 'delay' ? Math.min(days || 14, 90) : 20
-        const o = await scenario.mutateAsync({
-          horizon: v.r.horizon,
-          params: {
-            delay_days: intent === 'delay' ? d : 0, delay_counterparty: null,
-            revenue_drop_pct: intent === 'revenue' ? 20 : 0, fixed_cost_growth_pct: 0,
-            extra_expense_kop: null, extra_expense_date: null, extra_income_kop: null, extra_income_date: null,
-          },
-        })
-        parts = scenarioAnswer(intent, d, o)
-      } else {
-        parts = localAnswer(intent, v.r)
+      let answer: AdvisorAnswer | null = null
+      try {
+        answer = await advisor.mutateAsync({ question, history, lang: i18n.language.startsWith('en') ? 'en' : 'ru' })
+      } catch {
+        answer = null // advisor/api unreachable or rejected: answer by rules instead
       }
-      setMessages((all) => [...all, { id: crypto.randomUUID(), role: 'assistant', parts: [...parts, ...(intent === 'help' ? [] : [source])] }])
+      if (answer) {
+        const a = answer
+        setAiProvider(a.provider === 'none' ? null : a.provider)
+        setMessages((all) => [...all, { id: crypto.randomUUID(), role: 'assistant', advisor: a }])
+      } else {
+        setAiProvider(null)
+        await ruleAnswer(question, hint, true)
+      }
     } catch (e) {
       setMessages((all) => [...all, { id: crypto.randomUUID(), role: 'assistant', parts: [{ key: 'assistant.error', params: { reason: errorText(t, e) } }] }])
     } finally {
@@ -72,7 +127,7 @@ export default function AssistantPage() {
 
   return (
     <PageContainer>
-      <PageHeader title={t('assistant.title')} description={t('assistant.description')} actions={<Badge>{t('assistant.rulesBadge')}</Badge>} />
+      <PageHeader title={t('assistant.title')} description={t('assistant.description')} actions={<Badge>{aiProvider ? t('assistant.aiBadge', { provider: aiProvider }) : t('assistant.rulesBadge')}</Badge>} />
 
       {q.isPending && <div className="card"><LoadingState /></div>}
       {q.isError && <div className="card"><ErrorState message={errorText(t, q.error)} onRetry={() => void q.refetch()} /></div>}
@@ -97,7 +152,17 @@ export default function AssistantPage() {
                 </span>
                 <div className={cn('rounded-card px-4 py-2.5 text-[15px] whitespace-pre-line', m.role === 'user' ? 'bg-primary text-on-primary' : 'bg-app border border-line')}>
                   <span className="sr-only">{m.role === 'user' ? t('assistant.you') : t('assistant.bot')}: </span>
-                  {m.role === 'user' ? m.text : m.parts?.map((p) => tm(t, p.key, p.params)).join('\n')}
+                  {m.role === 'user' ? m.text : (
+                    <>
+                      <ProviderNotice m={m} />
+                      {m.advisor ? m.advisor.answer : m.parts?.map((p) => tm(t, p.key, p.params)).join('\n')}
+                      {m.advisor && m.advisor.suggestions.length > 0 && (
+                        <div className="flex flex-col gap-2 mt-3 whitespace-normal" role="group" aria-label={t('assistant.proposalsAria')}>
+                          {m.advisor.suggestions.map((s) => <SuggestionCard key={s.id} s={s} />)}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             ))}

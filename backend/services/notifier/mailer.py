@@ -10,7 +10,7 @@ from . import config
 
 log = logging.getLogger("notifier")
 EMAIL_RE = re.compile(r"^[^@\s<>\"',;]+@[^@\s<>\"',;]+\.[^@\s<>\"',;]+$")
-ROLES_RU = {"admin": "администратор", "analyst": "аналитик", "observer": "наблюдатель"}
+ROLES_RU = {"admin": "администратор", "editor": "аналитик", "viewer": "наблюдатель", "analyst": "аналитик", "observer": "наблюдатель"}
 
 
 def configured() -> bool:

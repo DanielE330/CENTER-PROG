@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { ThemeToggle } from './ThemeToggle'
 import { useForecast } from '../../hooks/queries'
 import { useAuth, useMe } from '../../app/auth'
+import { usePerms } from '../../app/perms'
 import { formatShortDate } from '../../lib/formatters'
 import { Badge } from '../shared/StatusBadge'
 
@@ -72,6 +73,7 @@ function Profile() {
   const { t } = useTranslation()
   const me = useMe()
   const { logout } = useAuth()
+  const { role } = usePerms()
   const [open, setOpen] = useState(false)
   const ref = useOutside(open, () => setOpen(false))
   const who = me.email ?? me.company_name
@@ -88,7 +90,7 @@ function Profile() {
         <span className="grid place-items-center size-9 rounded-full bg-primary-soft text-primary text-sm font-semibold" aria-hidden>{initials}</span>
         <span className="hidden sm:block leading-tight text-left max-w-[200px]">
           <span className="block text-sm font-medium truncate">{who}</span>
-          <span className="block text-xs text-muted">{t('header.account')}</span>
+          <span className="block text-xs text-muted">{t(`role.${role}`)}</span>
         </span>
         <ChevronDown size={16} className="text-muted hidden sm:block" aria-hidden />
       </button>

@@ -12,6 +12,7 @@ import { StatCard } from '../../components/shared/StatCard'
 import { ForecastBanners } from '../../components/shared/ForecastBanners'
 import { Button } from '../../components/ui/Button'
 import { Select } from '../../components/ui/Select'
+import { useEditGuard } from '../../app/perms'
 import { useDeleteEvent, useExpectedEvents, useForecastRun, usePlanFact } from '../../hooks/queries'
 import { formatDate, formatKop, formatPercent } from '../../lib/formatters'
 import { kopToRub } from '../../lib/money'
@@ -29,6 +30,7 @@ export default function ObligationsPage() {
   const pf = usePlanFact(90)
   const events = useExpectedEvents()
   const del = useDeleteEvent()
+  const guard = useEditGuard()
   const [kind, setKind] = useState('all')
   const [status, setStatus] = useState('all')
   const [addOpen, setAddOpen] = useState(false)
@@ -92,8 +94,8 @@ export default function ObligationsPage() {
         description={asOf ? t('obligations.descriptionAsOf', { date: formatDate(asOf) }) : t('obligations.description')}
         actions={
           <>
-            <Button onClick={() => setSyncOpen(true)}><RefreshCw size={16} aria-hidden /> {t('obligations.sync')}</Button>
-            <Button variant="primary" onClick={() => setAddOpen(true)}><Plus size={16} aria-hidden /> {t('obligations.add.open')}</Button>
+            <Button onClick={() => setSyncOpen(true)} {...guard.lock}><RefreshCw size={16} aria-hidden /> {t('obligations.sync')}</Button>
+            <Button variant="primary" onClick={() => setAddOpen(true)} {...guard.lock}><Plus size={16} aria-hidden /> {t('obligations.add.open')}</Button>
           </>
         }
       />
@@ -194,7 +196,8 @@ export default function ObligationsPage() {
                         <span className={'tnum text-sm font-semibold shrink-0 ' + (e.amount.startsWith('-') ? '' : 'text-primary')}>{formatKop(e.amount, { sign: true })}</span>
                         <button
                           onClick={() => del.mutate(e.id)}
-                          disabled={del.isPending}
+                          disabled={del.isPending || guard.lock.disabled}
+                          title={guard.lock.title}
                           aria-label={t('obligations.deleteEvent', { title: e.title })}
                           className="p-1.5 rounded-md text-muted hover:bg-hover hover:text-danger cursor-pointer"
                         >

@@ -1,13 +1,13 @@
 import { Bot, CalendarClock, History, GitCompareArrows, LayoutDashboard, LineChart, Receipt, Settings, Split, Target } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import type { WebRole } from '../../types'
+import type { Role } from '../../types'
 
 export interface NavItem {
   to: string
   labelKey: string
   icon: LucideIcon
   /** Hidden for lower roles (the API enforces the same rule). */
-  minRole?: WebRole
+  minRole?: Role
 }
 
 export const navItems: NavItem[] = [

@@ -64,6 +64,7 @@ class World:
         self.forecast = build_forecast(self.balance)
         self.sent: list[tuple[str, dict]] = []
         self.fail_telegram = None
+        self.banned: str | None = None  # причина блокировки компании оператором платформы
         self.audits: list[tuple[str, dict]] = []
         self.plan_fact = {"as_of": "2026-10-02", "items": [
             {"date": "2026-09-28", "title": "Поставщик", "source": "recurring", "plan": "-28000000", "fact": "-28000000", "status": "paid"},
@@ -81,7 +82,7 @@ class World:
         if p.endswith("/snapshot"):
             return httpx.Response(200, json={"data_revision": 1, "transactions": self.txs, "events": []})
         if p.endswith(f"/companies/{CID}"):
-            return httpx.Response(200, json={"company_id": CID, "company_name": "ООО «Тест»"})
+            return httpx.Response(200, json={"company_id": CID, "company_name": "ООО «Тест»", "banned": self.banned is not None, "ban_reason": self.banned})
         return httpx.Response(404, json={})
 
     def telegram_handler(self, req: httpx.Request) -> httpx.Response:
@@ -668,7 +669,8 @@ def start(bot, code, chat_id=700, uid=700, name="Пётр"):
     run(bot.handle({"update_id": 1, "message": {"chat": {"id": chat_id, "type": "private", "first_name": name}, "from": {"id": uid, "first_name": name}, "text": f"/start {code}"}}))
 
 
-@pytest.mark.parametrize("web,tg", [("owner", "admin"), ("admin", "admin"), ("analyst", "rater"), ("observer", "viewer")])
+@pytest.mark.parametrize("web,tg", [("director", "admin"), ("admin", "admin"), ("editor", "rater"), ("viewer", "viewer"),
+                                    ("owner", "admin"), ("analyst", "rater"), ("observer", "viewer")])  # старые названия — для прежних записей
 def test_telegram_role_derived_from_web_role(core, web, tg):
     store, jobs, bot, w = core
     start(bot, store.new_link_code(CID, "web-u", web))
@@ -871,3 +873,37 @@ def test_question_is_masked_too(core, monkeypatch):
     run(bot.handle({"update_id": 1, "message": {"chat": {"id": 111, "type": "private"}, "from": {"id": 5}, "text": "/ask когда заплатит ООО «Ромашка» (ИНН 7707083893)?"}}))
     assert "Ромашка" not in json.dumps(calls[0], ensure_ascii=False) and "7707083893" not in json.dumps(calls[0])
     assert "ООО «Ромашка»" in w.texts(111)[-1]
+
+
+# ---------- блокировка компании оператором платформы ----------
+def test_banned_company_gets_no_scheduled_reports_or_alerts(core, at_10):
+    store, jobs, bot, w = core
+    w.banned = "Нарушение условий"
+    run(jobs.tick_company(CID))
+    run(jobs.send_risk(CID))
+    assert w.texts(111) == [] and not w.methods(), "заблокированной компании ничего не уходит"
+    w.banned = None
+    jobs._bans.clear()  # кэш статуса живёт минуту
+    run(jobs.tick_company(CID))
+    assert w.texts(111), "после разблокировки рассылки возвращаются"
+
+
+def test_banned_company_bot_is_silent_except_one_explanation(core):
+    store, jobs, bot, w = core
+    w.banned = "Спам"
+    msg = lambda t: {"update_id": 2, "message": {"chat": {"id": 111, "type": "private"}, "from": {"id": 111}, "text": t}}  # noqa: E731
+    run(bot.handle(msg("/report")))
+    run(bot.handle(msg("что с деньгами?")))
+    assert all("заблокирована" in t for t in w.texts(111)) and len(w.texts(111)) == 2
+    assert "sendPhoto" not in w.methods() and "sendDocument" not in w.methods()
+    run(bot.handle({"update_id": 3, "callback_query": {"id": "cb", "from": {"id": 111}, "data": "x:week", "message": {"chat": {"id": 111}, "message_id": 5}}}))
+    assert ("answerCallbackQuery", {"callback_query_id": "cb", "text": "Компания заблокирована оператором"}) in w.sent or "answerCallbackQuery" in w.methods()
+    assert "sendDocument" not in w.methods()
+
+
+def test_banned_company_cannot_link_a_new_chat_and_ask_is_refused(core):
+    store, jobs, bot, w = core
+    w.banned = "Спам"
+    start(bot, store.new_link_code(CID, "web-u", "viewer"), chat_id=800, uid=800)
+    assert store.chat(800) is None and "заблокирована" in w.texts(800)[0]
+    assert "заблокирована" in run(jobs.ask(CID, 111, "как дела?"))

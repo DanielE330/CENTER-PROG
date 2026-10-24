@@ -66,5 +66,45 @@ pub fn open(path: &str) -> Db {
             conn.execute(&format!("ALTER TABLE transactions ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"), []).expect("add column");
         }
     }
+    // блокировка компании оператором платформы (метаданные; данные компании не затрагиваются)
+    for col in ["banned_at", "ban_reason"] {
+        if !cols.iter().any(|c| c == col) {
+            conn.execute(&format!("ALTER TABLE companies ADD COLUMN {col} TEXT"), []).expect("add column");
+        }
+    }
+    // роли: участники компании (director | admin | editor | viewer). Директор — владелец; у баз до появления ролей запись директора создаётся здесь.
+    migrate_members(&conn);
     Arc::new(Mutex::new(conn))
+}
+
+const MEMBERS_DDL: &str = "CREATE TABLE company_members(
+            company_id TEXT NOT NULL REFERENCES companies(id), user_id TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL DEFAULT '', role TEXT NOT NULL CHECK(role IN ('director','admin','editor','viewer')),
+            created_at TEXT NOT NULL, created_by TEXT NOT NULL DEFAULT '')";
+
+/// Таблица участников: создаётся с ролью `admin`; база версии с тремя ролями пересобирается (SQLite не меняет CHECK на месте).
+fn migrate_members(conn: &Connection) {
+    let sql: Option<String> = conn.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='company_members'", [], |r| r.get(0)).ok();
+    match sql {
+        None => conn.execute_batch(&format!("{MEMBERS_DDL};")).expect("create members"),
+        Some(s) if !s.contains("'admin'") => conn
+            .execute_batch(&format!(
+                "PRAGMA foreign_keys=OFF; BEGIN;
+                 ALTER TABLE company_members RENAME TO company_members_old;
+                 DROP INDEX IF EXISTS members_company; DROP INDEX IF EXISTS members_one_director;
+                 {MEMBERS_DDL};
+                 INSERT INTO company_members SELECT company_id, user_id, email, role, created_at, created_by FROM company_members_old;
+                 DROP TABLE company_members_old; COMMIT; PRAGMA foreign_keys=ON;"
+            ))
+            .expect("rebuild members"),
+        Some(_) => {}
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS members_company ON company_members(company_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS members_one_director ON company_members(company_id) WHERE role='director';
+        INSERT OR IGNORE INTO company_members(company_id, user_id, email, role, created_at, created_by)
+            SELECT id, owner_id, '', 'director', created_at, '' FROM companies
+            WHERE NOT EXISTS (SELECT 1 FROM company_members m WHERE m.company_id = companies.id);",
+    )
+    .expect("migrate members");
 }

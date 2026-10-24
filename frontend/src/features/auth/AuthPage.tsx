@@ -12,7 +12,7 @@ import { ThemeToggle } from '../../components/layout/ThemeToggle'
 import { LanguageSwitch } from '../../components/layout/LanguageSwitch'
 import { EcpLogin } from './EcpLogin'
 import { MfaStep } from './MfaStep'
-import type { MfaChallenge } from '../../types'
+import type { MeWithCodes, MfaChallenge } from '../../types'
 
 export default function AuthPage() {
   const { t } = useTranslation()
@@ -57,7 +57,7 @@ export default function AuthPage() {
       <main className="flex-1 grid place-items-center px-4 pb-10">
         {challenge ? (
           <div className="card enter w-full max-w-[420px] p-6 sm:p-8">
-            <MfaStep
+            <MfaStep<MeWithCodes>
               mode={challenge.mfa}
               ticket={challenge.mfa_token}
               onDone={setMe}
@@ -78,6 +78,7 @@ export default function AuthPage() {
           <div>
             <h1 className="text-2xl font-semibold">{reg ? t('auth.registerTitle') : t('auth.loginTitle')}</h1>
             <p className="text-muted mt-1">{t('auth.subtitle')}</p>
+            <p className="text-[13px] text-muted mt-2">{reg ? t('auth.directorNoteRegister') : t('auth.directorNoteLogin')}</p>
           </div>
 
           {reg && (

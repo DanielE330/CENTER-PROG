@@ -72,7 +72,9 @@
       "registerButton": "Register with e-signature",
       "signRegister": "Sign and register",
       "companyRequired": "Enter the legal entity name above first"
-    }
+    },
+    "directorNoteLogin": "The director signs in with email and password or with an e-signature. Employees sign in with the email and password given by the director.",
+    "directorNoteRegister": "The director must have a password: after registering with an e-signature you will be asked to set an email and password."
   },
   "cades": {
     "scriptMissing": "cadesplugin_api.js not found (CryptoPro Browser plug-in)",
@@ -123,6 +125,15 @@
     "select": {
       "placeholder": "Select…",
       "empty": "No options"
+    },
+    "datePicker": {
+      "placeholder": "MM/DD/YYYY",
+      "open": "Open calendar",
+      "calendar": "Calendar",
+      "prevMonth": "Previous month",
+      "nextMonth": "Next month",
+      "today": "Today",
+      "clear": "Clear"
     }
   },
   "status": {
@@ -181,7 +192,7 @@
     "not_enough_history": "Not enough history for this calculation",
     "duplicate_file": "This file has already been uploaded",
     "file_too_large": "The file is larger than 25 MB",
-    "unsupported_type": "Unsupported file format. CSV and XLSX are accepted.",
+    "unsupported_type": "Unsupported file format. Allowed: CSV, XLSX and a 1C statement (.txt, .1c).",
     "parse_failed": "Could not recognise the file structure",
     "no_valid_rows": "The file has no valid rows",
     "no_file": "Choose a file",
@@ -210,7 +221,18 @@
     "too_many_signatures": "Signature limit reached",
     "too_many_tokens": "Token limit reached, delete unused ones",
     "invalid_token_name": "Token name must be 1 to 80 characters",
-    "invalid_token": "The token is invalid or revoked"
+    "invalid_token": "The token is invalid or revoked",
+    "invalid_reason": "Enter a reason for blocking (3 to 500 characters)",
+    "unauthenticated": "Sign-in required",
+    "invalid_session": "The session is no longer valid, sign in again",
+    "backoffice_unavailable": "The operator service is unavailable",
+    "already_banned": "The company is already blocked",
+    "forbidden": "You do not have permission for this action",
+    "password_required": "Set the director email and password first",
+    "company_banned": "The company has been blocked by the operator",
+    "invalid_current_password": "The current password is incorrect",
+    "user_not_found": "Employee not found",
+    "token_not_found": "Token not found"
   },
   "quality": {
     "title": "Data quality",
@@ -607,7 +629,7 @@
     "title": "AI assistant",
     "description": "Explains the causes of risk and helps check scenarios.",
     "rulesBadge": "Rule-based answers",
-    "welcome": "Hello! I answer from the saved forecast: gap risk, the biggest payments, what to check and how to reduce risk. Numbers come from the calculation, nothing is made up. No LLM provider is connected and no external services are called.",
+    "welcome": "Hello! I answer from the forecast and your company data: gap risk, upcoming payments, plan vs actual and what-if scenarios. Numbers come from the calculations, nothing is made up. If an AI provider is connected, a model writes the answer (names, tax IDs and accounts are hidden before sending), otherwise I answer by rules. I never write anything myself: you accept suggestions with a button.",
     "noForecastTitle": "No forecast to analyse",
     "noForecastText": "The assistant answers from the saved forecast. Upload a statement and build a forecast first.",
     "error": "Could not get an answer: {{reason}}",
@@ -665,7 +687,26 @@
       "scenarioDeficit": "Shortfall in a bad case: {{fromKop}} → {{toKop}}.",
       "scenarioProbSame": "Probability of a gap is unchanged: {{valuePercent}}.",
       "scenarioDeficitSame": "Shortfall in a bad case is unchanged: {{valueKop}}."
-    }
+    },
+    "aiBadge": "AI: {{provider}}",
+    "noProviderTitle": "Connect an AI provider",
+    "noProviderText": "This answer is a template built from the forecast, without a model. To turn AI on, set LLM_PROVIDER and the provider key in the llm-gateway service.",
+    "providerDownTitle": "The provider is unavailable right now",
+    "providerDownText": "A template answer from the forecast is shown. Try again later.",
+    "budgetTitle": "Daily AI limit reached",
+    "budgetText": "A template answer from the forecast is shown. The limit resets tomorrow.",
+    "advisorDownTitle": "The advisor is unavailable",
+    "advisorDownText": "A rule-based answer from the saved forecast is shown.",
+    "suggestionAddOut": "Suggestion: add an expected payment",
+    "suggestionAddIn": "Suggestion: add an expected receipt",
+    "suggestionLine": "{{title}}: {{amount}}, {{date}}",
+    "suggestionCounterparty": "Counterparty: {{name}}",
+    "add": "Add",
+    "dismiss": "Dismiss",
+    "applied": "Added to expected payments",
+    "dismissed": "Dismissed",
+    "applyError": "Could not add: {{reason}}",
+    "proposalsAria": "Advisor suggestions"
   },
   "settings": {
     "title": "Settings",
@@ -712,7 +753,7 @@
     "fileAria": "Statement file",
     "choose": "Choose a statement file",
     "uploading": "Uploading and parsing the file…",
-    "formats": "CSV, XLSX · up to 25 MB",
+    "formats": "CSV, XLSX, 1C statement · up to 25 MB",
     "doneTitle": "Import finished",
     "doneText_one": "{{count}} transaction added. The forecast was recalculated.",
     "doneText_other": "{{count}} transactions added. The forecast was recalculated.",
@@ -769,7 +810,14 @@
     "copy": "Copy",
     "copied": "Copied",
     "usage": "Example request:",
-    "endpoints": "Available: GET /api/ext/v1/company, forecast, transactions, expected-events, plan-fact; POST forecast and expected-events."
+    "endpoints": "Available: GET /api/ext/v1/company, forecast, transactions, expected-events, plan-fact; POST forecast and expected-events.",
+    "rights": "Token permissions = permissions of your role: {{role}}.",
+    "rightsWrite": "The token can read and write data (read and write).",
+    "rightsRead": "The token can only read data (GET requests). If your role changes, token permissions change immediately.",
+    "owner": "owner: {{value}}",
+    "ownerMe": "you",
+    "scopeRead": "read",
+    "scopeWrite": "read and write"
   },
   "telegram": {
     "title": "Telegram notifications",
@@ -894,8 +942,6 @@
     "inviteAccept": "Accept",
     "inviteDecline": "Decline",
     "web": {
-      "title": "Team",
-      "subtitle": "People who have access to the company. The owner manages everyone, an admin manages analysts and observers.",
       "invite": "Invite",
       "inviteRole": "Invitee role",
       "createInvite": "Create link",
@@ -904,10 +950,8 @@
       "inviteLink": "Invitation link",
       "until": "until {{value}}",
       "revoke": "Revoke",
-      "members": "Members",
-      "you": "you",
       "owner": "Owner",
-      "admin": "Admin",
+      "admin": "Administrator",
       "analyst": "Analyst",
       "observer": "Observer",
       "leaveTitle": "Leave the team",
@@ -917,9 +961,11 @@
       "inviteEmailHint": "If set, the invitation is e-mailed and only a user with this e-mail can accept it.",
       "emailSent": "The invitation e-mail was sent. You can still share the link by hand.",
       "emailNotSent": "The e-mail was not sent: mail is not configured or the address was rejected. Share the link by hand.",
-      "transfer": "Transfer ownership",
-      "transferConfirm": "Confirm transfer",
-      "emailLimited": "The e-mail limit is reached (50 per hour per company). Share the link by hand."
+      "emailLimited": "The e-mail limit is reached (50 per hour per company). Share the link by hand.",
+      "director": "Owner",
+      "editor": "Analyst",
+      "viewer": "Observer",
+      "inviteSubtitle": "A one-time link with a role (valid 7 days). With an email the invitation is sent to it and only that address can accept. Only the owner invites administrators."
     }
   },
   "activity": {
@@ -943,7 +989,8 @@
       "import": "Imports",
       "event": "Payments",
       "forecast": "Forecasts",
-      "account": "Account"
+      "account": "Account",
+      "member": "Staff"
     },
     "actions": {
       "team.invite_create": "Invitation created",
@@ -968,8 +1015,183 @@
       "account.email_add": "Email linked",
       "account.email_remove": "Email removed",
       "account.signature_add": "Signature linked",
-      "account.signature_remove": "Signature removed"
+      "account.signature_remove": "Signature removed",
+      "member.create": "Staff member added",
+      "member.role_change": "Staff role changed",
+      "member.delete": "Staff member removed",
+      "member.reset_password": "Staff password reset",
+      "team.invite_accept": "Invitation accepted",
+      "account.token_revoke_other": "Staff API token revoked"
     },
     "export": "Download CSV"
+  },
+  "operator": {
+    "title": "Operator panel",
+    "brand": "Platform operator panel",
+    "description": "Companies registered on the platform: statistics and blocking. The contents of company data are not available.",
+    "signedInAs": "Operator: {{email}}",
+    "privacy": "The operator sees only registration details and aggregates. Customers' transactions and payments are not shown here.",
+    "noName": "Unnamed",
+    "noForecast": "No forecast",
+    "login": {
+      "title": "Operator sign-in",
+      "subtitle": "Staff sign-in for the platform team.",
+      "submit": "Sign in"
+    },
+    "stats": {
+      "title": "Platform statistics",
+      "total": "Total companies",
+      "active": "Active",
+      "banned": "Blocked",
+      "new7": "New in 7 days",
+      "new30": "New in 30 days",
+      "users": "Users"
+    },
+    "status": {
+      "active": "Active",
+      "banned": "Blocked"
+    },
+    "col": {
+      "company": "Company",
+      "inn": "Tax ID",
+      "status": "Status",
+      "risk": "Gap risk",
+      "members": "Users",
+      "registered": "Registered",
+      "lastImport": "Last import"
+    },
+    "companies": {
+      "title": "Companies",
+      "subtitle": "Click a name to open the company card.",
+      "search": "Search companies",
+      "onlyBanned": "Blocked only",
+      "empty": "No companies found",
+      "pages": "List pages",
+      "range": "{{from}}–{{to}} of {{total}}"
+    },
+    "detail": {
+      "back": "Back to companies",
+      "about": "About the company",
+      "director": "Director",
+      "ogrn": "Registration no. (OGRN)",
+      "lastOperation": "Date of the last transaction",
+      "loaded": "Transactions loaded (count)",
+      "planned": "Expected payments (count)",
+      "members": "Members",
+      "role": "Role",
+      "memberSince": "Added",
+      "noMembers": "No member data.",
+      "bannedAt": "Blocked: {{date}}",
+      "reason": "Reason: {{reason}}"
+    },
+    "ban": {
+      "action": "Block",
+      "title": "Block “{{name}}”?",
+      "effect": "All users of the company and their API tokens will lose access and active sessions will be ended. The company's data is kept.",
+      "reason": "Reason for blocking",
+      "reasonHint": "Company users will see it. Up to {{max}} characters.",
+      "reasonRequired": "Enter a reason (at least {{min}} characters)",
+      "submit": "Block"
+    },
+    "unban": {
+      "action": "Unblock",
+      "title": "Unblock “{{name}}”?",
+      "effect": "The company's users will be able to sign in and use API tokens again.",
+      "submit": "Unblock"
+    }
+  },
+  "demo": {
+    "title": "Demo: a week has passed",
+    "today": "Demo \"today\": {{date}}. The next operations are still \"in the future\".",
+    "noData": "Load the demo statement first.",
+    "weeksLeft_one": "{{count}} week of data left",
+    "weeksLeft_other": "{{count}} weeks of data left",
+    "advance": "A week has passed",
+    "advancing": "Feeding operations…",
+    "finished": "Demo data is over",
+    "unavailable": "The demo feed is unavailable right now.",
+    "done_one": "Added {{count}} operation for {{from}} – {{to}}. The forecast was recalculated.",
+    "done_other": "Added {{count}} operations for {{from}} – {{to}}. The forecast was recalculated.",
+    "recalc": "calculation {{ms}} ms",
+    "vsFactInBand": "Previous forecast for {{date}}: {{predicted}}, actual {{actual}} — inside the P10–P90 band.",
+    "vsFactOutBand": "Previous forecast for {{date}}: {{predicted}}, actual {{actual}} — outside the P10–P90 band.",
+    "openPlanFact": "Plan vs actual"
+  },
+  "role": {
+    "director": "Owner",
+    "editor": "Analyst",
+    "viewer": "Observer",
+    "editorHint": "Sees all data and can change it: import, payments, categories, calendar, sync.",
+    "viewerHint": "View-only access to data and calculations.",
+    "admin": "Administrator",
+    "adminHint": "Manages the team, the company name and notification settings; sees the activity log and edits data. Only the owner assigns administrators."
+  },
+  "perms": {
+    "denied": "Not enough rights: this action needs the Analyst role or higher",
+    "directorOnly": "Only the owner can change this",
+    "importDenied": "Not enough rights: statement import is available to Owner, Administrator and Analyst.",
+    "readOnlyBanner": "You have read-only access: company data cannot be changed.",
+    "adminOnly": "The owner and administrators can change this"
+  },
+  "password": {
+    "title": "Change your password",
+    "textForced": "You were given a temporary password. Set your own before continuing.",
+    "textOptional": "The director set this password. We recommend changing it to your own; you can do it later.",
+    "current": "Current password",
+    "new": "New password",
+    "submit": "Change password",
+    "skip": "Skip",
+    "change": "Change password",
+    "changed": "Password changed"
+  },
+  "credentials": {
+    "title": "Set the director email and password",
+    "text": "You signed in with an e-signature. A company director must have a password: you cannot continue without it. The signature still works for signing in.",
+    "submit": "Save and continue"
+  },
+  "banned": {
+    "title": "The company has been blocked by the operator",
+    "text": "Access to the data of \"{{company}}\" is suspended for all employees.",
+    "reason": "Reason",
+    "noReason": "not specified",
+    "contact": "If you think this is a mistake, contact the platform operator."
+  },
+  "members": {
+    "title": "Employees",
+    "subtitleManage": "Add staff, set roles, reset passwords and transfer ownership. Invite links are in the block below.",
+    "subtitleView": "Company staff. The owner and administrators manage them.",
+    "empty": "No employees yet",
+    "you": "you",
+    "added": "added {{date}}",
+    "add": "Add employee",
+    "addTitle": "New employee",
+    "addSubmit": "Add",
+    "role": "Role",
+    "roleOf": "Role of {{email}}",
+    "generate": "Generate a password",
+    "generateHint": "The password is shown once, right after adding. The employee must change it at first sign-in.",
+    "manualHint": "8 to 128 characters. The employee can change it at first sign-in.",
+    "reset": "Reset password",
+    "resetAria": "Reset password of {{email}}",
+    "delete": "Delete",
+    "deleteAria": "Delete employee {{email}}",
+    "deleteTitle": "Delete employee?",
+    "deleteText": "{{email}} will lose access, and their sessions and API tokens will be revoked. This cannot be undone.",
+    "deleteConfirm": "Delete employee",
+    "createdTitle": "Employee added",
+    "createdText": "Pass the password to {{email}}. They must change it at first sign-in.",
+    "resetDoneTitle": "Password reset",
+    "resetDoneText": "New password for {{email}}. All their sessions were ended; they must change the password at sign-in.",
+    "passwordAria": "Generated password",
+    "onceTitle": "The password is shown only once",
+    "onceText": "After you close this window the password cannot be shown again: copy it now. If you lose it, reset the password again.",
+    "savedIt": "I saved the password",
+    "rolesNote": "The owner can do everything and transfers ownership. Administrator: team, company name, notification settings, activity log and data; only the owner assigns administrators. Analyst: read and change data. Observer: view only.",
+    "noEmail": "certificate sign-in",
+    "transfer": "Transfer ownership",
+    "transferAria": "Transfer ownership to {{email}}",
+    "transferTitle": "Transfer company ownership?",
+    "transferText": "{{email}} becomes the owner and you become an administrator. Only the new owner can give ownership back.",
+    "transferConfirm": "Transfer ownership"
   }
 }

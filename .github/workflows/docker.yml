@@ -1,0 +1,28 @@
+name: docker
+on:
+  push:
+    branches: [main, testing]
+    paths: ["infra/**", "backend/**", "frontend/**", ".github/workflows/docker.yml"]
+  pull_request:
+    paths: ["infra/**", "backend/**", "frontend/**", ".github/workflows/docker.yml"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compose config is valid
+        run: docker compose -f infra/docker-compose.yml config -q
+      # Образы только собираются (push нет): проверка, что Dockerfile и контекст сборки не сломаны.
+      - name: Build images
+        run: docker compose -f infra/docker-compose.yml build

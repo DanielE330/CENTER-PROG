@@ -78,6 +78,31 @@ else
   echo "skip sync интеграций: integrator недоступен"
 fi
 
+# демо «Прошла неделя» (необязательно): только если лента демо отвечает и demo@example.com засеян выпиской до даты отсечки
+# (infra/scripts/seed_demo.sh на чистой БД). Отдельная сессия: у demo-пользователя своя компания.
+if curl -fsS -m 3 "${DEMO_FEED_URL:-http://127.0.0.1:8012}/live" >/dev/null 2>&1; then
+  DJAR=$(mktemp); DCID=$(curl -s -c "$DJAR" -H 'Content-Type: application/json' -d '{"email":"demo@example.com","password":"demo12345"}' "$BASE/api/v1/auth/login" | jq_ company_id 2>/dev/null || true)
+  if [ -n "$DCID" ]; then
+    DEMO_ST=$(curl -s -b "$DJAR" "$BASE/api/v1/companies/$DCID/demo/status")
+    if [ "$(echo "$DEMO_ST" | jq_ enabled 2>/dev/null)" = true ] && [ "$(echo "$DEMO_ST" | jq_ finished 2>/dev/null)" = false ]; then
+      BEFORE=$(echo "$DEMO_ST" | jq_ as_of)
+      DCODE=$(curl -s -o /tmp/smoke_body.$$ -w '%{http_code}' -X POST -b "$DJAR" -H "Origin: $BASE" "$BASE/api/v1/companies/$DCID/demo/advance-week"); BODY=$(cat /tmp/smoke_body.$$)
+      if [ "$DCODE" = 201 ] && [ "$(echo "$BODY" | jq_ added)" -gt 0 ] && [ "$(echo "$BODY" | jq_ new_as_of)" \> "$BEFORE" ]; then
+        ok "демо: прошла неделя ($BEFORE -> $(echo "$BODY" | jq_ new_as_of), +$(echo "$BODY" | jq_ added) операций, расчёт $(echo "$BODY" | jq_ recalc_ms) мс)"
+      else
+        bad "демо advance-week: $DCODE ${BODY:0:300}"
+      fi
+    else
+      echo "skip демо: выключено или лента закончилась (чистая БД + seed_demo.sh вернут неделю)"
+    fi
+  else
+    echo "skip демо: нет входа demo@example.com (DEMO_SEED=1?)"
+  fi
+  rm -f "$DJAR"
+else
+  echo "skip демо: demo_feed недоступен"
+fi
+
 req POST /api/v1/auth/logout; expect "logout" 204
 req GET /api/v1/auth/me; expect "me после выхода" 401
 [ $FAIL = 0 ] && echo "SMOKE PASSED" || { echo "SMOKE FAILED"; exit 1; }

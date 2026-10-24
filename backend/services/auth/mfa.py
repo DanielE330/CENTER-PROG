@@ -65,8 +65,8 @@ def qr_svg(data: str) -> str:
 
 # ---- шифрование секрета: HMAC-SHA256 в режиме потока + имитовставка (без внешних библиотек) ----
 
-def _key(db_path: str) -> bytes:
-    env = os.environ.get("AUTH_MFA_KEY", "")
+def _key(db_path: str, env_name: str = "AUTH_MFA_KEY") -> bytes:
+    env = os.environ.get(env_name, "")
     if env:
         return hashlib.sha256(env.encode()).digest()
     path = os.path.join(os.path.dirname(os.path.abspath(db_path)), "mfa.key")
@@ -87,8 +87,8 @@ def _stream(key: bytes, nonce: bytes, n: int) -> bytes:
     return out[:n]
 
 
-def seal(db_path: str, plain: str) -> str:
-    key = _key(db_path)
+def seal(db_path: str, plain: str, env_name: str = "AUTH_MFA_KEY") -> str:
+    key = _key(db_path, env_name)
     nonce = secrets.token_bytes(16)
     data = plain.encode()
     ct = bytes(a ^ b for a, b in zip(data, _stream(key, nonce, len(data))))
@@ -96,8 +96,8 @@ def seal(db_path: str, plain: str) -> str:
     return base64.urlsafe_b64encode(nonce + ct + tag).decode()
 
 
-def unseal(db_path: str, blob: str) -> str:
-    key = _key(db_path)
+def unseal(db_path: str, blob: str, env_name: str = "AUTH_MFA_KEY") -> str:
+    key = _key(db_path, env_name)
     raw = base64.urlsafe_b64decode(blob.encode())
     nonce, ct, tag = raw[:16], raw[16:-32], raw[-32:]
     if not hmac.compare_digest(tag, hmac.new(key, b"mac" + nonce + ct, hashlib.sha256).digest()):

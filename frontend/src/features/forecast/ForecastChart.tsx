@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import type { ForecastPoint } from '../../types'
@@ -27,6 +27,12 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   const theme = useTheme()
+  // A theme switch only recolours the chart: no data morphing, so nothing moves while the page cross-fades.
+  const lastTheme = useRef(theme)
+  const themeSwitched = lastTheme.current !== theme
+  useEffect(() => {
+    lastTheme.current = theme
+  }, [theme])
   const forecastName = forecastNameProp ?? t('chart.forecast')
   const option = useMemo<EChartsOption>(() => {
     const primary = cssVar('--c-primary', '#176B45')
@@ -141,7 +147,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
       // Moderate, easing-based motion; skipped for reduced-motion users and very long series.
       animation: animate,
       animationDuration: 600,
-      animationDurationUpdate: 450,
+      animationDurationUpdate: themeSwitched ? 0 : 450,
       animationEasing: 'cubicOut',
       animationEasingUpdate: 'cubicOut',
       color: [primary],

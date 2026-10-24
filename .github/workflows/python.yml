@@ -1,0 +1,44 @@
+name: python
+on:
+  push:
+    branches: [main, testing]
+    paths: ["backend/services/**", "data/demo/**", ".github/workflows/python.yml"]
+  pull_request:
+    paths: ["backend/services/**", "data/demo/**", ".github/workflows/python.yml"]
+
+permissions: {}
+
+concurrency:
+  group: python-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: backend/services
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --frozen
+      # TODO: 13 замечаний ruff (F401, F841, E702, E731, E741) и 56 файлов не по `ruff format`. Исправить и убрать continue-on-error.
+      - name: Lint (ruff)
+        continue-on-error: true
+        run: uvx ruff@0.15.0 check .
+      - name: Format (ruff)
+        continue-on-error: true
+        run: uvx ruff@0.15.0 format --check .
+      # Часть тестов использует демо-выписку из data/demo (она в git); полного датасета в CI нет, такие тесты пропускаются.
+      - name: Tests
+        run: uv run pytest -q
+      - name: Dependency audit
+        run: |
+          uv export --frozen --no-dev --no-hashes --no-emit-project > /tmp/requirements.txt
+          uvx pip-audit==2.9.0 -r /tmp/requirements.txt --no-deps --disable-pip

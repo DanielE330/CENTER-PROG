@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { useTranslation } from 'react-i18next'
 import { Header } from './Header'
+import { ReadOnlyBanner } from './ReadOnlyBanner'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 export function AppLayout() {
@@ -37,6 +38,7 @@ export function AppLayout() {
 
       <div className="flex-1 min-w-0 flex flex-col h-full">
         <Header onMenu={() => setDrawer(true)} />
+        <ReadOnlyBanner />
         <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto overflow-x-hidden outline-none">
           {/* Re-keyed per route so the short fade replays on navigation; app state outside the page is untouched. */}
           <div key={pathname} className="page-enter">

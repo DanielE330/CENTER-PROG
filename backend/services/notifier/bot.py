@@ -62,6 +62,13 @@ class BotApp:
     async def audit(self, cid: str, uid: int, action: str, obj: str = "") -> None:
         await self.jobs.up.audit(cid, f"tg:{uid}", action, obj)
 
+    async def blocked(self, chat_id: int, cid: str) -> bool:
+        """Компания заблокирована оператором платформы: бот молчит, кроме одного объяснения."""
+        reason = await self.jobs.banned(cid)
+        if reason:
+            await self.say(chat_id, f"⛔ Компания заблокирована оператором платформы: {esc(reason)}. Уведомления и команды отключены.")
+        return bool(reason)
+
     async def say(self, chat_id: int, text: str, kb=None):
         try:
             await self.bot.send(chat_id, text, kb)
@@ -86,6 +93,8 @@ class BotApp:
             await self.say(chat_id, UNLINKED)
             return
         cid = link["company_id"]
+        if await self.blocked(chat_id, cid):
+            return
         self.store.touch_member(cid, uid, m.get("from", {}).get("first_name", ""))
         try:
             await self.run_command({**chat, "link": link}, uid, cid, cmd, arg)
@@ -144,6 +153,10 @@ class BotApp:
             if not row:
                 await self.say(chat_id, "Ссылка устарела или уже использована. Создайте новую в «Настройках» сервиса.")
                 return
+            reason = await self.jobs.banned(row["company_id"])
+            if reason:
+                await self.say(chat_id, f"⛔ Компания заблокирована оператором платформы: {esc(reason)}. Подключить чат нельзя.")
+                return
             title = chat.get("title") or chat.get("first_name") or ""
             self.store.link_chat(chat_id, row["company_id"], "private" if chat["type"] == "private" else "group", title, row["user_id"])
             who = (chat.get("first_name") or chat.get("title") or "")
@@ -176,6 +189,8 @@ class BotApp:
     async def on_text(self, chat_id: int, uid: int, text: str) -> None:
         link = self.store.chat(chat_id)
         if not link:
+            return
+        if await self.blocked(chat_id, link["company_id"]):
             return
         if link["kind"] == "private" and not self.store.pop_pending_peek(chat_id):
             await self.ask(chat_id, link["company_id"], text)  # в личном чате вопрос можно писать без команды
@@ -293,6 +308,9 @@ class BotApp:
             await self.bot.answer_callback(cb["id"], "Чат не подключён")
             return
         cid = link["company_id"]
+        if await self.jobs.banned(cid):
+            await self.bot.answer_callback(cb["id"], "Компания заблокирована оператором")
+            return
         parts = data.split(":")
         need = "admin" if parts[0] == "s" else "rater" if parts[0] in ("g", "r", "b", "ga") else None
         if need and not self.store.can(link, uid, need):

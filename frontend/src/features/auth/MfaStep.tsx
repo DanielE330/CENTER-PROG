@@ -8,27 +8,40 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import type { MeWithCodes, MfaSetup } from '../../types'
 
-interface Props {
+/** Три шага второго фактора: настройка (QR), включение кодом, проверка кода. Для компании и для оператора — свои адреса. */
+export interface MfaApi<T extends { backup_codes?: string[] }> {
+  setup: (ticket: string) => Promise<MfaSetup>
+  enable: (ticket: string, code: string) => Promise<T>
+  verify: (ticket: string, code: string) => Promise<T>
+}
+
+export const companyMfaApi: MfaApi<MeWithCodes> = { setup: api.mfaSetup, enable: api.mfaEnable, verify: api.mfaVerify }
+
+interface Props<T extends { backup_codes?: string[] }> {
   /** `setup` — первый вход: подключаем приложение-аутентификатор; `verify` — обычный вход с кодом. */
   mode: 'setup' | 'verify'
   ticket: string
-  onDone: (me: MeWithCodes) => void
+  onDone: (me: T) => void
   onCancel: () => void
+  /** По умолчанию — вход в компанию. */
+  mfaApi?: MfaApi<T>
 }
 
 /** Второй шаг входа. При первом входе показывает QR и после подтверждения кодом — резервные коды (один раз). */
-export function MfaStep({ mode, ticket, onDone, onCancel }: Props) {
+export function MfaStep<T extends { backup_codes?: string[] } = MeWithCodes>({ mode, ticket, onDone, onCancel, mfaApi }: Props<T>) {
+  const client = (mfaApi ?? companyMfaApi) as MfaApi<T>
   const { t } = useTranslation()
   const [setup, setSetup] = useState<MfaSetup | null>(null)
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [saved, setSaved] = useState<MeWithCodes | null>(null)
+  const [saved, setSaved] = useState<T | null>(null)
   const [ack, setAck] = useState(false)
 
   useEffect(() => {
     if (mode !== 'setup') return
-    api.mfaSetup(ticket).then(setSetup).catch((e) => setError(errorText(t, e)))
+    client.setup(ticket).then(setSetup).catch((e) => setError(errorText(t, e)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, ticket, t])
 
   async function submit(e: FormEvent) {
@@ -36,7 +49,7 @@ export function MfaStep({ mode, ticket, onDone, onCancel }: Props) {
     setError('')
     setBusy(true)
     try {
-      const me = mode === 'setup' ? await api.mfaEnable(ticket, code) : await api.mfaVerify(ticket, code)
+      const me = mode === 'setup' ? await client.enable(ticket, code) : await client.verify(ticket, code)
       // сессия уже выдана, но резервные коды нужно показать до входа в приложение
       if (me.backup_codes?.length) setSaved(me)
       else onDone(me)

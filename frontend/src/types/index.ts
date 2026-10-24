@@ -29,12 +29,57 @@ export interface Me {
   company_inn?: string
   company_ogrn?: string
   ecp?: boolean
-  /** Web role in the company; the server enforces it, the UI only hides what is not allowed. */
-  role: WebRole
+  /** Роль в компании. Старый бэкенд мог не отдавать поле — тогда считаем пользователя директором. */
+  role?: Role
   user_id?: string
+  permissions?: Permissions
+  /** Нужно сменить пароль (первый вход сотрудника / сброс директором). */
+  must_change_password?: boolean
+  /** Пароль сгенерирован сервером: смена обязательна. Если поля нет — считаем смену обязательной. */
+  password_generated?: boolean
+  /** Директор, вошедший по ЭЦП, ещё не задал email и пароль. */
+  password_required?: boolean
+  company_banned?: boolean
+  ban_reason?: string | null
 }
 
-export type WebRole = 'owner' | 'admin' | 'analyst' | 'observer'
+/** director — «Владелец», admin — «Администратор», editor — «Аналитик», viewer — «Наблюдатель». */
+export type Role = 'director' | 'admin' | 'editor' | 'viewer'
+export interface Permissions {
+  read: boolean
+  edit: boolean
+  /** команда, название компании, настройки уведомлений: директор и администратор */
+  admin: boolean
+  /** только директор */
+  manage: boolean
+}
+
+export interface Member {
+  user_id: string
+  /** null у участника, вошедшего только по ЭЦП (служебный адрес наружу не отдаётся). */
+  email: string | null
+  role: Role
+  created_at: string
+  is_me?: boolean
+}
+
+export interface NewMemberRequest {
+  email: string
+  role: Exclude<Role, 'director'>
+  /** Пароль задаёт директор или администратор. */
+  password?: string
+  /** Либо пароль генерирует сервер и возвращает его один раз. */
+  generate?: boolean
+}
+
+export interface NewMemberResult {
+  user_id: string
+  email: string
+  role: Role
+  /** Только если generate=true; повторно получить нельзя. */
+  password?: string
+}
+
 
 // ---------- forecast ----------
 export type RiskLevel = 'none' | 'low' | 'medium' | 'high'
@@ -225,6 +270,33 @@ export interface TaxCalendarRequest {
   usnObject?: 'income' | 'income_expenses'
 }
 
+/** Demo «Прошла неделя» (docs/microservices.md): `enabled=false` for everyone except the demo user. */
+export interface DemoStatus {
+  enabled: boolean
+  available?: boolean
+  as_of?: string | null
+  cutoff?: string
+  next_from?: string | null
+  weeks_left?: number
+  ops_left?: number
+  finished?: boolean
+}
+
+export interface DemoAdvance {
+  added: number
+  skipped_duplicates: number
+  rows: number
+  from: string
+  to: string
+  new_as_of: string
+  previous_as_of: string
+  weeks_left: number
+  /** How long the server took to recompute the forecast after the import. */
+  recalc_ms: number
+  /** The previous forecast against the actual balance on the new date; null outside its horizon. */
+  forecast_vs_fact: { date: string; p10: Kop; p50: Kop; p90: Kop; actual: Kop; error: Kop; within_band: boolean } | null
+}
+
 export interface SyncResult {
   created: number
   skipped: number
@@ -372,6 +444,11 @@ export interface ApiTokenInfo {
   prefix: string
   created_at: number
   last_used: number | null
+  /** Только в списке директора (`scope=company`): владелец токена. */
+  owner_email?: string | null
+  user_id?: string | null
+  scope?: 'read' | 'write' | string
+  mine?: boolean
 }
 
 /** `token` is returned once, at creation. */
@@ -488,17 +565,9 @@ export interface TgTeam {
   members: TgMember[]
 }
 
-export interface TeamMember {
-  user_id: string
-  email: string | null
-  label: string
-  role: WebRole
-  joined_at: number | null
-}
-
 export interface TeamInvite {
   id: string
-  role: Exclude<WebRole, 'owner'>
+  role: Exclude<Role, 'director'>
   email: string | null
   created_at: number
   expires_at: number
@@ -506,7 +575,7 @@ export interface TeamInvite {
 
 export interface NewInvite {
   code: string
-  role: Exclude<WebRole, 'owner'>
+  role: Exclude<Role, 'director'>
   email: string | null
   /** The invitation e-mail was accepted by the SMTP server; otherwise the link must be sent by hand. */
   emailed: boolean

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Loader2 } from 'lucide-react'
 import { Modal } from '../../components/ui/Modal'
 import { Input } from '../../components/ui/Input'
+import { DatePicker } from '../../components/ui/DatePicker'
 import { Select } from '../../components/ui/Select'
 import { Button } from '../../components/ui/Button'
 import { Notice } from '../../components/shared/Notice'
@@ -76,7 +77,7 @@ export function AddEventModal({ open, onClose }: { open: boolean; onClose: () =>
         <p className="text-[13px] text-muted">{t('obligations.add.hint')}</p>
         <form className="flex flex-col gap-3" onSubmit={add}>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Input label={t('obligations.add.date')} type="date" required value={f.date} onChange={(e) => set('date', e.target.value)} />
+            <DatePicker label={t('obligations.add.date')} required value={f.date} onChange={(v) => set('date', v)} />
             <Select
               label={t('obligations.add.type')}
               value={f.direction}

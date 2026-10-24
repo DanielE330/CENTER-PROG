@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { RouterProvider } from 'react-router-dom'
 import { Providers } from './app/providers'
 import { useAuth } from './app/auth'
@@ -12,10 +12,17 @@ import { useTranslation } from 'react-i18next'
 captureInvite()
 
 const AuthPage = lazy(() => import('./features/auth/AuthPage'))
+const BannedScreen = lazy(() => import('./features/auth/AccessGates').then((m) => ({ default: m.BannedScreen })))
+const SetCredentialsScreen = lazy(() => import('./features/auth/AccessGates').then((m) => ({ default: m.SetCredentialsScreen })))
+const ChangePasswordScreen = lazy(() => import('./features/auth/AccessGates').then((m) => ({ default: m.ChangePasswordScreen })))
 
 function Gate() {
-  const { status } = useAuth()
+  const { status, me } = useAuth()
   const { t } = useTranslation()
+  // «Skip» for a password the director chose: only until the page is reloaded.
+  const [skipped, setSkipped] = useState(false)
+  // /operator — панель оператора платформы: свой вход и своя сессия, вход в компанию не требуется
+  if (/^\/operator\/?$/.test(window.location.pathname)) return <RouterProvider router={router} />
   if (status === 'loading') return <LoadingState height={400} />
   if (status === 'anon') {
     return (
@@ -25,6 +32,16 @@ function Gate() {
       </Suspense>
     )
   }
+  const screen = !me
+    ? null
+    : me.company_banned
+      ? <BannedScreen me={me} />
+      : me.password_required
+        ? <SetCredentialsScreen />
+        : me.must_change_password && !(skipped && me.password_generated === false)
+          ? <ChangePasswordScreen me={me} onSkip={() => setSkipped(true)} />
+          : null
+  if (screen) return <Suspense fallback={<LoadingState height={400} />}>{screen}</Suspense>
   return (
     <InviteGate>
       <RouterProvider router={router} />

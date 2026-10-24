@@ -1,7 +1,13 @@
 //! api (BFF): единственный публичный Rust-сервис. Проверка сессии через auth, CSRF, заголовки безопасности,
 //! раздача SPA и маршрутизация/оркестрация вызовов к внутренним сервисам. Собственной БД нет.
 
+mod admin;
+mod advisor;
+mod demo;
 mod http;
+mod legacy;
+#[cfg(test)]
+mod roles_tests;
 
 use axum::{
     Router,
@@ -28,7 +34,10 @@ pub struct AppState {
     pub forecast: Upstream,
     pub planfact: Upstream,
     pub integrator: Upstream,
+    pub advisor: Upstream,
     pub notifier: Upstream,
+    pub backoffice: Upstream,
+    pub demo: Arc<demo::Demo>,
     pub cfg: Arc<Config>,
 }
 
@@ -43,65 +52,19 @@ async fn main() {
         forecast: Upstream::new("forecast", "Сервис прогноза", &env("FORECAST_URL", "http://127.0.0.1:3003"), 80),
         planfact: Upstream::new("planfact", "Сервис план-факта", &env("PLANFACT_URL", "http://127.0.0.1:3004"), 60),
         integrator: Upstream::new("integrator", "Сервис интеграций", &env("INTEGRATOR_URL", "http://127.0.0.1:8008"), 30),
+        advisor: Upstream::new("advisor", "Сервис консультанта", &env("ADVISOR_URL", "http://127.0.0.1:8011"), 85),
         notifier: Upstream::new("notifier", "Сервис уведомлений", &env("NOTIFIER_URL", "http://127.0.0.1:8009"), 60),
+        backoffice: Upstream::new("backoffice", "Сервис оператора", &env("BACKOFFICE_URL", "http://127.0.0.1:8013"), 60),
+        demo: Arc::new(demo::Demo::from_env()),
         cfg: Arc::new(Config { cookie_secure: env("COOKIE_SECURE", "0") == "1" }),
     };
 
-    let co = "/api/v1/companies/{cid}";
-    let api = Router::new()
-        .route("/api/v1/auth/register", post(http::register))
-        .route("/api/v1/auth/login", post(http::login))
-        .route("/api/v1/auth/mfa/setup", post(http::mfa_setup))
-        .route("/api/v1/auth/mfa/enable", post(http::mfa_enable))
-        .route("/api/v1/auth/mfa/verify", post(http::mfa_verify))
-        .route("/api/v1/auth/ecp/challenge", post(http::ecp_challenge))
-        .route("/api/v1/auth/ecp/login", post(http::ecp_login))
-        .route("/api/v1/auth/logout", post(http::logout))
-        .route("/api/v1/auth/me", get(http::me))
-        .route("/api/v1/account/methods", get(http::account_methods))
-        .route("/api/v1/account/email", post(http::account_add_email).delete(http::account_remove_email))
-        .route("/api/v1/account/signatures", post(http::account_add_signature))
-        .route("/api/v1/account/signatures/{id}", delete(http::account_remove_signature))
-        .route("/api/v1/account/tokens", get(http::tokens_list).post(http::tokens_create))
-        .route("/api/v1/account/tokens/{id}", delete(http::tokens_delete))
-        // команда компании: роли, приглашения
-        .route("/api/v1/team/members", get(http::team_members))
-        .route("/api/v1/team/members/{uid}", patch(http::team_member_patch).delete(http::team_member_delete))
-        .route("/api/v1/team/invites", get(http::team_invites_list).post(http::team_invite_create))
-        .route("/api/v1/team/invites/{id}", delete(http::team_invite_delete))
-        .route("/api/v1/team/leave", post(http::team_leave))
-        .route("/api/v1/team/accept", post(http::team_accept))
-        .route("/api/v1/team/transfer", post(http::team_transfer))
-        .route("/api/v1/team/activity", get(http::team_activity))
-        .route("/api/v1/team/activity/export", get(http::team_activity_export))
-        // внешний API: Authorization: Bearer <токен>, компания определяется токеном
-        .route("/api/ext/v1/company", get(http::ext_company))
-        .route("/api/ext/v1/forecast", get(http::ext_forecast_latest).post(http::ext_forecast_create))
-        .route("/api/ext/v1/transactions", get(http::ext_transactions))
-        .route("/api/ext/v1/expected-events", get(http::ext_events).post(http::ext_events))
-        .route("/api/ext/v1/plan-fact", get(http::ext_plan_fact))
-        .route(co, patch(http::to_ledger))
-        .route(&format!("{co}/imports"), get(http::to_ledger).post(http::to_ledger))
-        .route(&format!("{co}/imports/{{iid}}"), get(http::to_ledger))
-        .route(&format!("{co}/imports/{{iid}}/confirm"), post(http::to_ledger))
-        .route(&format!("{co}/transactions"), get(http::to_ledger))
-        .route(&format!("{co}/transactions/{{id}}/category"), patch(http::to_ledger))
-        .route(&format!("{co}/taxonomy"), get(http::to_ledger))
-        .route(&format!("{co}/expected-events"), get(http::to_ledger).post(http::to_ledger))
-        .route(&format!("{co}/expected-events/tax-calendar"), post(http::tax_calendar))
-        .route(&format!("{co}/expected-events/{{eid}}"), delete(http::to_ledger))
-        .route(&format!("{co}/integrations/sync"), post(http::integrations_sync))
-        .route("/api/v1/gov/key-rate", get(http::gov_key_rate))
-        .route(&format!("{co}/forecasts"), post(http::create_forecast))
-        .route(&format!("{co}/forecasts/latest"), get(http::to_forecast))
-        .route(&format!("{co}/forecasts/{{rid}}"), get(http::to_forecast))
-        .route(&format!("{co}/backtest"), get(http::to_forecast))
-        .route(&format!("{co}/scenarios"), post(http::create_scenario))
-        .route(&format!("{co}/plan-fact"), get(http::to_planfact))
-        // Telegram-уведомления, цели недели и ретро: сервис notifier (привязка чата, расписание, agile-цикл)
-        .route(&format!("{co}/notifications"), get(http::to_notifier))
-        .route(&format!("{co}/notifications/link"), post(http::notifier_link))
-        .route(&format!("{co}/notifications/{{*tail}}"), get(http::to_notifier).post(http::to_notifier).put(http::to_notifier).patch(http::to_notifier).delete(http::to_notifier))
+    // команды из версии с составом в auth переезжают в ledger (разово, идемпотентно, в фоне)
+    tokio::spawn(legacy::run(state.clone()));
+
+    let api = tenant_routes()
+        // панель оператора платформы: отдельная cookie op_session, префикс /api/admin/v1 (admin.rs)
+        .merge(admin::routes())
         .layer(middleware::from_fn(security_layer))
         .with_state(state.clone());
 
@@ -128,6 +91,75 @@ async fn main() {
         async { axum::serve(l1, public).await.unwrap() },
         async { axum::serve(l2, internal).await.unwrap() }
     );
+}
+
+/// Тенантские маршруты (`/api/v1/*`, `/api/ext/v1/*`): право для каждого маршрута задаёт его обработчик
+/// (экстракторы `Reader`/`Editor`/`Manager`, `relay` по методу), таблица «маршрут -> право» — в docs/roles.md.
+pub fn tenant_routes() -> Router<AppState> {
+    let co = "/api/v1/companies/{cid}";
+    Router::new()
+        .route("/api/v1/auth/register", post(http::register))
+        .route("/api/v1/auth/login", post(http::login))
+        // второй фактор (TOTP): после верного пароля клиент получает билет и идёт на настройку или ввод кода
+        .route("/api/v1/auth/mfa/setup", post(http::mfa_setup))
+        .route("/api/v1/auth/mfa/enable", post(http::mfa_enable))
+        .route("/api/v1/auth/mfa/verify", post(http::mfa_verify))
+        .route("/api/v1/auth/ecp/challenge", post(http::ecp_challenge))
+        .route("/api/v1/auth/ecp/login", post(http::ecp_login))
+        .route("/api/v1/auth/logout", post(http::logout))
+        .route("/api/v1/auth/me", get(http::me))
+        .route("/api/v1/account/change-password", post(http::change_password))
+        .route("/api/v1/account/set-credentials", post(http::set_credentials))
+        .route("/api/v1/members", get(http::members_list).post(http::members_create))
+        .route("/api/v1/members/{uid}", patch(http::members_update).delete(http::members_delete))
+        .route("/api/v1/members/{uid}/reset-password", post(http::members_reset_password))
+        // приглашения по ссылке (одноразовый код, роль, привязка к email), передача владения, выход из команды, журнал действий
+        .route("/api/v1/team/invites", get(http::team_invites_list).post(http::team_invite_create))
+        .route("/api/v1/team/invites/{id}", delete(http::team_invite_delete))
+        .route("/api/v1/team/accept", post(http::team_accept))
+        .route("/api/v1/team/leave", post(http::team_leave))
+        .route("/api/v1/team/transfer", post(http::team_transfer))
+        .route("/api/v1/team/activity", get(http::team_activity))
+        .route("/api/v1/team/activity/export", get(http::team_activity_export))
+        .route("/api/v1/account/methods", get(http::account_methods))
+        .route("/api/v1/account/email", post(http::account_add_email).delete(http::account_remove_email))
+        .route("/api/v1/account/signatures", post(http::account_add_signature))
+        .route("/api/v1/account/signatures/{id}", delete(http::account_remove_signature))
+        .route("/api/v1/account/tokens", get(http::tokens_list).post(http::tokens_create))
+        .route("/api/v1/account/tokens/{id}", delete(http::tokens_delete))
+        // внешний API: Authorization: Bearer <токен>, компания определяется токеном
+        .route("/api/ext/v1/company", get(http::ext_company))
+        .route("/api/ext/v1/forecast", get(http::ext_forecast_latest).post(http::ext_forecast_create))
+        .route("/api/ext/v1/transactions", get(http::ext_transactions))
+        .route("/api/ext/v1/expected-events", get(http::ext_events).post(http::ext_events))
+        .route("/api/ext/v1/plan-fact", get(http::ext_plan_fact))
+        .route(co, patch(http::update_company))
+        .route(&format!("{co}/imports"), get(http::to_ledger).post(http::to_ledger))
+        .route(&format!("{co}/imports/{{iid}}"), get(http::to_ledger))
+        .route(&format!("{co}/imports/{{iid}}/confirm"), post(http::to_ledger))
+        .route(&format!("{co}/transactions"), get(http::to_ledger))
+        .route(&format!("{co}/transactions/{{id}}/category"), patch(http::to_ledger))
+        .route(&format!("{co}/taxonomy"), get(http::to_ledger))
+        .route(&format!("{co}/expected-events"), get(http::to_ledger).post(http::to_ledger))
+        .route(&format!("{co}/expected-events/tax-calendar"), post(http::tax_calendar))
+        .route(&format!("{co}/expected-events/{{eid}}"), delete(http::to_ledger))
+        .route(&format!("{co}/integrations/sync"), post(http::integrations_sync))
+        .route(&format!("{co}/advisor/ask"), post(advisor::ask))
+        .route(&format!("{co}/advisor/suggestions/apply"), post(advisor::apply))
+        // демо «Прошла неделя»: только для демо-пользователя при DEMO_FEED_ENABLED=1
+        .route(&format!("{co}/demo/status"), get(demo::status))
+        .route(&format!("{co}/demo/advance-week"), post(demo::advance_week))
+        .route("/api/v1/gov/key-rate", get(http::gov_key_rate))
+        .route(&format!("{co}/forecasts"), post(http::create_forecast))
+        .route(&format!("{co}/forecasts/latest"), get(http::to_forecast))
+        .route(&format!("{co}/forecasts/{{rid}}"), get(http::to_forecast))
+        .route(&format!("{co}/backtest"), get(http::to_forecast))
+        .route(&format!("{co}/scenarios"), post(http::create_scenario))
+        .route(&format!("{co}/plan-fact"), get(http::to_planfact))
+        // Telegram-уведомления, цели недели и ретро: сервис notifier (привязка чата, расписание, agile-цикл)
+        .route(&format!("{co}/notifications"), get(http::to_notifier))
+        .route(&format!("{co}/notifications/link"), post(http::notifier_link))
+        .route(&format!("{co}/notifications/{{*tail}}"), get(http::to_notifier).post(http::to_notifier).put(http::to_notifier).patch(http::to_notifier).delete(http::to_notifier))
 }
 
 fn set_common(h: &mut axum::http::HeaderMap) {

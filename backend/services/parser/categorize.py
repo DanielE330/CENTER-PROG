@@ -1,11 +1,18 @@
 """Категоризация операций по назначению платежа: правила + confidence.
 
-Правила — первый уровень (baseline); ML-классификатор можно подключить позже
-за тем же интерфейсом categorize(purpose, direction) -> (category, confidence).
+Уровни: (1) наши правила по назначению; (2) правила из проекта gleb (swimshadow) —
+по назначению и по имени контрагента, для того, что не поймали наши; (3) дообучаемая
+модель на «хвост» (см. tail_model.py, подключается в statement.py); (4) запасной вариант
+other_income/other_expense с confidence 0.2.
+Идея и правила (уровни 2–3): проект gleb (swimshadow).
+Интерфейс categorize(purpose, direction) -> (category, confidence) не менялся;
+categorize_ex(purpose, direction, name) дополнительно отдаёт метод.
 Порядок правил важен: первое подошедшее выигрывает; направление разводит смысл.
 """
 import re
 from functools import lru_cache
+
+from .gleb_rules import SUB_TO_CATEGORY, match_sub
 
 # шаблонные хвосты про НДС не должны влиять на категорию («Без налога (НДС)» ≠ налоги)
 _VAT_NOISE = re.compile(
@@ -20,6 +27,9 @@ RULES: list[tuple[str, str | None, str, float]] = [
                         r"перевод на личн|на личную карту|на счет физического лица|на счёт физического лица|"
                         r"закрытием счета|закрытием счёта(?!.*овердрафт)|перечисление остатка", 0.9),
     ("transfers", "out", r"дивиденд", 0.85),
+    # --- займы учредителя и взнос в капитал: свои деньги, не кредит (правила gleb); «спасательные» поступления
+    ("transfers", "in", r"предоставление .*займа|заем учредител|заём учредител", 0.9),
+    ("transfers", "out", r"возврат .*займа учредител", 0.9),
     # --- возвраты ошибочных платежей
     ("refunds", "in", r"возврат платежа|неверно указан|ошибочн", 0.9),
     ("refunds", "out", r"возврат платежа|возврат ошибочн|возврат средств покупател|возврат (?:денежных )?средств", 0.85),
@@ -47,12 +57,33 @@ RULES: list[tuple[str, str | None, str, float]] = [
 _COMPILED = [(c, d, re.compile(p, re.I), conf) for c, d, p, conf in RULES]
 
 
+GLEB_CONFIDENCE = 0.7  # правило gleb сработало там, где наши молчали
+FALLBACK_CONFIDENCE = 0.2
+
+
 @lru_cache(maxsize=65536)
-def categorize(purpose: str, direction: str) -> tuple[str, float]:
+def _by_purpose(purpose: str, direction: str) -> tuple[str, float] | None:
     text = _VAT_NOISE.sub(" ", purpose or "")
     for cat, d, rx, conf in _COMPILED:
         if d and d != direction:
             continue
         if rx.search(text):
             return cat, conf
-    return ("other_income" if direction == "in" else "other_expense"), 0.2
+    return None
+
+
+@lru_cache(maxsize=65536)
+def categorize_ex(purpose: str, direction: str, name: str = "") -> tuple[str, float, str]:
+    """-> (категория, confidence, метод): rule | rule_gleb | fallback."""
+    hit = _by_purpose(purpose, direction)
+    if hit:
+        return hit[0], hit[1], "rule"
+    sub = match_sub(_VAT_NOISE.sub(" ", purpose or ""), name, direction)
+    if sub:
+        return SUB_TO_CATEGORY[sub], GLEB_CONFIDENCE, "rule_gleb"
+    return ("other_income" if direction == "in" else "other_expense"), FALLBACK_CONFIDENCE, "fallback"
+
+
+def categorize(purpose: str, direction: str) -> tuple[str, float]:
+    cat, conf, _ = categorize_ex(purpose, direction, "")
+    return cat, conf

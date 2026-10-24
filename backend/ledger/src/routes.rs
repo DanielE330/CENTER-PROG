@@ -14,15 +14,15 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
-fn lock(st: &AppState) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+pub(crate) fn lock(st: &AppState) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
     st.db.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-fn audit(st: &AppState, ctx: &Ctx, cid: &str, action: &str, object: &str, outcome: &str) {
+pub(crate) fn audit(st: &AppState, ctx: &Ctx, cid: &str, action: &str, object: &str, outcome: &str) {
     let c = lock(st);
     let _ = c.execute(
         "INSERT INTO audit_events(at, actor, company_id, action, object_id, outcome, request_id) VALUES(?,?,?,?,?,?,?)",
@@ -30,7 +30,7 @@ fn audit(st: &AppState, ctx: &Ctx, cid: &str, action: &str, object: &str, outcom
     );
 }
 
-fn not_found() -> ApiError {
+pub(crate) fn not_found() -> ApiError {
     err(StatusCode::NOT_FOUND, "not_found", "Не найдено")
 }
 
@@ -59,36 +59,79 @@ fn digits(v: &Option<String>, lens: &[usize]) -> String {
     if lens.contains(&d.len()) { d } else { String::new() }
 }
 
-/// Компания пользователя: создаётся при первом обращении.
+/// Компания пользователя: для сотрудника — компания директора (новая не создаётся), для директора — его компания,
+/// у нового пользователя она создаётся при первом обращении (он становится директором).
 pub async fn ensure_company(State(st): State<AppState>, Json(b): Json<EnsureBody>) -> R<Json<Value>> {
     let c = lock(&st);
     let (inn, ogrn) = (digits(&b.inn, &[10, 12]), digits(&b.ogrn, &[13, 15]));
-    if let Some((id, name, cur_inn, cur_ogrn)) = c
-        .query_row("SELECT id, name, inn, ogrn FROM companies WHERE owner_id=?", [&b.owner_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))
+    let by_member: Option<(String, String)> = c
+        .query_row("SELECT company_id, role FROM company_members WHERE user_id=?", [&b.owner_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()
-        .map_err(internal)?
-    {
-        // реквизиты, которых ещё не было, дополняем из сертификата; введённые раньше не затираем
-        let (inn, ogrn) = (if cur_inn.is_empty() { inn } else { cur_inn.clone() }, if cur_ogrn.is_empty() { ogrn } else { cur_ogrn.clone() });
-        if (inn.as_str(), ogrn.as_str()) != (cur_inn.as_str(), cur_ogrn.as_str()) {
-            c.execute("UPDATE companies SET inn=?, ogrn=? WHERE id=?", params![inn, ogrn, id]).map_err(internal)?;
+        .map_err(internal)?;
+    let found = match by_member {
+        Some(x) => Some(x),
+        // база без записи участника (не должно быть после миграции): владелец компании — директор, если у компании нет другого
+        // (бывший владелец, которого удалили или который вышел, права не возвращает)
+        None => c
+            .query_row(
+                "SELECT id FROM companies WHERE owner_id=? AND NOT EXISTS (SELECT 1 FROM company_members m WHERE m.company_id = companies.id AND m.role='director')",
+                [&b.owner_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(internal)?
+            .map(|id| (id, "director".to_string())),
+    };
+    if let Some((id, role)) = found {
+        if role == "director" {
+            c.execute(
+                "INSERT OR IGNORE INTO company_members(company_id, user_id, email, role, created_at, created_by) VALUES(?,?,?, 'director', ?, '')",
+                params![id, b.owner_id, b.email, now()],
+            )
+            .map_err(internal)?;
+            if !b.email.is_empty() {
+                c.execute("UPDATE company_members SET email=? WHERE user_id=? AND email<>?", params![b.email, b.owner_id, b.email]).map_err(internal)?;
+            }
+            // реквизиты, которых ещё не было, дополняем из сертификата; введённые раньше не затираем
+            let (cur_inn, cur_ogrn): (String, String) = c.query_row("SELECT inn, ogrn FROM companies WHERE id=?", [&id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(internal)?;
+            let (inn, ogrn) = (if cur_inn.is_empty() { inn } else { cur_inn.clone() }, if cur_ogrn.is_empty() { ogrn } else { cur_ogrn.clone() });
+            if (inn.as_str(), ogrn.as_str()) != (cur_inn.as_str(), cur_ogrn.as_str()) {
+                c.execute("UPDATE companies SET inn=?, ogrn=? WHERE id=?", params![inn, ogrn, id]).map_err(internal)?;
+            }
         }
-        return Ok(Json(json!({"company_id": id, "company_name": name, "inn": inn, "ogrn": ogrn})));
+        return Ok(Json(member_view(&c, &id, &role)?));
     }
     let id = uuid::Uuid::new_v4().to_string();
     let name = b.name.unwrap_or_else(|| format!("Компания {}", b.email.split('@').next().unwrap_or("")));
-    c.execute("INSERT INTO companies(id, owner_id, name, created_at, inn, ogrn) VALUES(?,?,?,?,?,?)", params![id, b.owner_id, name, now(), inn, ogrn]).map_err(internal)?;
-    Ok(Json(json!({"company_id": id, "company_name": name, "inn": inn, "ogrn": ogrn})))
+    let created = now();
+    // owner_id уникален: у вышедшего из команды бывшего владельца он уже занят старой компанией
+    let taken: i64 = c.query_row("SELECT COUNT(*) FROM companies WHERE owner_id=?", [&b.owner_id], |r| r.get(0)).map_err(internal)?;
+    let owner_key = if taken > 0 { format!("{}#{id}", b.owner_id) } else { b.owner_id.clone() };
+    c.execute("INSERT INTO companies(id, owner_id, name, created_at, inn, ogrn) VALUES(?,?,?,?,?,?)", params![id, owner_key, name, created, inn, ogrn]).map_err(internal)?;
+    c.execute(
+        "INSERT INTO company_members(company_id, user_id, email, role, created_at, created_by) VALUES(?,?,?, 'director', ?, '')",
+        params![id, b.owner_id, b.email, created],
+    )
+    .map_err(internal)?;
+    Ok(Json(member_view(&c, &id, "director")?))
+}
+
+/// Компания глазами участника: реквизиты, роль и состояние блокировки.
+pub(crate) fn member_view(c: &rusqlite::Connection, cid: &str, role: &str) -> R<Value> {
+    let (name, inn, ogrn, banned_at, reason): (String, String, String, Option<String>, Option<String>) = c
+        .query_row("SELECT name, inn, ogrn, banned_at, ban_reason FROM companies WHERE id=?", [cid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .map_err(internal)?;
+    Ok(json!({"company_id": cid, "company_name": name, "inn": inn, "ogrn": ogrn, "role": role, "banned": banned_at.is_some(), "ban_reason": reason}))
 }
 
 pub async fn get_company(State(st): State<AppState>, Path(cid): Path<String>) -> R<Json<Value>> {
     let c = lock(&st);
-    let row: Option<(String, i64, String, String)> = c
-        .query_row("SELECT name, data_revision, inn, ogrn FROM companies WHERE id=?", [&cid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+    let row: Option<(String, i64, String, String, Option<String>, Option<String>)> = c
+        .query_row("SELECT name, data_revision, inn, ogrn, banned_at, ban_reason FROM companies WHERE id=?", [&cid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
         .optional()
         .map_err(internal)?;
-    let (name, rev, inn, ogrn) = row.ok_or_else(not_found)?;
-    Ok(Json(json!({"company_id": cid, "company_name": name, "data_revision": rev, "inn": inn, "ogrn": ogrn})))
+    let (name, rev, inn, ogrn, banned_at, reason) = row.ok_or_else(not_found)?;
+    Ok(Json(json!({"company_id": cid, "company_name": name, "data_revision": rev, "inn": inn, "ogrn": ogrn, "banned": banned_at.is_some(), "ban_reason": reason})))
 }
 
 #[derive(Deserialize)]
@@ -186,8 +229,8 @@ pub async fn upload_import(State(st): State<AppState>, ctx: Ctx, Path(cid): Path
     }
     let (name, data) = file.ok_or_else(|| err(StatusCode::BAD_REQUEST, "no_file", "Файл не передан"))?;
     let lname = name.to_lowercase();
-    if !(lname.ends_with(".csv") || lname.ends_with(".xlsx") || lname.ends_with(".txt")) {
-        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_type", "Поддерживаются CSV и XLSX"));
+    if !(lname.ends_with(".csv") || lname.ends_with(".xlsx") || lname.ends_with(".txt") || lname.ends_with(".1c")) {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_type", "Поддерживаются CSV, XLSX и выписка 1С (.txt, .1c)"));
     }
     if data.len() > 25 * 1024 * 1024 {
         return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "file_too_large", "Файл больше 25 МБ"));
