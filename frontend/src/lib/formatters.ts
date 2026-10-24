@@ -83,7 +83,7 @@ const dateOptions: Record<DateVariant, Intl.DateTimeFormatOptions> = {
 }
 
 /** Russian appends " г." to numeric years; the UI never wants it. */
-const stripYearSuffix = (s: string) => s.replace(/\s*г\.(?=,|$)/, '')
+const stripYearSuffix = (s: string) => s.replace(/\s+г\.(?=,|$)/, '')
 
 export function formatDate(iso: string | null | undefined, variant: DateVariant = 'medium'): string {
   if (!iso) return '—'

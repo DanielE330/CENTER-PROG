@@ -104,7 +104,7 @@ export default function GoalsPage() {
       {sprint.isError && <ErrorState message={errorText(t, sprint.error)} onRetry={() => void sprint.refetch()} />}
 
       {s && (
-        <div className="grid gap-5 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           <div className="flex flex-col gap-5">
             <Card title={t('goals.current')} subtitle={s.sprint ? t('goals.since', { value: formatDate(s.sprint, 'dayMonth') }) : undefined}>
               <div className="px-5 pb-5 flex flex-col gap-4">

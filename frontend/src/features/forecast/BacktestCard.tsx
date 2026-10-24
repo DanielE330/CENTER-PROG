@@ -48,7 +48,7 @@ export function BacktestCard() {
             <div className="-mx-5 border-y border-line">
               <DataTable columns={columns} rows={bt.metrics} getRowKey={(m) => String(m.horizon)} />
             </div>
-            <dl className="grid gap-3 sm:grid-cols-3">
+            <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Stat label={t('backtest.origins')} value={String(bt.origins)} />
               <Stat label={t('backtest.precision')} value={bt.alarm_precision == null ? '—' : formatPercent(bt.alarm_precision)} />
               <Stat label={t('backtest.recall', { count: bt.actual_gap_windows })} value={bt.alarm_recall == null ? '—' : formatPercent(bt.alarm_recall)} />

@@ -108,8 +108,8 @@ export function MembersPanel() {
               // администратор управляет аналитиками и наблюдателями; администраторов и себя — нет
               const manageable = admin && !isDirector && !mine && (m.role !== 'admin' || manage)
               return (
-                <li key={m.user_id} className="rounded-control border border-line px-3.5 py-2.5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-2.5 min-w-0">
+                <li key={m.user_id} className="rounded-control border border-line px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                  <div className="flex items-center gap-2.5 min-w-[12rem] flex-1">
                     <UserRound size={16} className="text-muted shrink-0" aria-hidden />
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">
@@ -118,7 +118,7 @@ export function MembersPanel() {
                       <p className="text-xs text-muted">{t('members.added', { date: formatDate(m.created_at.slice(0, 10)) })}</p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <div className="flex max-w-full flex-wrap items-center gap-2">
                     {manageable ? (
                       <Select
                         className="w-44"

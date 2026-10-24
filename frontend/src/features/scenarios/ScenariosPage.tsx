@@ -155,7 +155,7 @@ function Workspace({ v }: { v: ForecastView }) {
 
       <Card title={t('scenarios.params.title')} subtitle={t('scenarios.params.subtitle')}>
         <form className="px-5 pb-5 flex flex-col gap-4" onSubmit={submit}>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Select
               label={t('scenarios.params.counterparty')}
               value={p.delay_counterparty}
@@ -170,7 +170,7 @@ function Workspace({ v }: { v: ForecastView }) {
             <Input label={t('scenarios.params.revenueDrop')} type="number" min={0} max={100} value={p.revenue_drop_pct} onChange={num('revenue_drop_pct')} />
             <Input label={t('scenarios.params.costGrowth')} type="number" min={0} max={300} value={p.fixed_cost_growth_pct} onChange={num('fixed_cost_growth_pct')} />
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Input label={t('scenarios.params.extraExpense')} inputMode="decimal" placeholder={t('scenarios.params.extraExpensePh')} value={p.extra_expense} onChange={(e) => set('extra_expense', e.target.value)} />
             <DatePicker label={t('scenarios.params.extraExpenseDate')} value={p.extra_expense_date} onChange={(v) => set('extra_expense_date', v)} />
             <Input label={t('scenarios.params.extraIncome')} inputMode="decimal" placeholder={t('scenarios.params.extraIncomePh')} value={p.extra_income} onChange={(e) => set('extra_income', e.target.value)} />
@@ -227,7 +227,7 @@ function Result({ out }: { out: { res: ScenarioResponse; base: ForecastView; sce
   return (
     <>
       <Notice tone={concl.tone} title={t('scenarios.concl.title')}>{concl.text}</Notice>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Compare
           label={t('scenarios.cmp.minBalance')}
           base={formatKop(bMin.p50)} value={formatKop(sMin.p50)}

@@ -125,7 +125,7 @@ export default function ForecastPage() {
         return (
           <>
             <ForecastBanners run={run} />
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
               <Card title={t('forecast.cardTitle')} subtitle={t('common.updated', { value: formatDateTime(run.created_at) })}>
                 <div className="px-3 pb-4 sm:px-5">
                   <ForecastChart points={v.points} today={r.as_of} shortageDate={r.risk.level === 'none' ? null : v.gapDate} height={440} />

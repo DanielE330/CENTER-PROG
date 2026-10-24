@@ -11,6 +11,7 @@ import { PasswordInput } from '../../components/ui/PasswordInput'
 import { ThemeToggle } from '../../components/layout/ThemeToggle'
 import { LanguageSwitch } from '../../components/layout/LanguageSwitch'
 import { EcpLogin } from './EcpLogin'
+import { DemoLogin } from './DemoLogin'
 import { MfaStep } from './MfaStep'
 import type { MeWithCodes, MfaChallenge } from '../../types'
 import { ForgotPassword } from './EmailLinks'
@@ -145,6 +146,7 @@ export default function AuthPage() {
             <span className="h-px flex-1 bg-line" /> {t('auth.or')} <span className="h-px flex-1 bg-line" />
           </div>
           <EcpLogin onDone={setMe} register={reg} />
+          {!reg && <DemoLogin onDone={setMe} onChallenge={setChallenge} />}
 
           <button
             type="button"

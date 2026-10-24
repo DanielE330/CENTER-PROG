@@ -5,6 +5,8 @@
 import type {
   AccountMethods,
   AuditPage,
+  DemoLoginAccount,
+  DemoLoginStatus,
   ApiTokenInfo,
   Backtest,
   Department,
@@ -125,6 +127,9 @@ export const api = {
   // ----- auth -----
   me: () => request<Me>('GET', '/api/v1/auth/me', { expect401: true }),
   login: (email: string, password: string) => request<Me | MfaChallenge>('POST', '/api/v1/auth/login', { body: { email, password }, expect401: true }),
+  demoLoginStatus: () => request<DemoLoginStatus>('GET', '/api/v1/auth/demo', { expect401: true }),
+  /** Сервер сам подставляет пароль демо-аккаунта; ответ как у login (в том числе билет второго фактора). */
+  demoLogin: (account: DemoLoginAccount['id']) => request<Me | MfaChallenge>('POST', '/api/v1/auth/demo/login', { body: { account }, expect401: true }),
   mfaSetup: (mfa_token: string) => request<MfaSetup>('POST', '/api/v1/auth/mfa/setup', { body: { mfa_token }, expect401: true }),
   mfaEnable: (mfa_token: string, code: string) => request<MeWithCodes>('POST', '/api/v1/auth/mfa/enable', { body: { mfa_token, code }, expect401: true }),
   mfaVerify: (mfa_token: string, code: string) => request<MeWithCodes>('POST', '/api/v1/auth/mfa/verify', { body: { mfa_token, code }, expect401: true }),

@@ -12,6 +12,16 @@ export interface MfaChallenge {
   mfa: 'setup' | 'verify'
   mfa_token: string
 }
+/** Быстрый вход в демо-аккаунты (GET /auth/demo): без паролей; `enabled=false` — блок на странице входа не показывается. */
+export interface DemoLoginAccount {
+  id: 'director' | 'editor' | 'viewer'
+  role: string
+  email: string
+}
+export interface DemoLoginStatus {
+  enabled: boolean
+  accounts: DemoLoginAccount[]
+}
 export interface MfaSetup {
   secret: string
   otpauth_uri: string

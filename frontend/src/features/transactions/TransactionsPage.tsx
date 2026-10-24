@@ -59,7 +59,7 @@ export default function TransactionsPage() {
     {
       key: 'counterparty', header: t('transactions.col.counterparty'), sortValue: sortable,
       render: (x) => (
-        <div className="min-w-[220px] max-w-[460px]">
+        <div className="min-w-[200px] max-w-[460px]">
           <p className="font-medium">{x.counterparty || '—'}</p>
           <p className="text-xs text-muted">{x.purpose}</p>
         </div>
@@ -74,7 +74,7 @@ export default function TransactionsPage() {
     {
       key: 'category', header: t('transactions.col.category'), sortValue: sortable,
       render: (x) => (
-        <div className="w-[190px]" title={guard.lock.title}>
+        <div className="w-[170px]" title={guard.lock.title}>
           <Select
             aria-label={t('transactions.categoryOf', { name: x.counterparty || x.purpose.slice(0, 40) })}
             value={x.category}

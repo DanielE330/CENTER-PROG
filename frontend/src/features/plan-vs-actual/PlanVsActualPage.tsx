@@ -120,7 +120,7 @@ function Body({ d, bt }: { d: PlanFact; bt: ReturnType<typeof useBacktest> }) {
         <Notice tone="warning" title={t('planVsActual.missedTitle', { count: d.missed })}>{t('planVsActual.missedText')}</Notice>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Summary title={t('planVsActual.receipts')} planned={pIn} actual={fIn} kind="in" />
         <Summary title={t('planVsActual.payments')} planned={pOut} actual={fOut} kind="out" />
       </div>
