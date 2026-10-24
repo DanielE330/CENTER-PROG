@@ -50,7 +50,10 @@ impl Provider {
                 let mut body = request.clone();
                 body["model"] = json!(model);
                 body["stream"] = json!(false);
-                let mut req = clients.external.post(format!("{base_url}/chat/completions")).json(&body);
+                let mut req = clients
+                    .external
+                    .post(format!("{base_url}/chat/completions"))
+                    .json(&body);
                 if let Some(key) = api_key {
                     req = req.bearer_auth(key);
                 }
