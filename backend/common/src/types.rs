@@ -36,6 +36,11 @@ pub struct HistoryRow {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     pub data_revision: i64,
+    /// последняя ревизия, в которой операции менялись не добавлением (правка категории): кэш обученной модели
+    /// старше неё недействителен
+    #[serde(default)]
+    pub tx_reset_rev: i64,
+    /// операции целиком или, при запросе `since_rev`, только добавленные после этой ревизии
     pub transactions: Vec<HistoryRow>,
     pub events: Vec<Event>,
 }

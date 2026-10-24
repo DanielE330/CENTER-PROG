@@ -221,6 +221,16 @@ def test_broadcast_respects_kind_subscription_and_verification(env):
     assert c.get(f"{P}/companies/c1/subscribers").json() == {"alerts": 0, "reports": 1}
 
 
+def test_missed_payments_go_to_alert_subscribers_with_warning_tone(env):
+    c, _, smtp = env
+    c.put(f"{P}/prefs/u1", params={"company_id": "c1", "role": "director"}, json={"reports": False})
+    r = bc(c, kind="missed", key="k1", subject="🔔 Пропущенные платежи: 1")
+    assert r.json() == {"queued": 1, "recipients": 1}, "пропуски идут по подписке на алерты"
+    assert "#fdf5e6" in body(smtp.sent[0])
+    c.put(f"{P}/prefs/u1", params={"company_id": "c1", "role": "director"}, json={"alerts": False, "reports": True})
+    assert bc(c, kind="missed", key="k2").json()["recipients"] == 0
+
+
 def test_broadcast_attaches_chart_inline_and_excel(env):
     c, _, smtp = env
     r = bc(

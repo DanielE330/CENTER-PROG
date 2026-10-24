@@ -3,6 +3,7 @@
 //! Запуск из корня репозитория:
 //!   cargo run --release --bin eval -- [--limit 30] [--step 14] [--mode block|weekday_mean|ewma]
 //!                                      [--damp TAU_DAYS] [--compare] [--csv] [--data data/dataset]
+//!                                      [--incremental K]  (режим «Обновлять по новым данным»: обучение за K дней до точки)
 //!
 //! Нормировка: ошибки каждой компании делятся на медианный недельный оборот
 //! (медиана по неделям суммы |операций|), т.е. MAE выражен в «недельных оборотах» компании.
@@ -91,7 +92,8 @@ struct CompanyResult {
     bt: Option<Backtest>,
 }
 
-fn run_variant(companies: &[Company], params: &Params, step: i64, threads: usize) -> Vec<CompanyResult> {
+/// `lag`: Some(K) — прогноз в режиме «Обновлять по новым данным» (модель обучена за K дней до точки, дальше `advance`).
+fn run_variant(companies: &[Company], params: &Params, step: i64, threads: usize, lag: Option<i64>) -> Vec<CompanyResult> {
     let next = Arc::new(AtomicUsize::new(0));
     let out: Arc<Mutex<Vec<Option<CompanyResult>>>> = Arc::new(Mutex::new(vec![None; companies.len()]));
     std::thread::scope(|sc| {
@@ -104,7 +106,10 @@ fn run_variant(companies: &[Company], params: &Params, step: i64, threads: usize
                     break;
                 }
                 let c = &companies[i];
-                let bt = forecast::backtest_with(&c.txs, &c.balances, step, params);
+                let bt = match lag {
+                    Some(k) => forecast::backtest_incremental(&c.txs, &c.balances, step, params, k),
+                    None => forecast::backtest_with(&c.txs, &c.balances, step, params),
+                };
                 out.lock().unwrap()[i] = Some(CompanyResult { id: c.id.clone(), scale: c.scale, bt });
             });
         }
@@ -336,6 +341,19 @@ fn main() {
         let t0 = std::time::Instant::now();
         let r = forecast::forecast(&txs, &bal, &[], &forecast::Scenario::default(), &Params::default());
         println!("perf: {} ops, forecast (1000 paths, 30d) = {:.3}s, ok={}", txs.len(), t0.elapsed().as_secs_f64(), r.is_ok());
+        // режим «Обновлять по новым данным»: обучение без последнего дня, затем дописать день и пересчитать траектории
+        let last = txs.last().unwrap().date;
+        let (old, day): (Vec<Tx>, Vec<Tx>) = txs.iter().cloned().partition(|t| t.date < last);
+        let t0 = std::time::Instant::now();
+        let mut f = forecast::fit(&old, &bal).expect("fit");
+        let t_fit = t0.elapsed().as_secs_f64();
+        let t0 = std::time::Instant::now();
+        f.advance(&day, &bal).expect("advance");
+        let t_adv = t0.elapsed().as_secs_f64();
+        let t0 = std::time::Instant::now();
+        let r = forecast::simulate(&f, &[], &forecast::Scenario::default(), &Params::default());
+        let t_sim = t0.elapsed().as_secs_f64();
+        println!("perf: fit {t_fit:.3}s | advance (+{} ops of {last}) {:.4}s | simulate {t_sim:.3}s, ok={} -> incremental update {:.3}s", day.len(), t_adv, r.is_ok(), t_adv + t_sim);
         return;
     }
     let mk = |mode: ResidualMode, keep: f64, tau: f64, shape: f64, rev: f64| Params { revert: rev, horizon: 30, seed: 1, n_paths: paths, residual: mode, drift_keep: keep, drift_tau: tau, shape_keep: shape, calibrate: true, km_delays: !has("--no-km"), today: None };
@@ -379,7 +397,9 @@ fn main() {
     let mut aggs = vec![];
     for (name, p) in &variants {
         let t0 = std::time::Instant::now();
-        let res = run_variant(&companies, p, step, threads);
+        let lag: Option<i64> = get("--incremental").and_then(|v| v.parse().ok());
+        let res = run_variant(&companies, p, step, threads, lag);
+        let name = &lag.map_or(name.clone(), |k| format!("{name}+incremental{k}"));
         let a = aggregate(name, &res);
         print_agg(&a);
         println!("({:.1}s)", t0.elapsed().as_secs_f64());
@@ -588,7 +608,7 @@ fn print_metrics(name: &str, m: &Metrics) {
 
 fn calibration_study(companies: &[Company], step: i64, paths: usize, threads: usize) {
     let params = Params { calibrate: false, horizon: 30, seed: 1, n_paths: paths, ..Default::default() };
-    let res = run_variant(companies, &params, step, threads);
+    let res = run_variant(companies, &params, step, threads, None);
     let mut samples: Vec<Sample> = vec![];
     for (ci, r) in res.iter().enumerate() {
         let Some(bt) = &r.bt else { continue };

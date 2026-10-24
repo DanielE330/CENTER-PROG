@@ -1198,6 +1198,16 @@ pub async fn create_scenario(axum::extract::State(st): axum::extract::State<AppS
     Ok(r.into_response())
 }
 
+/// Режим обновления прогноза (полный пересчёт или дописывание новых данных): читает любая роль, меняют director и admin.
+pub async fn forecast_settings(axum::extract::State(st): axum::extract::State<AppState>, p: Principal, ctx: Ctx, req: Request) -> R<Response> {
+    let write = req.method() != Method::GET && req.method() != Method::HEAD;
+    let r = relay(&st.forecast, &p, &ctx, req, if write { Perm::Admin } else { Perm::Read }).await?;
+    if write && r.status.is_success() {
+        audit(&st, &ctx, &p, "forecast.settings", r.json()["update_mode"].as_str().unwrap_or("")).await;
+    }
+    Ok(r.into_response())
+}
+
 /// Внутренняя сводка риска (порт 3100, без cookie): отдаёт forecast.
 pub async fn internal_summary(axum::extract::State(st): axum::extract::State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> R<Response> {
     Ok(st.forecast.json(Method::GET, &format!("/internal/v1/companies/{cid}/summary"), &ctx, None).await?.into_response())

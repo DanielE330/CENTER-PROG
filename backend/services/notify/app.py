@@ -43,8 +43,15 @@ TOKEN_PATHS = {
 # приглашения в команду: не больше 50 писем в час на компанию, чтобы через них нельзя было рассылать спам
 INVITES_PER_HOUR = 50
 # рассылки notifier -> подписка, которая их включает
-BROADCAST = {"gap": "alerts", "gap_resolved": "alerts", "risk": "reports", "week": "reports", "month": "reports"}
-TONES = {"gap": "danger", "gap_resolved": "success"}
+BROADCAST = {
+    "gap": "alerts",
+    "gap_resolved": "alerts",
+    "missed": "alerts",
+    "risk": "reports",
+    "week": "reports",
+    "month": "reports",
+}
+TONES = {"gap": "danger", "gap_resolved": "success", "missed": "warning"}
 MAX_ATTACHMENT = 5 * 1024 * 1024
 SUBSCRIBERS_TTL = 300  # список компаний с подписчиками для планировщика notifier
 _subscribed: dict[str, Any] = {}  # {"at": время, "items": [company_id]}

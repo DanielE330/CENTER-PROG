@@ -166,6 +166,7 @@ pub fn tenant_routes() -> Router<AppState> {
         .route(&format!("{co}/forecasts/{{rid}}"), get(http::to_forecast))
         .route(&format!("{co}/backtest"), get(http::to_forecast))
         .route(&format!("{co}/scenarios"), post(http::create_scenario))
+        .route(&format!("{co}/forecast-settings"), get(http::forecast_settings).put(http::forecast_settings))
         .route(&format!("{co}/plan-fact"), get(http::to_planfact))
         // Telegram-уведомления, цели недели и ретро: сервис notifier (привязка чата, расписание, agile-цикл)
         .route(&format!("{co}/notifications"), get(http::to_notifier))

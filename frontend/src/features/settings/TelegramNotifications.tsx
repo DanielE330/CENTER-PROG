@@ -59,7 +59,7 @@ export function TelegramNotifications() {
     setDraft((d) => (d ? { ...d, [k]: v } : d))
     setSaved(false)
   }
-  const flag = (k: 'risk_enabled' | 'week_enabled' | 'month_enabled' | 'gap_enabled') => (
+  const flag = (k: 'risk_enabled' | 'week_enabled' | 'month_enabled' | 'gap_enabled' | 'missed_enabled') => (
     <Checkbox label={t(`telegram.${k.replace('_enabled', '')}`)} checked={!!draft?.[k]} onChange={(e) => set(k, e.target.checked ? 1 : 0)} />
   )
   const dayOptions = days.map((d, i) => ({ value: i, label: d }))
@@ -121,57 +121,66 @@ export function TelegramNotifications() {
               </div>
             )}
             {delivered != null && <Notice tone="success">{t('telegram.testSent', { count: delivered })}</Notice>}
+          </>
+        )}
 
-            {admin && draft && (
-              <div className="flex flex-col gap-4 border-t border-line pt-4">
-                <p className="text-[13px] font-medium">{t('telegram.schedule')}</p>
-                <Select label={t('telegram.tz')} value={draft.tz} onChange={(v) => set('tz', v)} options={zones.map((z) => ({ value: z, label: z }))} />
+        {/* расписание и пороги общие для Telegram и почты: показываются и без бота */}
+        {admin && draft && (
+          <div className="flex flex-col gap-4 border-t border-line pt-4">
+            <p className="text-[13px] font-medium">{t('telegram.schedule')}</p>
+            <Select label={t('telegram.tz')} value={draft.tz} onChange={(v) => set('tz', v)} options={zones.map((z) => ({ value: z, label: z }))} />
 
-                {(['risk', 'week'] as const).map((k) => (
-                  <div key={k} className="flex flex-col gap-2">
-                    {flag(`${k}_enabled`)}
-                    <div className="grid grid-cols-2 gap-3">
-                      <Select aria-label={t('telegram.day')} value={draft[`${k}_dow`]} onChange={(v) => set(`${k}_dow`, Number(v))} options={dayOptions} />
-                      <Input aria-label={t('telegram.time')} type="time" value={draft[`${k}_time`]} onChange={(e) => set(`${k}_time`, e.target.value)} />
-                    </div>
-                  </div>
-                ))}
-
-                <div className="flex flex-col gap-2">
-                  {flag('month_enabled')}
-                  <div className="grid grid-cols-2 gap-3">
-                    <Select aria-label={t('telegram.monthDay')} value={draft.month_day} onChange={(v) => set('month_day', Number(v))}
-                      options={(MONTH_DAYS.includes(draft.month_day) ? MONTH_DAYS : [draft.month_day, ...MONTH_DAYS]).map((d) => ({ value: d, label: `${d}` }))} />
-                    <Input aria-label={t('telegram.time')} type="time" value={draft.month_time} onChange={(e) => set('month_time', e.target.value)} />
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  {flag('gap_enabled')}
-                  <div className="grid grid-cols-2 gap-3">
-                    <Select label={t('telegram.gapDays')} value={draft.gap_days} onChange={(v) => set('gap_days', Number(v))}
-                      options={(GAP_DAYS.includes(draft.gap_days) ? GAP_DAYS : [draft.gap_days, ...GAP_DAYS]).map((d) => ({ value: d, label: t('common.daysCount', { count: d }) }))} />
-                    <Select label={t('telegram.gapThreshold')} value={draft.gap_threshold} onChange={(v) => set('gap_threshold', Number(v))}
-                      options={(THRESHOLDS.includes(draft.gap_threshold) ? THRESHOLDS : [draft.gap_threshold, ...THRESHOLDS]).map((v) => ({ value: v, label: `${Math.round(v * 100)}%` }))} />
-                  </div>
-                  <p className="text-xs text-muted">{t('telegram.gapHint')}</p>
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <Checkbox label={t('telegram.aiConsent')} checked={!!draft.ai_consent} disabled={!status.data.advisor} onChange={(e) => set('ai_consent', e.target.checked ? 1 : 0)} />
-                  <p className="text-xs text-muted">{status.data.advisor ? t('telegram.aiConsentHint') : t('telegram.advisorOff')}</p>
-                </div>
-
-                {(save.isError || unlink.isError || test.isError || makeLink.isError) && (
-                  <Notice tone="danger">{errorText(t, save.error ?? unlink.error ?? test.error ?? makeLink.error)}</Notice>
-                )}
-                <div className="flex items-center gap-3">
-                  <Button variant="primary" disabled={save.isPending} onClick={() => save.mutate(draft)}>{save.isPending ? t('common.saving') : t('telegram.save')}</Button>
-                  {saved && <span className="text-sm text-primary" role="status">{t('telegram.saved')}</span>}
+            {(['risk', 'week'] as const).map((k) => (
+              <div key={k} className="flex flex-col gap-2">
+                {flag(`${k}_enabled`)}
+                <div className="grid grid-cols-2 gap-3">
+                  <Select aria-label={t('telegram.day')} value={draft[`${k}_dow`]} onChange={(v) => set(`${k}_dow`, Number(v))} options={dayOptions} />
+                  <Input aria-label={t('telegram.time')} type="time" value={draft[`${k}_time`]} onChange={(e) => set(`${k}_time`, e.target.value)} />
                 </div>
               </div>
+            ))}
+
+            <div className="flex flex-col gap-2">
+              {flag('month_enabled')}
+              <div className="grid grid-cols-2 gap-3">
+                <Select aria-label={t('telegram.monthDay')} value={draft.month_day} onChange={(v) => set('month_day', Number(v))}
+                  options={(MONTH_DAYS.includes(draft.month_day) ? MONTH_DAYS : [draft.month_day, ...MONTH_DAYS]).map((d) => ({ value: d, label: `${d}` }))} />
+                <Input aria-label={t('telegram.time')} type="time" value={draft.month_time} onChange={(e) => set('month_time', e.target.value)} />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              {flag('gap_enabled')}
+              <div className="grid grid-cols-2 gap-3">
+                <Select label={t('telegram.gapDays')} value={draft.gap_days} onChange={(v) => set('gap_days', Number(v))}
+                  options={(GAP_DAYS.includes(draft.gap_days) ? GAP_DAYS : [draft.gap_days, ...GAP_DAYS]).map((d) => ({ value: d, label: t('common.daysCount', { count: d }) }))} />
+                <Select label={t('telegram.gapThreshold')} value={draft.gap_threshold} onChange={(v) => set('gap_threshold', Number(v))}
+                  options={(THRESHOLDS.includes(draft.gap_threshold) ? THRESHOLDS : [draft.gap_threshold, ...THRESHOLDS]).map((v) => ({ value: v, label: `${Math.round(v * 100)}%` }))} />
+              </div>
+              <p className="text-xs text-muted">{t('telegram.gapHint')}</p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              {flag('missed_enabled')}
+              <Input label={t('telegram.missedMin')} type="number" min={0} step={1000} inputMode="numeric"
+                value={Math.round(draft.missed_min_kop / 100)}
+                onChange={(e) => set('missed_min_kop', Math.max(0, Math.round(Number(e.target.value) || 0)) * 100)} />
+              <p className="text-xs text-muted">{t('telegram.missedHint')}</p>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <Checkbox label={t('telegram.aiConsent')} checked={!!draft.ai_consent} disabled={!status.data?.advisor} onChange={(e) => set('ai_consent', e.target.checked ? 1 : 0)} />
+              <p className="text-xs text-muted">{status.data?.advisor ? t('telegram.aiConsentHint') : t('telegram.advisorOff')}</p>
+            </div>
+
+            {(save.isError || unlink.isError || test.isError || makeLink.isError) && (
+              <Notice tone="danger">{errorText(t, save.error ?? unlink.error ?? test.error ?? makeLink.error)}</Notice>
             )}
-          </>
+            <div className="flex items-center gap-3">
+              <Button variant="primary" disabled={save.isPending} onClick={() => save.mutate(draft)}>{save.isPending ? t('common.saving') : t('telegram.save')}</Button>
+              {saved && <span className="text-sm text-primary" role="status">{t('telegram.saved')}</span>}
+            </div>
+          </div>
         )}
       </div>
     </Card>

@@ -38,7 +38,8 @@ export function useRecalc() {
   const qc = useQueryClient()
   const all = useInvalidateAll()
   return useMutation({
-    mutationFn: (horizonDays: number) => api.createForecast(horizonDays),
+    /** A number is the horizon; `{ full: true }` is "recompute from scratch" in the incremental mode. */
+    mutationFn: (v: number | { horizon: number; full: boolean }) => (typeof v === 'number' ? api.createForecast(v) : api.createForecast(v.horizon, v.full)),
     onSuccess: (run) => {
       qc.setQueryData(key('forecast'), { ...run, recomputed: false })
       void all()

@@ -103,6 +103,8 @@
 | `GET /api/v1/gov/key-rate` | read | |
 | `POST /api/v1/companies/{cid}/forecasts`, `/scenarios` | read | вычисляющие POST |
 | `GET /api/v1/companies/{cid}/forecasts/latest`, `/forecasts/{rid}`, `/backtest`, `/plan-fact` | read | |
+| `GET /api/v1/companies/{cid}/forecast-settings` | read | режим обновления прогноза |
+| `PUT /api/v1/companies/{cid}/forecast-settings` | admin | полный пересчёт или «Обновлять по новым данным» |
 | `GET /api/ext/v1/company`, `/forecast`, `/transactions`, `/expected-events`, `/plan-fact`; `POST /api/ext/v1/forecast` | токен, read | права по роли владельца |
 | `POST /api/ext/v1/expected-events` | токен, edit (scope `write`) | |
 | `/api/admin/v1/*` | оператор (`op_session`) | не пересекается с тенантскими маршрутами |

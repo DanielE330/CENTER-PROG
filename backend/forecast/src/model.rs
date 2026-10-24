@@ -315,6 +315,11 @@ pub fn detect_gaps(txs: &[Tx], balances: Option<&BTreeMap<NaiveDate, i64>>) -> V
         *net.entry(t.date).or_default() += t.amount;
     }
     let dates: Vec<NaiveDate> = net.keys().copied().collect();
+    gaps_between(&dates, &net, balances)
+}
+
+/// Пропуски между соседними датами `dates`; `net` — сумма операций дня (нужна для всех дат, кроме первой).
+fn gaps_between(dates: &[NaiveDate], net: &BTreeMap<NaiveDate, i64>, balances: Option<&BTreeMap<NaiveDate, i64>>) -> Vec<(NaiveDate, NaiveDate)> {
     let mut out = vec![];
     for w in dates.windows(2) {
         let (p, n) = (w[0], w[1]);
@@ -606,15 +611,21 @@ struct Occurrence {
     age: i64,
 }
 
-fn expand_rules(rules: &[Rule], txs: &[Tx], as_of: NaiveDate, horizon: usize) -> Vec<Occurrence> {
-    let end = as_of + Duration::days(horizon as i64 + 7);
-    let mut out = vec![];
+/// Сколько операций с каждым ключом (`rule_key` и `rule_key2`) было в месяце `as_of`.
+fn month_counts(txs: &[Tx], as_of: NaiveDate) -> HashMap<String, usize> {
     let cur_m = month_idx(as_of);
     let mut cur_counts: HashMap<String, usize> = HashMap::new();
     for t in txs.iter().filter(|t| month_idx(t.date) == cur_m) {
         *cur_counts.entry(rule_key(t)).or_default() += 1;
         *cur_counts.entry(rule_key2(t)).or_default() += 1;
     }
+    cur_counts
+}
+
+fn expand_rules(rules: &[Rule], cur_counts: &HashMap<String, usize>, as_of: NaiveDate, horizon: usize) -> Vec<Occurrence> {
+    let end = as_of + Duration::days(horizon as i64 + 7);
+    let mut out = vec![];
+    let cur_m = month_idx(as_of);
     for (ri, r) in rules.iter().enumerate() {
         match r.kind {
             "monthly" => {
@@ -697,12 +708,148 @@ pub fn forecast(
     scenario: &Scenario,
     p: &Params,
 ) -> Result<ForecastResult, ForecastError> {
+    simulate(&fit(txs, balances)?, events, scenario, p)
+}
+
+/// Обученная по истории часть модели: всё, что зависит только от операций и остатков. Не зависит от событий,
+/// сценария, горизонта и сегодняшней даты, поэтому её можно хранить и переиспользовать (режим «Обновлять по новым
+/// данным»): `simulate` по ней даёт тот же результат, что и `forecast`, а `advance` дописывает новые операции без
+/// повторного поиска регулярностей.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Fitted {
+    pub model_version: String,
+    /// последняя дата выписки
+    pub as_of: NaiveDate,
+    first: NaiveDate,
+    opening: i64,
+    #[serde(with = "rules_state")]
+    rules: Vec<Rule>,
+    gaps: Vec<(NaiveDate, NaiveDate)>,
+    /// окно остаточного потока: потоки по дням начиная с `win_start` и признак валидного рабочего дня
+    win_start: NaiveDate,
+    res_in: Vec<i64>,
+    res_out: Vec<i64>,
+    valid: Vec<bool>,
+    n_valid: usize,
+    balances: BTreeMap<NaiveDate, i64>,
+    /// суммы |операций| по неделям (масштаб для калибровки риска)
+    weekly: BTreeMap<i64, i64>,
+    /// месяц `as_of` и счётчики ключей операций в нём (что из регулярного уже прошло в этом месяце)
+    cur_month: i32,
+    cur_counts: HashMap<String, usize>,
+    /// число операций, на которых модель обучена или которые дописаны
+    pub n_ops: usize,
+}
+
+/// Почему новые операции нельзя дописать к обученной модели и нужен полный пересчёт.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NeedsFull {
+    /// операция датирована не позже конца уже учтённой выписки (импорт задним числом)
+    Backdated,
+    NoBalance,
+}
+
+/// Rule в кэше обученной модели: вместе с выборками сумм и сдвигов, которых нет в ответе API.
+mod rules_state {
+    use super::{NaiveDate, Rule};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct S {
+        key: String,
+        counterparty: String,
+        category: String,
+        direction: String,
+        kind: String,
+        anchors: Vec<u32>,
+        amount: i64,
+        occurrences: usize,
+        last_date: NaiveDate,
+        confidence: f64,
+        amounts: Vec<Vec<i64>>,
+        jitters: Vec<Vec<i64>>,
+    }
+
+    #[allow(clippy::ptr_arg)]
+    pub fn serialize<Z: Serializer>(rules: &Vec<Rule>, s: Z) -> Result<Z::Ok, Z::Error> {
+        rules
+            .iter()
+            .map(|r| S {
+                key: r.key.clone(),
+                counterparty: r.counterparty.clone(),
+                category: r.category.clone(),
+                direction: r.direction.into(),
+                kind: r.kind.into(),
+                anchors: r.anchors.clone(),
+                amount: r.amount,
+                occurrences: r.occurrences,
+                last_date: r.last_date,
+                confidence: r.confidence,
+                amounts: r.amounts.clone(),
+                jitters: r.jitters.clone(),
+            })
+            .collect::<Vec<_>>()
+            .serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Rule>, D::Error> {
+        Ok(Vec::<S>::deserialize(d)?
+            .into_iter()
+            .map(|s| Rule {
+                key: s.key,
+                counterparty: s.counterparty,
+                category: s.category,
+                direction: if s.direction == "in" { "in" } else { "out" },
+                kind: if s.kind == "weekly" { "weekly" } else { "monthly" },
+                anchors: s.anchors,
+                amount: s.amount,
+                occurrences: s.occurrences,
+                last_date: s.last_date,
+                confidence: s.confidence,
+                amounts: s.amounts,
+                jitters: s.jitters,
+            })
+            .collect())
+    }
+}
+
+fn week_idx(d: NaiveDate) -> i64 {
+    (d - NaiveDate::from_ymd_opt(1970, 1, 5).unwrap()).num_days().div_euclid(7)
+}
+
+impl Rule {
+    /// Новая операция по найденной регулярности: сумма попадает в выборку ближайшего якоря (последние 6),
+    /// медианная сумма пересчитывается. Якоря и сдвиги не меняются — их уточняет полный пересчёт.
+    fn observe(&mut self, t: &Tx) {
+        let k = if self.kind == "monthly" {
+            let day = t.date.day() as i64;
+            (0..self.anchors.len())
+                .min_by_key(|&k| {
+                    let d = (day - self.anchors[k] as i64).abs();
+                    d.min(31 - d)
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        if let Some(am) = self.amounts.get_mut(k) {
+            am.push(t.amount);
+            if am.len() > 6 {
+                am.remove(0);
+            }
+        }
+        let all: Vec<i64> = self.amounts.iter().flatten().copied().collect();
+        self.amount = median_i64(&all);
+        self.occurrences += 1;
+        self.last_date = self.last_date.max(t.date);
+    }
+}
+
+/// Обучение по истории: регулярности, пропуски выписки, окно остаточного потока, масштаб оборота.
+pub fn fit(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>) -> Result<Fitted, ForecastError> {
     let as_of = txs.iter().map(|t| t.date).max().ok_or(ForecastError::NoData)?;
     let first = txs.iter().map(|t| t.date).min().unwrap();
     let opening = *balances.range(..=as_of).next_back().ok_or(ForecastError::NoBalance)?.1;
-    let bridge = p.today.map_or(0, |t| (t - as_of).num_days().clamp(0, MAX_BRIDGE_DAYS) as usize);
-    let h = p.horizon + bridge;
-    let history_days = (as_of - first).num_days() + 1;
 
     let rules = detect_rules(txs, as_of);
     let rule_keys: HashSet<&str> = rules.iter().map(|r| r.key.as_str()).collect();
@@ -739,6 +886,118 @@ pub fn forecast(
             res_out[i] += t.amount;
         }
     }
+    let mut weekly: BTreeMap<i64, i64> = BTreeMap::new();
+    for t in txs {
+        *weekly.entry(week_idx(t.date)).or_default() += t.amount.abs();
+    }
+    Ok(Fitted {
+        model_version: MODEL_VERSION.into(),
+        as_of,
+        first,
+        opening,
+        rules,
+        gaps,
+        win_start,
+        res_in,
+        res_out,
+        valid,
+        n_valid,
+        balances: balances.clone(),
+        weekly,
+        cur_month: month_idx(as_of),
+        cur_counts: month_counts(txs, as_of),
+        n_ops: txs.len(),
+    })
+}
+
+impl Fitted {
+    /// Дописывает операции после `as_of` без повторного обучения: сдвигает конец выписки и остаток, окно
+    /// остаточного потока и пропуски на новом участке; операции по уже найденным регулярностям уточняют их суммы.
+    /// Новые регулярности не ищутся — это делает полный пересчёт. Возвращает число добавленных операций.
+    pub fn advance(&mut self, txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>) -> Result<usize, NeedsFull> {
+        let Some(new_as_of) = txs.iter().map(|t| t.date).max() else { return Ok(0) };
+        if txs.iter().any(|t| t.date <= self.as_of) {
+            return Err(NeedsFull::Backdated);
+        }
+        let mut bal = self.balances.clone();
+        bal.extend(balances.range(self.as_of + Duration::days(1)..).map(|(d, b)| (*d, *b)));
+        let opening = *bal.range(..=new_as_of).next_back().ok_or(NeedsFull::NoBalance)?.1;
+
+        // пропуски выписки на добавленном участке: от последнего учтённого дня до новых дат
+        let mut net: BTreeMap<NaiveDate, i64> = BTreeMap::new();
+        for t in txs {
+            *net.entry(t.date).or_default() += t.amount;
+        }
+        let dates: Vec<NaiveDate> = std::iter::once(self.as_of).chain(net.keys().copied()).collect();
+        let new_gaps = gaps_between(&dates, &net, Some(&bal));
+
+        let mut d = self.as_of + Duration::days(1);
+        while d <= new_as_of {
+            let ok = is_business_day(d) && !new_gaps.iter().any(|(s, e)| d >= *s && d <= *e);
+            self.valid.push(ok);
+            self.res_in.push(0);
+            self.res_out.push(0);
+            self.n_valid += ok as usize;
+            d += Duration::days(1);
+        }
+        for t in txs {
+            let (k1, k2) = (rule_key(t), rule_key2(t));
+            let ri = self.rules.iter().position(|r| r.key == k1).or_else(|| self.rules.iter().position(|r| r.key == k2));
+            let i = (t.date - self.win_start).num_days() as usize;
+            match ri {
+                Some(ri) => self.rules[ri].observe(t),
+                None if self.valid[i] && t.amount > 0 => self.res_in[i] += t.amount,
+                None if self.valid[i] => self.res_out[i] += t.amount,
+                None => {}
+            }
+            *self.weekly.entry(week_idx(t.date)).or_default() += t.amount.abs();
+        }
+        // окно снова — последние RESIDUAL_BDAYS валидных рабочих дней, но не длиннее RESIDUAL_MAX_CAL_DAYS (как в `fit`)
+        while !self.valid.is_empty()
+            && (self.n_valid > RESIDUAL_BDAYS
+                || (self.n_valid == RESIDUAL_BDAYS && !self.valid[0])
+                || (new_as_of - self.win_start).num_days() >= RESIDUAL_MAX_CAL_DAYS)
+        {
+            self.n_valid -= self.valid.remove(0) as usize;
+            self.res_in.remove(0);
+            self.res_out.remove(0);
+            self.win_start += Duration::days(1);
+        }
+        let m = month_idx(new_as_of);
+        if m != self.cur_month {
+            self.cur_month = m;
+            self.cur_counts.clear();
+        }
+        for (k, v) in month_counts(txs, new_as_of) {
+            *self.cur_counts.entry(k).or_default() += v;
+        }
+        self.gaps.extend(new_gaps);
+        self.balances = bal;
+        self.as_of = new_as_of;
+        self.opening = opening;
+        self.n_ops += txs.len();
+        Ok(txs.len())
+    }
+
+    /// Медианный недельный оборот (сумма |операций| по неделям), коп.; масштаб для безразмерных признаков.
+    fn turnover(&self) -> f64 {
+        let mut v: Vec<i64> = self.weekly.values().copied().collect();
+        v.sort_unstable();
+        v.get(v.len() / 2).copied().unwrap_or(1).max(1) as f64
+    }
+}
+
+/// Прогноз по обученной модели: события, сценарий, траектории, риск и объяснения.
+pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -> Result<ForecastResult, ForecastError> {
+    let (as_of, first, opening) = (f.as_of, f.first, f.opening);
+    let bridge = p.today.map_or(0, |t| (t - as_of).num_days().clamp(0, MAX_BRIDGE_DAYS) as usize);
+    let h = p.horizon + bridge;
+    let history_days = (as_of - first).num_days() + 1;
+    let rules = f.rules.clone();
+    let balances = &f.balances;
+    let gaps = &f.gaps;
+    let (win_start, n_valid, n_win) = (f.win_start, f.n_valid, f.valid.len());
+    let (res_in, res_out, valid) = (&f.res_in, &f.res_out, &f.valid);
     let gap_days_total: i64 = gaps.iter().map(|(s, e)| (*e - *s).num_days() + 1).sum();
 
     // --- сценарий ---
@@ -755,7 +1014,7 @@ pub fn forecast(
     let in_scale = 1.0 - scenario.revenue_drop_pct / 100.0;
     let out_scale = 1.0 + scenario.fixed_cost_growth_pct / 100.0;
 
-    let mut occs = expand_rules(&rules, txs, as_of, h);
+    let mut occs = expand_rules(&rules, &f.cur_counts, as_of, h);
     let ev_occs = expand_events(events, as_of, h);
     // Ожидаемое событие (счёт, ручной ввод, налог) замещает предположение регулярности о том же платеже
     occs.retain(|o| match o.rule_ix {
@@ -1072,7 +1331,7 @@ pub fn forecast(
     let deficit_given_break_median = median_i64(&given);
     let median_path_deficit = (-median_path.iter().copied().min().unwrap_or(0)).max(0);
 
-    let scale = weekly_turnover(txs);
+    let scale = f.turnover();
     let risk_feats = risk_features(raw_probability, n, opening, scale, balances, as_of, &days);
     let shortfall_probability = if p.calibrate && opening >= 0 { calibrate_risk(&risk_feats) } else { raw_probability };
 
@@ -1263,18 +1522,6 @@ pub fn calibrate_risk(feats: &[f64]) -> f64 {
     guard_risk(calibrate_with(feats, CAL_B, &CAL_W), feats)
 }
 
-/// Медианный недельный оборот (сумма |операций| по неделям), коп.; масштаб для безразмерных признаков.
-fn weekly_turnover(txs: &[Tx]) -> f64 {
-    let base = NaiveDate::from_ymd_opt(1970, 1, 5).unwrap();
-    let mut w: BTreeMap<i64, i64> = BTreeMap::new();
-    for t in txs {
-        *w.entry((t.date - base).num_days().div_euclid(7)).or_default() += t.amount.abs();
-    }
-    let mut v: Vec<i64> = w.values().copied().collect();
-    v.sort_unstable();
-    v.get(v.len() / 2).copied().unwrap_or(1).max(1) as f64
-}
-
 fn scale_amount(a: i64, in_scale: f64, out_scale: f64, is_rule: bool) -> i64 {
     if a > 0 {
         (a as f64 * in_scale).round() as i64
@@ -1367,6 +1614,35 @@ pub fn backtest(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64)
 
 #[allow(dead_code)]
 pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64, params: &Params) -> Option<Backtest> {
+    backtest_by(txs, balances, step_days, params, |_, hist, hb, p| forecast(hist, hb, &[], &Scenario::default(), p))
+}
+
+/// Тот же backtest, но прогноз в каждой точке строится в режиме «Обновлять по новым данным»: модель обучена
+/// за `lag_days` дней до точки, затем операции дописываются по дням через `Fitted::advance`. Если дописать нельзя,
+/// точка считается полным пересчётом (как сделал бы сервис).
+pub fn backtest_incremental(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64, params: &Params, lag_days: i64) -> Option<Backtest> {
+    backtest_by(txs, balances, step_days, params, |origin, hist, hb, p| {
+        let cut = origin - Duration::days(lag_days);
+        let old: Vec<Tx> = hist.iter().filter(|t| t.date <= cut).cloned().collect();
+        let ob: BTreeMap<NaiveDate, i64> = hb.range(..=cut).map(|(k, v)| (*k, *v)).collect();
+        let Ok(mut f) = fit(&old, &ob) else { return forecast(hist, hb, &[], &Scenario::default(), p) };
+        let mut by_day: BTreeMap<NaiveDate, Vec<Tx>> = BTreeMap::new();
+        for t in hist.iter().filter(|t| t.date > cut) {
+            by_day.entry(t.date).or_default().push(t.clone());
+        }
+        for day in by_day.values() {
+            if f.advance(day, hb).is_err() {
+                return forecast(hist, hb, &[], &Scenario::default(), p);
+            }
+        }
+        simulate(&f, &[], &Scenario::default(), p)
+    })
+}
+
+fn backtest_by<F>(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64, params: &Params, run: F) -> Option<Backtest>
+where
+    F: Fn(NaiveDate, &[Tx], &BTreeMap<NaiveDate, i64>, &Params) -> Result<ForecastResult, ForecastError>,
+{
     let first = txs.iter().map(|t| t.date).min()?;
     let last = txs.iter().map(|t| t.date).max()?;
     let min_hist = 120;
@@ -1385,7 +1661,7 @@ pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days:
         let hist: Vec<Tx> = txs.iter().filter(|t| t.date <= origin).cloned().collect();
         let hb: BTreeMap<NaiveDate, i64> = balances.range(..=origin).map(|(k, v)| (*k, *v)).collect();
         // as_of = дата последней операции <= origin; приведём к origin через пустые дни
-        let fc = forecast(&hist, &hb, &[], &Scenario::default(), &Params { horizon: 30, ..params.clone() });
+        let fc = run(origin, &hist, &hb, &Params { horizon: 30, ..params.clone() });
         if let Ok(fc) = fc {
             n_orig += 1;
             let base = fc.opening_balance;
@@ -1849,5 +2125,54 @@ mod tests {
         let sum: f64 = w.drivers.iter().map(|x| x.share).sum();
         assert!(sum > 0.5 && sum <= 1.0 + 1e-9, "{sum}");
         assert!(w.drivers.windows(2).all(|p| p[0].share >= p[1].share));
+    }
+
+    #[test]
+    fn simulate_on_fitted_equals_forecast_and_survives_serde() {
+        let (v, b) = sample();
+        let p = Params { horizon: 30, seed: 7, n_paths: 200, ..Default::default() };
+        let ev = Event { id: "e".into(), date: d(2026, 9, 12), amount: -4_000_000, title: "Ремонт".into(), counterparty: String::new(), source: "manual".into(), confidence: 1.0 };
+        let full = forecast(&v, &b, std::slice::from_ref(&ev), &Scenario::default(), &p).unwrap();
+        let f: Fitted = serde_json::from_str(&serde_json::to_string(&fit(&v, &b).unwrap()).unwrap()).unwrap();
+        let cached = simulate(&f, &[ev], &Scenario::default(), &p).unwrap();
+        assert_eq!(serde_json::to_value(&full).unwrap(), serde_json::to_value(&cached).unwrap());
+    }
+
+    #[test]
+    fn advance_by_days_rebuilds_the_same_residual_window_as_a_full_fit() {
+        let (v, b) = sample();
+        let cut = d(2026, 8, 14);
+        let old: Vec<Tx> = v.iter().filter(|t| t.date <= cut).cloned().collect();
+        let mut f = fit(&old, &b.range(..=cut).map(|(k, x)| (*k, *x)).collect()).unwrap();
+        let mut day = cut + Duration::days(1);
+        while day <= d(2026, 8, 31) {
+            let batch: Vec<Tx> = v.iter().filter(|t| t.date == day).cloned().collect();
+            f.advance(&batch, &b).unwrap();
+            day += Duration::days(1);
+        }
+        let full = fit(&v, &b).unwrap();
+        assert_eq!((f.as_of, f.opening, f.n_ops), (full.as_of, full.opening, full.n_ops));
+        assert_eq!((f.win_start, f.n_valid), (full.win_start, full.n_valid));
+        assert_eq!((&f.res_in, &f.res_out, &f.valid), (&full.res_in, &full.res_out, &full.valid));
+        assert_eq!((&f.weekly, &f.cur_counts, f.cur_month), (&full.weekly, &full.cur_counts, full.cur_month));
+        let keys = |x: &Fitted| x.rules.iter().map(|r| r.key.clone()).collect::<Vec<_>>();
+        assert_eq!(keys(&f), keys(&full));
+        // клиент заплатил 10 августа: сумма попала в выборку правила
+        let client = f.rules.iter().find(|r| r.counterparty == "Клиент").unwrap();
+        assert_eq!(client.last_date, d(2026, 8, 10));
+        let p = Params { horizon: 30, seed: 1, n_paths: 100, ..Default::default() };
+        assert_eq!(simulate(&f, &[], &Scenario::default(), &p).unwrap().as_of, d(2026, 8, 31));
+    }
+
+    #[test]
+    fn advance_refuses_backdated_operations_and_ignores_empty_batches() {
+        let (v, b) = sample();
+        let mut f = fit(&v, &b).unwrap();
+        assert_eq!(f.advance(&[], &b), Ok(0));
+        let late = tx(d(2026, 8, 31), 50_000, "Розница");
+        assert_eq!(f.advance(&[late], &b), Err(NeedsFull::Backdated));
+        let no_bal = tx(d(2026, 9, 1), 50_000, "Розница");
+        assert_eq!(f.advance(std::slice::from_ref(&no_bal), &BTreeMap::new()).map(|_| ()), Ok(()));
+        assert_eq!(f.opening, b[&d(2026, 8, 31)]); // остатка за 1 сентября нет — берём последний известный
     }
 }

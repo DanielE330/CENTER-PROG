@@ -253,7 +253,11 @@
     "staleTitle": "The forecast is out of date",
     "staleText": "Data changed after the last calculation, so the figures may be out of date.",
     "recomputedTitle": "Forecast recalculated automatically",
-    "recomputedText": "Reason: the data changed. The forecast horizon is unchanged."
+    "recomputedText": "Reason: the data changed. The forecast horizon is unchanged.",
+    "incrementalTitle": "Forecast updated with new data",
+    "incrementalText": "The model was not retrained: {{count}} operations were appended. Last full recompute: {{date}}.",
+    "incrementalNoOps": "No new operations; only payments and events were recomputed. Last full recompute: {{date}}.",
+    "fullRecalc": "Recompute from scratch"
   },
   "risk": {
     "title": "Cash gap risk",
@@ -731,6 +735,14 @@
       "inn": "TIN (INN)",
       "ogrn": "OGRN"
     },
+    "forecastUpdate": {
+      "title": "Forecast updates",
+      "subtitle": "How to recompute the forecast when new operations and events arrive.",
+      "full": "Full recompute",
+      "fullHint": "The model is retrained on the whole history: most accurate, about 0.6 s even on hundreds of thousands of operations.",
+      "incremental": "Update with new data",
+      "incrementalHint": "The model is not retrained: only new operations are appended, and when events change only the trajectories are recomputed. A full recompute runs every 30 days, after category edits or via \"Recompute from scratch\"."
+    },
     "prefs": {
       "title": "Preferences",
       "subtitle": "Stored in this browser only.",
@@ -847,12 +859,15 @@
     "week": "Weekly summary and plan",
     "month": "Monthly summary and plan",
     "gap": "Cash-gap alert",
+    "missed": "Missed payments",
     "day": "Day of week",
     "time": "Time",
     "monthDay": "Day of month",
     "gapDays": "Warn this many days ahead",
     "gapThreshold": "Probability threshold",
     "gapHint": "Reminders also arrive 3 days and 1 day before while the risk remains.",
+    "missedMin": "Report payments of at least, ₽",
+    "missedHint": "A client payment did not arrive or a planned debit did not go through 5 days after the expected date. One message per payment; checked every 3 hours from 8 to 21.",
     "save": "Save schedule",
     "saved": "Schedule saved",
     "days": [
@@ -927,7 +942,8 @@
       "risk": "Risk report",
       "week": "Week and plan",
       "month": "Month and plan",
-      "gap": "Gap alert"
+      "gap": "Gap alert",
+      "missed": "Missed payments"
     },
     "roles": {
       "viewer": "Reads",
@@ -1252,7 +1268,7 @@
       "lockedTitle": "Email not confirmed",
       "lockedText": "Follow the link from the letter sent after registration. Mailings are off until the email is confirmed.",
       "alerts": "Cash gap alerts",
-      "alertsHint": "A warning 7, 3 and 1 day before a possible gap, and a letter when the risk goes down.",
+      "alertsHint": "A warning 7, 3 and 1 day before a possible gap, a letter when the risk goes down, and missed plan-fact payments.",
       "reports": "Reports",
       "reportsHint": "Risk report, weekly and monthly results with a chart; the monthly one comes with an Excel file.",
       "schedule": "When reports arrive and the alert probability threshold are set by the owner or an administrator in \"Notification schedule\".",

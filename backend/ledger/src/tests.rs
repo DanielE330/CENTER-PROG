@@ -248,6 +248,36 @@ async fn import_overlapping_statement_skips_rows_by_dedup_key() {
     assert_eq!(t["total"], 5);
 }
 
+async fn snap_since(app: &Router, cid: &str, since: i64) -> (StatusCode, Value) {
+    call(app, "GET", &format!("/internal/v1/companies/{cid}/snapshot?since_rev={since}"), None).await
+}
+
+#[tokio::test]
+async fn snapshot_since_revision_returns_only_appended_rows_and_category_edit_resets() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    import_confirmed(&e.app, &cid, "a.csv", base_txs()).await;
+    let rev1 = revision(&e.app, &cid).await;
+    import_confirmed(&e.app, &cid, "b.csv", vec![tx(1, "2026-03-20", 900_000, "ООО Клиент", "Оплата по счёту 77", "revenue")]).await;
+    let (s, v) = snap_since(&e.app, &cid, rev1).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["transactions"].as_array().unwrap().len(), 1);
+    assert_eq!((v["data_revision"].as_i64(), v["tx_reset_rev"].as_i64()), (Some(rev1 + 1), Some(0)));
+    assert_eq!(snap_since(&e.app, &cid, 0).await.1["transactions"].as_array().unwrap().len(), 5);
+    // событие — новая ревизия без новых операций и без сброса
+    let (s, _) = call(&e.app, "POST", &format!("/internal/v1/companies/{cid}/expected-events"), Some(json!({"date": Local::now().date_naive().to_string(), "amount_kop": "100000", "direction": "out", "title": "Ремонт"}))).await;
+    assert_eq!(s, StatusCode::CREATED);
+    let (_, v) = snap_since(&e.app, &cid, rev1 + 1).await;
+    assert_eq!((v["transactions"].as_array().unwrap().len(), v["tx_reset_rev"].as_i64()), (0, Some(0)));
+    // правка категории меняет уже учтённую операцию: дельта невозможна
+    let (_, t) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/transactions"), None).await;
+    let id = t["items"][0]["id"].as_i64().unwrap();
+    let (s, _) = call(&e.app, "PATCH", &format!("/internal/v1/companies/{cid}/transactions/{id}/category"), Some(json!({"category": "other_expense"}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v) = snap_since(&e.app, &cid, 0).await;
+    assert_eq!(v["tx_reset_rev"], v["data_revision"]);
+}
+
 #[tokio::test]
 async fn import_identical_rows_inside_one_file_are_kept_separately() {
     let e = env().await;

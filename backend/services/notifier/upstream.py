@@ -79,14 +79,14 @@ class Upstream:
         return int(r.get("recipients") or 0)
 
     async def mail_recipients(self, cid: str, kind: str) -> int:
-        """Сколько участников получают этот вид рассылки письмом (alerts — gap, reports — отчёты)."""
+        """Сколько участников получают этот вид рассылки письмом (alerts — разрыв и пропущенные платежи, reports — отчёты)."""
         if not config.notify_url():
             return 0
         try:
             r = await self._req("notify", "GET", f"{config.notify_url()}/internal/v1/companies/{cid}/subscribers")
         except UpstreamError:
             return 0
-        return int(r.get("alerts" if kind == "gap" else "reports") or 0)
+        return int(r.get("alerts" if kind in ("gap", "missed") else "reports") or 0)
 
     async def mail_companies(self) -> list[str]:
         """Компании, где кто-то получает рассылки письмом: их обходим, даже если Telegram не подключён."""

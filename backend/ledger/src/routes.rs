@@ -39,6 +39,12 @@ fn bump(c: &rusqlite::Connection, cid: &str) -> R<()> {
     Ok(())
 }
 
+/// Новая ревизия, в которой уже учтённые операции изменились (не дописаны): прогноз по дельте здесь невозможен.
+fn bump_reset(c: &rusqlite::Connection, cid: &str) -> R<()> {
+    c.execute("UPDATE companies SET data_revision=data_revision+1, tx_reset_rev=data_revision+1 WHERE id=?", [cid]).map_err(internal)?;
+    Ok(())
+}
+
 // ---------- компании ----------
 #[derive(Deserialize)]
 pub struct EnsureBody {
@@ -150,12 +156,13 @@ pub async fn update_company(State(st): State<AppState>, ctx: Ctx, Path(cid): Pat
 }
 
 // ---------- снимок для расчётных сервисов ----------
-fn load_history(c: &rusqlite::Connection, cid: &str) -> R<Vec<HistoryRow>> {
+/// Операции компании, добавленные после ревизии `since` (0 — все).
+fn load_history(c: &rusqlite::Connection, cid: &str, since: i64) -> R<Vec<HistoryRow>> {
     let mut s = c
-        .prepare("SELECT date, amount_kop, balance_kop, counterparty, inn, purpose, category FROM transactions WHERE company_id=? ORDER BY date, id")
+        .prepare("SELECT date, amount_kop, balance_kop, counterparty, inn, purpose, category FROM transactions WHERE company_id=? AND rev>? ORDER BY date, id")
         .map_err(internal)?;
     let v = s
-        .query_map([cid], |r| {
+        .query_map(params![cid, since], |r| {
             Ok(HistoryRow {
                 tx: Tx {
                     date: NaiveDate::parse_from_str(&r.get::<_, String>(0)?, "%Y-%m-%d").unwrap_or_default(),
@@ -194,11 +201,22 @@ fn load_events(c: &rusqlite::Connection, cid: &str) -> R<Vec<Event>> {
     Ok(v)
 }
 
+#[derive(Deserialize)]
+pub struct SnapshotQuery {
+    since_rev: Option<i64>,
+}
+
 /// История, события и ревизия одним согласованным чтением. Суммы — числа (не для публикации в SPA).
-pub async fn snapshot(State(st): State<AppState>, Path(cid): Path<String>) -> R<Json<Snapshot>> {
+/// `since_rev`: только операции, добавленные после этой ревизии (дописывание прогноза без полного пересчёта).
+pub async fn snapshot(State(st): State<AppState>, Path(cid): Path<String>, Query(q): Query<SnapshotQuery>) -> R<Json<Snapshot>> {
     let c = lock(&st);
-    let rev: i64 = c.query_row("SELECT data_revision FROM companies WHERE id=?", [&cid], |r| r.get(0)).optional().map_err(internal)?.ok_or_else(not_found)?;
-    Ok(Json(Snapshot { data_revision: rev, transactions: load_history(&c, &cid)?, events: load_events(&c, &cid)? }))
+    let (rev, reset): (i64, i64) = c
+        .query_row("SELECT data_revision, tx_reset_rev FROM companies WHERE id=?", [&cid], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+        .map_err(internal)?
+        .ok_or_else(not_found)?;
+    let since = q.since_rev.unwrap_or(0).max(0);
+    Ok(Json(Snapshot { data_revision: rev, tx_reset_rev: reset, transactions: load_history(&c, &cid, since)?, events: load_events(&c, &cid)? }))
 }
 
 // ---------- импорт ----------
@@ -351,8 +369,8 @@ pub async fn confirm_import(State(st): State<AppState>, ctx: Ctx, Path((cid, iid
     {
         let mut ins = tx
             .prepare(
-                "INSERT OR IGNORE INTO transactions(company_id, import_id, row_no, date, amount_kop, balance_kop, counterparty, inn, purpose, category, category_conf, dedup_key, subcategory, grp, method)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO transactions(company_id, import_id, row_no, date, amount_kop, balance_kop, counterparty, inn, purpose, category, category_conf, dedup_key, subcategory, grp, method, rev)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT data_revision+1 FROM companies WHERE id=?1))",
             )
             .map_err(internal)?;
         for (t, k) in txs.iter().zip(keys.iter()) {
@@ -557,7 +575,7 @@ pub async fn set_category(State(st): State<AppState>, ctx: Ctx, Path((cid, id)):
             same = ids.len();
         }
         tx.commit().map_err(internal)?;
-        bump(&c, &cid)?;
+        bump_reset(&c, &cid)?;
         drop(c);
         audit(&st, &ctx, &cid, "transaction.subcategory", &id.to_string(), "ok");
         return Ok(Json(json!({"id": id, "category": category, "subcategory": sub, "group": group, "applied_to_similar": same})));
@@ -571,7 +589,7 @@ pub async fn set_category(State(st): State<AppState>, ctx: Ctx, Path((cid, id)):
     if n == 0 {
         return Err(not_found());
     }
-    bump(&c, &cid)?;
+    bump_reset(&c, &cid)?;
     Ok(Json(json!({"id": id, "category": category})))
 }
 

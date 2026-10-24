@@ -66,6 +66,13 @@ pub fn open(path: &str) -> Db {
             conn.execute(&format!("ALTER TABLE transactions ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"), []).expect("add column");
         }
     }
+    // ревизия, в которой операция появилась, и ревизия последней правки операций (для дописывания прогноза по дельте)
+    if !tx_cols.iter().any(|c| c == "rev") {
+        conn.execute("ALTER TABLE transactions ADD COLUMN rev INTEGER NOT NULL DEFAULT 0", []).expect("add column");
+    }
+    if !cols.iter().any(|c| c == "tx_reset_rev") {
+        conn.execute("ALTER TABLE companies ADD COLUMN tx_reset_rev INTEGER NOT NULL DEFAULT 0", []).expect("add column");
+    }
     // блокировка компании оператором платформы (метаданные; данные компании не затрагиваются)
     for col in ["banned_at", "ban_reason"] {
         if !cols.iter().any(|c| c == col) {

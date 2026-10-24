@@ -26,6 +26,7 @@ import type {
   NewMemberResult,
   MemberResetResult,
   NotificationPrefs,
+  ForecastUpdateMode,
   Role,
   NewApiToken,
   NewInvite,
@@ -197,7 +198,11 @@ export const api = {
       throw e
     }
   },
-  createForecast: (horizonDays: number) => request<ForecastRun>('POST', co('/forecasts'), { body: { horizon_days: horizonDays } }),
+  /** full: refit the model on the whole history even in the incremental update mode. */
+  createForecast: (horizonDays: number, full = false) =>
+    request<ForecastRun>('POST', co('/forecasts'), { body: full ? { horizon_days: horizonDays, full: true } : { horizon_days: horizonDays } }),
+  forecastSettings: () => request<{ update_mode: ForecastUpdateMode }>('GET', co('/forecast-settings')),
+  saveForecastSettings: (mode: ForecastUpdateMode) => request<{ update_mode: ForecastUpdateMode }>('PUT', co('/forecast-settings'), { body: { update_mode: mode } }),
   scenario: (horizonDays: number, scenario: ScenarioParams) =>
     request<ScenarioResponse>('POST', co('/scenarios'), { body: { horizon_days: horizonDays, scenario } }),
   backtest: () => request<Backtest>('GET', co('/backtest')),

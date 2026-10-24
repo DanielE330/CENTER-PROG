@@ -184,6 +184,19 @@ export interface ForecastRun {
   recomputed?: boolean
   scenario: unknown
   result: ForecastResult
+  /** How the model was obtained: full refit or incremental update with new data. */
+  update?: ForecastUpdate
+}
+
+export type ForecastUpdateMode = 'full' | 'incremental'
+
+export interface ForecastUpdate {
+  mode: ForecastUpdateMode
+  /** full: mode_full | forced | first | reset | backdated | expired | grown; incremental: events_only | new_operations */
+  reason: string
+  /** Operations appended since the last full refit. */
+  ops_added: number
+  full_fit_at: string
 }
 
 export interface ScenarioParams {
@@ -501,6 +514,10 @@ export interface TgPrefs {
   gap_threshold: number
   /** Admin allows sending company statistics to the cloud advisor (Hermes). */
   ai_consent: number
+  /** Alert about missed planned payments (plan-fact), once per payment. */
+  missed_enabled: number
+  /** Ignore missed payments below this amount, kopecks. */
+  missed_min_kop: number
 }
 
 export interface TgStatus {
@@ -559,7 +576,7 @@ export interface SprintHistoryItem {
 }
 
 export type TgRole = 'viewer' | 'rater' | 'admin'
-export type TgKind = 'risk' | 'week' | 'month' | 'gap'
+export type TgKind = 'risk' | 'week' | 'month' | 'gap' | 'missed'
 
 export interface Department {
   id: number

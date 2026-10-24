@@ -46,6 +46,29 @@ def gap_recovered_text(company: str) -> str:
     return f"✅ <b>Риск кассового разрыва снизился</b>\n{esc(company)}\n\nПрогноз больше не показывает разрыв в ближайшие дни. Продолжаем следить."
 
 
+MISSED_SHOWN = 5
+
+
+def missed_text(company: str, items: list[dict]) -> str:
+    """Новые пропуски план-факта одним сообщением: до MISSED_SHOWN строк, остальные — числом."""
+    lines = [f"🔔 <b>Пропущенные платежи: {len(items)}</b>", esc(company), ""]
+    for i in items[:MISSED_SHOWN]:
+        if i["plan"] > 0:
+            lines.append(f"• Не поступила оплата: <b>{esc(i['title'])}</b> — {rub(i['plan'])}, ожидали {fmt.day(i['date'])}")
+        else:
+            lines.append(f"• Не прошло плановое списание: <b>{esc(i['title'])}</b> — {rub(-i['plan'])}, {fmt.day(i['date'])}")
+    if len(items) > MISSED_SHOWN:
+        lines.append(f"…и ещё {len(items) - MISSED_SHOWN}")
+    lines += ["", "<b>Что сделать:</b>"]
+    if any(i["plan"] > 0 for i in items):
+        lines.append("• напомнить клиенту об оплате и договориться о новой дате;")
+        lines.append("• посмотреть прогноз: пропущенные поступления уже учтены в нём как задержка оплаты.")
+    if any(i["plan"] < 0 for i in items):
+        lines.append("• проверить, не просрочен ли платёж: за просроченные налоги, аренду и кредит начисляют пени;")
+        lines.append("• когда платёж пройдёт, остаток станет ниже — заложите эту сумму в план.")
+    return "\n".join(lines)
+
+
 def risk_text(b: Bundle) -> str:
     r = b.risk
     lines = [f"🛡 <b>Риск-менеджмент: {fmt.period(r.start, r.end)}</b>", esc(b.company), "",

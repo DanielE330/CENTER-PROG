@@ -15,7 +15,7 @@ import { errorText } from '../../i18n/helpers'
 import type { Department, TgKind, TgRole } from '../../types'
 
 const KEY = ['notifications', 'team'] as const
-const ALL_KINDS: TgKind[] = ['risk', 'week', 'month', 'gap']
+const ALL_KINDS: TgKind[] = ['risk', 'week', 'month', 'gap', 'missed']
 const ROLES: TgRole[] = ['viewer', 'rater', 'admin']
 const NONE = ''
 

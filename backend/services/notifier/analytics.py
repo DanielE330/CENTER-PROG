@@ -1,5 +1,6 @@
 """Чистая аналитика поверх прогноза, план-факта и операций: алерты, риски, итоги периодов, цели, советы.
 Здесь нет сети и времени — только данные на входе, поэтому всё покрывается юнит-тестами."""
+import hashlib
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -164,6 +165,28 @@ def plan_fact_stats(pf: dict, start: date, end: date) -> dict:
         "fact_in": sum(i["fact"] or 0 for i in items if i["plan"] > 0), "fact_out": -sum(i["fact"] or 0 for i in items if i["plan"] < 0),
         "done": len(by["paid"]) + len(by["deviation"]), "total": len(items),
     }
+
+
+MISSED_LOOKBACK_DAYS = 21
+
+
+def missed_items(pf: dict, min_kop: int, lookback: int = MISSED_LOOKBACK_DAYS) -> list[dict]:
+    """Пропущенные плановые платежи план-факта в обе стороны: не поступившие оплаты и не прошедшие списания.
+    Только не меньше min_kop по модулю и не раньше чем за lookback дней до последней операции, иначе первая проверка
+    прислала бы всю историю. key — устойчивый идентификатор платежа: по нему сообщение о нём уходит один раз."""
+    as_of = date.fromisoformat(pf["as_of"]) if pf.get("as_of") else None
+    out = []
+    for i in pf.get("items", []):
+        if i.get("status") != "missed":
+            continue
+        d, plan = date.fromisoformat(i["date"]), kop(i["plan"])
+        if abs(plan) < min_kop or (as_of and d < as_of - timedelta(days=lookback)):
+            continue
+        title = i.get("title") or "Плановый платёж"
+        key = hashlib.sha1(f"{d.isoformat()}|{title}|{plan}".encode()).hexdigest()[:16]
+        out.append({"date": d, "title": title, "plan": plan, "source": i.get("source", ""), "key": key})
+    out.sort(key=lambda x: (x["date"], x["plan"]))
+    return out
 
 
 def is_tax(title: str) -> bool:

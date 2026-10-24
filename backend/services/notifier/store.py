@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS retros(company_id TEXT NOT NULL, week_start TEXT NOT 
   note TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, PRIMARY KEY(company_id, week_start));
 CREATE TABLE IF NOT EXISTS kv(company_id TEXT NOT NULL, k TEXT NOT NULL, v TEXT NOT NULL, PRIMARY KEY(company_id, k));
 CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY AUTOINCREMENT, company_id TEXT NOT NULL, name TEXT NOT NULL,
-  kinds TEXT NOT NULL DEFAULT 'risk,week,month,gap', allow_excel INTEGER NOT NULL DEFAULT 1,
+  kinds TEXT NOT NULL DEFAULT 'risk,week,month,gap,missed', allow_excel INTEGER NOT NULL DEFAULT 1,
   default_role TEXT NOT NULL DEFAULT 'viewer', created_at REAL NOT NULL, UNIQUE(company_id, name));
 CREATE TABLE IF NOT EXISTS members(company_id TEXT NOT NULL, tg_user_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '',
   role TEXT NOT NULL, department_id INTEGER, created_at REAL NOT NULL, PRIMARY KEY(company_id, tg_user_id));
@@ -40,10 +40,10 @@ CREATE TABLE IF NOT EXISTS pending(chat_id INTEGER PRIMARY KEY, kind TEXT NOT NU
 DEFAULT_PREFS = {
     "tz": config.DEFAULT_TZ, "risk_enabled": 1, "risk_dow": 0, "risk_time": "09:00", "week_enabled": 1, "week_dow": 0,
     "week_time": "09:30", "month_enabled": 1, "month_day": 1, "month_time": "10:00", "gap_enabled": 1, "gap_days": 7,
-    "gap_threshold": 0.2, "ai_consent": 0,
+    "gap_threshold": 0.2, "ai_consent": 0, "missed_enabled": 1, "missed_min_kop": 1_000_000,
 }
 ROLES = ("viewer", "rater", "admin")  # по возрастанию прав: читает; оценивает цели; управляет настройками и командой
-KINDS = ("risk", "week", "month", "gap")
+KINDS = ("risk", "week", "month", "gap", "missed")
 STATUSES = ("open", "done", "partial", "failed", "skipped")
 
 
@@ -69,6 +69,12 @@ class Store:
                 self.conn.execute("ALTER TABLE prefs ADD COLUMN ai_consent INTEGER NOT NULL DEFAULT 0")
             if "department_id" not in [r[1] for r in self.conn.execute("PRAGMA table_info(chats)")]:
                 self.conn.execute("ALTER TABLE chats ADD COLUMN department_id INTEGER")
+            if "missed_enabled" not in [r[1] for r in self.conn.execute("PRAGMA table_info(prefs)")]:
+                # предупреждения о пропущенных платежах: включены по умолчанию, порог 10 000 ₽; отделы, получающие алерт
+                # разрыва, получают и их
+                self.conn.execute("ALTER TABLE prefs ADD COLUMN missed_enabled INTEGER NOT NULL DEFAULT 1")
+                self.conn.execute("ALTER TABLE prefs ADD COLUMN missed_min_kop INTEGER NOT NULL DEFAULT 1000000")
+                self.conn.execute("UPDATE departments SET kinds=kinds||',missed' WHERE ','||kinds||',' LIKE '%,gap,%'")
             self.conn.commit()
 
     def q(self, sql: str, args: tuple = ()) -> list[dict]:
