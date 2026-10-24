@@ -1,0 +1,332 @@
+"""Инструменты консультанта: функции, которые читают внутренние сервисы по HTTP (forecast, ledger, planfact).
+Суммы в ответах инструментов — в рублях (поля *_rub). Записи нет: propose_* только готовят предложение."""
+import datetime as dt
+import json
+import os
+import uuid
+from collections import defaultdict
+from typing import Any
+
+import httpx
+
+MAX_PROPOSALS = 3
+MAX_TX_PAGES = 10
+
+
+def today() -> dt.date:
+    return dt.date.today()
+
+
+def rub(kop: Any) -> int | None:
+    try:
+        return round(int(kop) / 100)
+    except (TypeError, ValueError):
+        return None
+
+
+class ToolError(Exception):
+    def __init__(self, code: str, message: str = ""):
+        super().__init__(message or code)
+        self.code = code
+
+
+class Services:
+    """HTTP-клиент к внутренним сервисам; адреса читаются из env при создании."""
+
+    def __init__(self, http: httpx.AsyncClient, cid: str, rid: str = "", actor: str = ""):
+        self.http, self.cid = http, cid
+        self.headers = {k: v for k, v in (("x-request-id", rid), ("x-actor", actor)) if v}
+        env = os.environ.get
+        self.urls = {
+            "forecast": env("FORECAST_URL", "http://127.0.0.1:3003").rstrip("/"),
+            "ledger": env("LEDGER_URL", "http://127.0.0.1:3002").rstrip("/"),
+            "planfact": env("PLANFACT_URL", "http://127.0.0.1:3004").rstrip("/"),
+        }
+
+    async def call(self, service: str, method: str, path: str, **kw) -> Any:
+        url = f"{self.urls[service]}/internal/v1/companies/{self.cid}/{path}"
+        try:
+            r = await self.http.request(method, url, headers=self.headers, **kw)
+        except httpx.HTTPError:
+            raise ToolError(f"{service}_unavailable", f"Сервис {service} недоступен") from None
+        if r.status_code >= 400:
+            try:
+                err = r.json()["error"]
+                raise ToolError(err.get("code", "upstream_error"), err.get("message", ""))
+            except (ValueError, KeyError, TypeError):
+                raise ToolError("upstream_error", f"{service} вернул HTTP {r.status_code}") from None
+        return r.json()
+
+    async def latest_forecast(self) -> dict:
+        return await self.call("forecast", "GET", "forecasts/latest")
+
+
+def _items(xs: list[dict]) -> list[dict]:
+    return [{"date": x.get("date"), "title": x.get("title"), "amount_rub": rub(x.get("amount")), "overdue": bool(x.get("overdue"))} for x in xs]
+
+
+def summarize_forecast(run: dict) -> dict:
+    r = run["result"]
+    risk = r["risk"]
+    days = r.get("days") or []
+    out: dict = {
+        "as_of": r.get("as_of"),
+        "horizon_days": r.get("horizon"),
+        "opening_balance_rub": rub(r.get("opening_balance")),
+        "data_stale": bool(run.get("stale")),
+        "risk": {
+            "level": risk.get("level"),
+            "shortfall_probability_pct": round((risk.get("shortfall_probability") or 0) * 100),
+            "first_break_date": risk.get("first_break_date"),
+            "possible_break_date": risk.get("possible_break_date"),
+            "typical_deficit_rub": rub(risk.get("deficit_given_break_median")),
+            "max_deficit_p90_rub": rub(risk.get("max_deficit_p90")),
+        },
+        "warnings": [
+            {"code": w.get("code"), "severity": w.get("severity"), "date": w.get("date"), "message": w.get("message"),
+             "reasons": _items((w.get("reasons") or [])[:5])}
+            for w in (risk.get("warnings") or [])[:6]
+        ],
+    }
+    if days:
+        low = min(days, key=lambda d: int(d["p50"]))
+        out["lowest_expected_balance"] = {"date": low["date"], "rub": rub(low["p50"])}
+        out["end_expected_balance_rub"] = rub(days[-1]["p50"])
+        out["weekly_balance_rub"] = [
+            {"date": d["date"], "p10": rub(d["p10"]), "p50": rub(d["p50"]), "p90": rub(d["p90"])} for d in days[::7][:14]
+        ]
+    return out
+
+
+TOOL_SPECS: list[dict] = [
+    {"type": "function", "function": {
+        "name": "get_forecast_risk",
+        "description": "Последний прогноз остатка и риск кассового разрыва: остаток на сегодня, самый низкий ожидаемый остаток, "
+                       "вероятность разрыва, ближайшая дата разрыва, типичная и максимальная (P90) нехватка, причины (платежи в эти дни).",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "get_upcoming_payments",
+        "description": "Ближайшие платежи и поступления (из прогноза) и просроченные платежи. amount_rub: минус — списание, плюс — поступление.",
+        "parameters": {"type": "object", "properties": {
+            "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Горизонт в днях, по умолчанию 14"}}}}},
+    {"type": "function", "function": {
+        "name": "get_plan_fact",
+        "description": "План-факт: сколько платежей оплачено в срок, с отклонением, пропущено; крупнейшие отклонения и пропуски.",
+        "parameters": {"type": "object", "properties": {
+            "days": {"type": "integer", "minimum": 14, "maximum": 365, "description": "Период в днях, по умолчанию 90"}}}}},
+    {"type": "function", "function": {
+        "name": "run_scenario",
+        "description": "Сценарий «что если» без сохранения решения: задержка оплат клиента, падение выручки, рост постоянных расходов, "
+                       "разовый расход или поступление. Возвращает риск до и после. Укажите хотя бы одно изменение.",
+        "parameters": {"type": "object", "properties": {
+            "delay_days": {"type": "integer", "minimum": 0, "maximum": 90, "description": "На сколько дней клиент задерживает оплаты"},
+            "delay_counterparty": {"type": "string", "description": "Клиент (по умолчанию самый крупный по поступлениям)"},
+            "revenue_drop_pct": {"type": "number", "minimum": 0, "maximum": 100},
+            "fixed_cost_growth_pct": {"type": "number", "minimum": 0, "maximum": 300},
+            "extra_expense_rub": {"type": "number", "exclusiveMinimum": 0}, "extra_expense_date": {"type": "string", "description": "YYYY-MM-DD"},
+            "extra_income_rub": {"type": "number", "exclusiveMinimum": 0}, "extra_income_date": {"type": "string", "description": "YYYY-MM-DD"}}}}},
+    {"type": "function", "function": {
+        "name": "get_transactions_by_category",
+        "description": "Операции из выписки по категориям за период: поступления, списания, число операций, крупнейшие контрагенты. "
+                       "Категории: revenue, other_income, suppliers, payroll, rent, taxes, loans, utilities, bank_fees, marketing, transfers, refunds, other_expense.",
+        "parameters": {"type": "object", "properties": {
+            "days": {"type": "integer", "minimum": 7, "maximum": 365, "description": "Период в днях от последней операции, по умолчанию 90"},
+            "category": {"type": "string"}, "direction": {"type": "string", "enum": ["in", "out"]}}}}},
+    {"type": "function", "function": {
+        "name": "propose_expected_payment",
+        "description": "Предложить пользователю добавить ожидаемый платёж или поступление. Ничего не записывает: пользователь увидит карточку и решит сам.",
+        "parameters": {"type": "object", "required": ["direction", "amount_rub", "date", "title"], "properties": {
+            "direction": {"type": "string", "enum": ["in", "out"], "description": "in — поступление, out — платёж"},
+            "amount_rub": {"type": "number", "exclusiveMinimum": 0},
+            "date": {"type": "string", "description": "YYYY-MM-DD"},
+            "title": {"type": "string", "maxLength": 200},
+            "counterparty": {"type": "string", "maxLength": 200}}}}},
+]
+
+
+def validate_payment(args: dict) -> dict:
+    """Проверка параметров предложения; возвращает params (amount_kop строкой). Те же правила, что в ledger и api."""
+    direction = args.get("direction")
+    if direction not in ("in", "out"):
+        raise ToolError("invalid_direction", "direction: in | out")
+    try:
+        amount = round(float(args.get("amount_rub")) * 100)
+    except (TypeError, ValueError):
+        raise ToolError("invalid_amount", "amount_rub должна быть положительным числом") from None
+    if not 0 < amount < 10**15:
+        raise ToolError("invalid_amount", "amount_rub должна быть положительным числом")
+    try:
+        d = dt.date.fromisoformat(str(args.get("date")))
+    except ValueError:
+        raise ToolError("invalid_date", "date в формате YYYY-MM-DD") from None
+    if not today() - dt.timedelta(days=120) <= d <= today() + dt.timedelta(days=730):
+        raise ToolError("invalid_date", "Дата вне допустимого диапазона")
+    title = str(args.get("title") or "").strip()
+    if not title or len(title) > 200:
+        raise ToolError("invalid_title", "Название от 1 до 200 символов")
+    cp = str(args.get("counterparty") or "").strip()[:200]
+    return {"direction": direction, "amount_kop": str(amount), "date": d.isoformat(), "title": title, "counterparty": cp}
+
+
+def suggestion_title(params: dict, lang: str = "ru") -> str:
+    sign = "+" if params["direction"] == "in" else "−"
+    amt = f"{round(int(params['amount_kop']) / 100):,}".replace(",", " ")
+    d = dt.date.fromisoformat(params["date"])
+    if lang == "en":
+        return f"Add expected {'income' if params['direction'] == 'in' else 'payment'}: {params['title']}, {sign}{amt} RUB, {d.isoformat()}"
+    return f"Добавить ожидаемый {'приход' if params['direction'] == 'in' else 'платёж'}: {params['title']}, {sign}{amt} ₽, {d.strftime('%d.%m.%Y')}"
+
+
+class Toolbox:
+    def __init__(self, svc: Services, lang: str = "ru"):
+        self.svc, self.lang = svc, lang
+        self.proposals: list[dict] = []
+        self.counterparties: set[str] = set()
+        self.used: list[str] = []
+
+    def _remember(self, *names: Any) -> None:
+        for n in names:
+            if isinstance(n, str) and len(n.strip()) >= 3:
+                self.counterparties.add(n.strip())
+
+    async def call(self, name: str, args: dict) -> dict:
+        """Результат — JSON-словарь; ошибка сервиса возвращается модели как {"error": ...}, а не бросается."""
+        self.used.append(name)
+        fn = getattr(self, f"_t_{name}", None)
+        if fn is None or name not in {s["function"]["name"] for s in TOOL_SPECS}:
+            return {"error": "unknown_tool"}
+        try:
+            return await fn(**{k: v for k, v in (args or {}).items() if v is not None}) if isinstance(args, dict) else {"error": "invalid_arguments"}
+        except ToolError as e:
+            return {"error": e.code, "message": str(e)}
+        except TypeError:
+            return {"error": "invalid_arguments"}
+
+    async def _t_get_forecast_risk(self) -> dict:
+        out = summarize_forecast(await self.svc.latest_forecast())
+        return out
+
+    async def _t_get_upcoming_payments(self, days: int = 14) -> dict:
+        run = await self.svc.latest_forecast()
+        r = run["result"]
+        days = max(1, min(int(days), 90))
+        as_of = dt.date.fromisoformat(r["as_of"])
+        end = (as_of + dt.timedelta(days=days)).isoformat()
+        planned = r.get("planned") or []
+        upcoming = sorted((p for p in planned if not p.get("overdue") and p["date"] <= end), key=lambda p: p["date"])
+        overdue = [p for p in planned if p.get("overdue")]
+        return {"as_of": r["as_of"], "until": end, "upcoming": _items(upcoming[:20]), "overdue": _items(overdue[:20]),
+                "overdue_total_rub": sum(rub(p["amount"]) or 0 for p in overdue)}
+
+    async def _t_get_plan_fact(self, days: int = 90) -> dict:
+        pf = await self.svc.call("planfact", "GET", "plan-fact", params={"days": max(14, min(int(days), 365))})
+        items = pf.get("items") or []
+        counts: dict[str, int] = defaultdict(int)
+        for i in items:
+            counts[i.get("status", "")] += 1
+
+        def row(i):
+            return {"date": i.get("date"), "title": i.get("title"), "plan_rub": rub(i.get("plan")), "fact_rub": rub(i.get("fact")),
+                    "diff_rub": rub(i.get("diff")), "status": i.get("status")}
+
+        missed = [row(i) for i in items if i.get("status") == "missed"][-8:]
+        dev = sorted((i for i in items if i.get("status") == "deviation" and i.get("diff") is not None), key=lambda i: -abs(int(i["diff"])))[:8]
+        weeks = [{"week_start": w.get("week_start"), **{k: rub(w.get(k)) for k in ("plan_in", "plan_out", "fact_in", "fact_out")}} for w in (pf.get("weeks") or [])[-6:]]
+        return {"as_of": pf.get("as_of"), "days": pf.get("days"), "counts": dict(counts), "missed": missed,
+                "largest_deviations": [row(i) for i in dev], "recent_weeks": weeks, "note": pf.get("note")}
+
+    async def _t_run_scenario(self, **a) -> dict:
+        sc: dict[str, Any] = {}
+        for k, lo, hi, conv in (("delay_days", 0, 90, int), ("revenue_drop_pct", 0, 100, float), ("fixed_cost_growth_pct", 0, 300, float)):
+            if k in a:
+                try:
+                    v = conv(a[k])
+                except (TypeError, ValueError):
+                    raise ToolError("invalid_arguments", k) from None
+                if not lo <= v <= hi:
+                    raise ToolError("invalid_arguments", f"{k} вне диапазона {lo}..{hi}")
+                sc[k] = v
+        if a.get("delay_counterparty"):
+            sc["delay_counterparty"] = str(a["delay_counterparty"])[:200]
+        for key, kop_key, date_key in (("extra_expense", "extra_expense_kop", "extra_expense_date"), ("extra_income", "extra_income_kop", "extra_income_date")):
+            if f"{key}_rub" in a:
+                try:
+                    kop = round(float(a[f"{key}_rub"]) * 100)
+                    d = dt.date.fromisoformat(str(a[date_key]))
+                except (TypeError, ValueError, KeyError):
+                    raise ToolError("invalid_arguments", f"{key}_rub и {date_key}") from None
+                if not 0 < kop < 10**15:
+                    raise ToolError("invalid_arguments", f"{key}_rub")
+                sc[kop_key], sc[date_key] = kop, d.isoformat()
+        if not any(sc.get(k) for k in ("delay_days", "revenue_drop_pct", "fixed_cost_growth_pct", "extra_expense_kop", "extra_income_kop")):
+            raise ToolError("empty_scenario", "Задайте хотя бы одно изменение")
+        try:
+            horizon = int((await self.svc.latest_forecast())["result"]["horizon"])
+        except (ToolError, KeyError, TypeError, ValueError):
+            horizon = 30
+        horizon = max(7, min(horizon, 90))
+        res = await self.svc.call("forecast", "POST", "scenarios", json={"horizon_days": horizon, "scenario": sc})
+        base, scen = summarize_forecast(res["base"]), summarize_forecast(res["scenario"])
+        return {"scenario": sc, "horizon_days": horizon, "base": base["risk"] | {"lowest_expected_balance": base.get("lowest_expected_balance")},
+                "with_scenario": scen["risk"] | {"lowest_expected_balance": scen.get("lowest_expected_balance")},
+                "delta": {"shortfall_probability_pct_points": round((res.get("delta") or {}).get("shortfall_probability", 0) * 100),
+                          "max_deficit_p90_rub_change": rub((res.get("delta") or {}).get("max_deficit_p90"))}}
+
+    async def _t_get_transactions_by_category(self, days: int = 90, category: str = "", direction: str = "") -> dict:
+        days = max(7, min(int(days), 365))
+        params: dict[str, Any] = {"limit": 200, "sort": "date", "order": "desc"}
+        if category:
+            params["category"] = str(category)
+        if direction in ("in", "out"):
+            params["direction"] = direction
+        rows: list[dict] = []
+        last: dt.date | None = None
+        done = False
+        for page in range(MAX_TX_PAGES):
+            data = await self.svc.call("ledger", "GET", "transactions", params={**params, "offset": page * 200})
+            items = data.get("items") or []
+            if not items:
+                break
+            if last is None:
+                last = dt.date.fromisoformat(items[0]["date"])
+            since = (last - dt.timedelta(days=days)).isoformat()
+            for t in items:
+                if t["date"] < since:
+                    done = True
+                    break
+                rows.append(t)
+            if done or len(items) < 200:
+                break
+        if last is None:
+            return {"days": days, "categories": [], "note": "Операций нет"}
+        agg: dict[str, dict] = {}
+        for t in rows:
+            amt = int(t["amount_kop"])
+            c = agg.setdefault(t["category"], {"category": t["category"], "inflow_kop": 0, "outflow_kop": 0, "count": 0, "cp": defaultdict(int)})
+            c["inflow_kop" if amt > 0 else "outflow_kop"] += amt
+            c["count"] += 1
+            c["cp"][t.get("counterparty") or ""] += abs(amt)
+        cats = []
+        for c in sorted(agg.values(), key=lambda c: -(c["inflow_kop"] - c["outflow_kop"])):
+            top = sorted(c["cp"].items(), key=lambda kv: -kv[1])[:3]
+            self._remember(*[n for n, _ in top])
+            cats.append({"category": c["category"], "inflow_rub": rub(c["inflow_kop"]), "outflow_rub": rub(c["outflow_kop"]),
+                         "count": c["count"], "top_counterparties": [{"name": n, "turnover_rub": rub(v)} for n, v in top if n]})
+        return {"period_to": last.isoformat(), "days": days, "operations": len(rows), "categories": cats}
+
+    async def _t_propose_expected_payment(self, **a) -> dict:
+        if len(self.proposals) >= MAX_PROPOSALS:
+            raise ToolError("too_many_proposals", f"Не больше {MAX_PROPOSALS} предложений за ответ")
+        params = validate_payment(a)
+        for p in self.proposals:
+            if p["params"] == params:
+                return {"status": "already_proposed"}
+        self.proposals.append({"id": uuid.uuid4().hex[:12], "type": "add_expected_payment", "params": params,
+                               "title": suggestion_title(params, self.lang)})
+        self._remember(params["counterparty"])
+        return {"status": "proposed", "note": "Пользователь увидит карточку и решит сам; в план ничего не записано."}
+
+
+def dumps(data: Any, limit: int = 8000) -> str:
+    s = json.dumps(data, ensure_ascii=False, default=str)
+    return s if len(s) <= limit else s[:limit] + '…[обрезано]'
