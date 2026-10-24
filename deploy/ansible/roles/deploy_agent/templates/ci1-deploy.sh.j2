@@ -1,0 +1,42 @@
+#!/bin/bash
+# Pull-based deploy: fetch the release manifest of the channel, verify its signature,
+# pin every image by digest, restart what changed, roll back on a failed health check.
+set -euo pipefail
+CHANNEL="{{ ci1_channel }}"
+REPO="swimshadow/CenterInvestDGTUHack2026"
+STATE="$HOME/.local/state/ci1"
+UNITS="$HOME/.config/containers/systemd"
+IDENTITY="https://github.com/${REPO}/.github/workflows/promote.yml@refs/heads/stable"
+mkdir -p "$STATE"
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+
+gh release download --repo "$REPO" --pattern "release-manifest.json*" --dir "$work" \
+  "$(gh release list --repo "$REPO" --limit 20 --json tagName,name --jq "map(select(.name | contains(\"$CHANNEL\")))[0].tagName")"
+cosign verify-blob --bundle "$work/release-manifest.json.bundle" \
+  --certificate-identity "$IDENTITY" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$work/release-manifest.json"
+
+changed=()
+while read -r name digest; do
+  unit="$UNITS/ci1-${name}.container"
+  [ -f "$unit" ] || continue
+  current=$(grep -oP '^Image=.*@\K.*' "$unit" || true)
+  [ "$current" = "$digest" ] && continue
+  echo "$name $current" >> "$STATE/previous"
+  sed -i "s|^Image=.*|Image={{ ci1_registry }}/ci1-${name}@${digest}|" "$unit"
+  changed+=("$name")
+done < <(jq -r '.images[] | "\(.name) \(.digest)"' "$work/release-manifest.json")
+
+[ ${#changed[@]} -eq 0 ] && exit 0
+systemctl --user daemon-reload
+for name in "${changed[@]}"; do
+  systemctl --user restart "ci1-${name}.service"
+  if ! timeout 60 bash -c "until podman healthcheck run ${name} >/dev/null 2>&1; do sleep 3; done"; then
+    prev=$(grep "^${name} " "$STATE/previous" | tail -1 | cut -d' ' -f2)
+    if [ -n "$prev" ]; then
+      sed -i "s|^Image=.*|Image={{ ci1_registry }}/ci1-${name}@${prev}|" "$UNITS/ci1-${name}.container"
+      systemctl --user daemon-reload && systemctl --user restart "ci1-${name}.service"
+    fi
+    logger -t ci1-deploy "rollback ${name} to ${prev:-none}"
+  fi
+done

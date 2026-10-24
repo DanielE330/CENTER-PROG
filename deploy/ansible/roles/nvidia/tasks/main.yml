@@ -1,0 +1,15 @@
+---
+- name: The driver must already be installed (it is not managed here)
+  ansible.builtin.command:
+    cmd: nvidia-smi -L
+  changed_when: false
+
+- name: NVIDIA container toolkit
+  ansible.builtin.apt:
+    name: nvidia-container-toolkit
+    state: present
+
+- name: CDI spec so rootless Podman can attach the GPU (AddDevice=nvidia.com/gpu=all)
+  ansible.builtin.command:
+    cmd: nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+    creates: /etc/cdi/nvidia.yaml
