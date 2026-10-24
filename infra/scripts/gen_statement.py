@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Генератор синтетической выписки (CSV, ';') для разработки и демо.
 
-  python scripts/gen_statement.py --end 2026-10-22 --seed 7 > data/demo_statement.csv
+  python infra/scripts/gen_statement.py --end 2026-10-22 --seed 7 > data/demo_statement.csv
 """
 import argparse
 import random

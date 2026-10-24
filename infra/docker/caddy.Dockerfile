@@ -8,6 +8,6 @@ COPY web/ ./
 RUN npm run build
 
 FROM caddy:2-alpine
-COPY docker/Caddyfile /etc/caddy/Caddyfile
+COPY infra/docker/Caddyfile /etc/caddy/Caddyfile
 COPY --from=web /web/dist /srv
 EXPOSE 3000

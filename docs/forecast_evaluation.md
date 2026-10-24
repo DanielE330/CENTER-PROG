@@ -1,6 +1,6 @@
 # Оценка прогнозной модели (rolling-origin backtest)
 
-Воспроизведение: `cd crates/api && cargo run --release --bin eval -- [--limit N] [--step 14] [--compare] [--csv] [--debug C001] [--perf]`
+Воспроизведение: `cd backend/api && cargo run --release --bin eval -- [--limit N] [--step 14] [--compare] [--csv] [--debug C001] [--perf]`
 (запускать из корня репозитория; CSV по компаниям пишется в `data/eval/`). Датасет: 150 компаний, 142 имеют историю >= 150 дней
 для backtest; origin каждые 14 дней, первая точка через 120 дней истории, 200 траекторий, фиксированный seed.
 

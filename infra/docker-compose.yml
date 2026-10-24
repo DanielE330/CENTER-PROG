@@ -1,3 +1,4 @@
+# Запуск: make -C infra up (контекст сборки — корень репозитория)
 x-hardening: &hardening
   read_only: true
   tmpfs: [/tmp]
@@ -14,7 +15,7 @@ x-pyhealth: &pyhealth
 services:
   auth:
     <<: *hardening
-    build: {context: ., dockerfile: docker/python.Dockerfile, target: auth}
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: auth}
     environment:
       AUTH_DB: /data/auth.db
       DEMO_SEED: ${DEMO_SEED:-1}
@@ -26,15 +27,24 @@ services:
 
   parser:
     <<: *hardening
-    build: {context: ., dockerfile: docker/python.Dockerfile, target: parser}
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: parser}
     networks: [internal]
     healthcheck:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8002/live', timeout=2)"]
 
+  gov:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: gov}
+    # единственный сервис с выходом наружу: ходит на cbr.ru, nalog.gov.ru, xmlcalendar.ru
+    networks: [internal, edge]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8003/live', timeout=2)"]
+
   web-api:
     <<: *hardening
-    build: {context: ., dockerfile: docker/api.Dockerfile}
+    build: {context: .., dockerfile: infra/docker/api.Dockerfile}
     # порты не публикуются: наружу смотрит только gateway; internal API :3100 доступен лишь внутри сети
     environment:
       PUBLIC_ADDR: 0.0.0.0:3000
@@ -58,7 +68,7 @@ services:
 
   gateway:
     <<: *hardening
-    build: {context: ., dockerfile: docker/caddy.Dockerfile}
+    build: {context: .., dockerfile: infra/docker/caddy.Dockerfile}
     ports: ["${GATEWAY_PORT:-3000}:3000"]
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:3000}

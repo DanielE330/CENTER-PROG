@@ -36,18 +36,18 @@
 ## 3. Как устроен код
 
 ```
-crates/api/        Rust (Axum, rusqlite): публичный API :3000 + внутренний :3100, финансовое ядро
+backend/api/        Rust (Axum, rusqlite): публичный API :3000 + внутренний :3100, финансовое ядро
   src/main.rs        маршруты, middleware (CSRF по Origin, заголовки, request id, лог без тел)
   src/http.rs        обработчики, авторизация, импорт, события, прогнозы, сценарии, план-факт
   src/forecast.rs    регулярности, остаточный поток, траектории, риск, backtest
   src/db.rs          схема SQLite
   src/bin/eval.rs    оценка на всём датасете (cargo run --release --bin eval)
-services/auth/     Python FastAPI :8001 — пользователи, сессии (scrypt, sha256 токена, lockout)
-services/parser/   Python FastAPI :8002 — разбор CSV/XLSX, категоризация
-services/tests/    pytest
+backend/services/auth/     Python FastAPI :8001 — пользователи, сессии (scrypt, sha256 токена, lockout)
+backend/services/parser/   Python FastAPI :8002 — разбор CSV/XLSX, категоризация
+backend/services/tests/    pytest
 web/               React + TypeScript + Vite, ECharts, Inter (локально)
-docker/, docker-compose.yml, Makefile   контейнеры и Caddy gateway (не проверялись: Docker не установлен на машине разработки)
-scripts/dev.sh     запуск без Docker; scripts/gen_statement.py — синтетическая выписка
+infra/ (docker/, docker-compose.yml, Makefile, scripts/)   контейнеры и Caddy gateway (не проверялись: Docker не установлен на машине разработки)
+infra/scripts/dev.sh     запуск без Docker; infra/scripts/gen_statement.py — синтетическая выписка
 docs/              документы
 data/              в .gitignore: dataset/ (из data/raw/*.zip), run/ (БД и логи локального запуска), eval/
 ```
@@ -65,21 +65,21 @@ data/              в .gitignore: dataset/ (из data/raw/*.zip), run/ (БД и 
 
 Без Docker (проверено):
 ```
-scripts/dev.sh        # сборка web и api, запуск auth, parser, api; http://localhost:3000
-scripts/dev.sh stop
+infra/scripts/dev.sh        # сборка web и api, запуск auth, parser, api; http://localhost:3000
+infra/scripts/dev.sh stop
 ```
 Демо-логин: `demo@example.com` / `demo12345` (`DEMO_SEED=1`). Состояние локального запуска — `data/run/` (БД, логи, pid).
 Не запускайте `pkill -f` с текстом, который есть в вашей же команде: он убивает собственную оболочку; используйте `pkill -x api` и `pkill -x uvicorn`.
 
-Docker (написано, но не собиралось): `make up` → http://localhost:3000, наружу смотрит только Caddy.
+Docker (написано, но не собиралось): `make -C infra up` → http://localhost:3000, наружу смотрит только Caddy.
 
 Тесты:
 ```
-cd crates/api && RUSTUP_TOOLCHAIN=stable cargo test       # 13 тестов
-cd services && uv run pytest -q                           # 63 теста
+cd backend/api && RUSTUP_TOOLCHAIN=stable cargo test       # 13 тестов
+cd backend/services && uv run pytest -q                           # 63 теста
 cd web && npx tsc --noEmit && npm run build
 ```
-Оценка на датасете: `cd crates/api && cargo run --release --bin eval -- --compare --csv` (запускать из корня репозитория, ~2 с на все 150 компаний).
+Оценка на датасете: `cd backend/api && cargo run --release --bin eval -- --compare --csv` (запускать из корня репозитория, ~2 с на все 150 компаний).
 
 Переменные окружения API: `PUBLIC_ADDR`, `INTERNAL_ADDR`, `AUTH_URL`, `PARSER_URL`, `DB_PATH`, `WEB_DIR`, `COOKIE_SECURE`. Для auth: `AUTH_DB`, `DEMO_SEED`.
 
@@ -171,7 +171,7 @@ POST /…/scenarios   GET /…/backtest   GET /…/plan-fact?days=
 2. Выявление разрывов — страница «Прогноз», предупреждения с причинами, backtest тревог.
 3. Дополнительные источники — ручные события, налоговый календарь, счета/договоры как источники, импорт; слабое место — внешние интеграции.
 4. Техническое качество — тесты (13 + 63), граничные случаи (пропуски, овердрафт, короткая история, дубли), безопасность.
-5. Демонстрация — демо-компания (`scripts/gen_statement.py`) и реальные выписки из датасета (C001, C004 с пропусками и овердрафтом).
+5. Демонстрация — демо-компания (`infra/scripts/gen_statement.py`) и реальные выписки из датасета (C001, C004 с пропусками и овердрафтом).
 
 ## 13. Рабочие заметки
 

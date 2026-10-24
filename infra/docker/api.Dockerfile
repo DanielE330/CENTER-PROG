@@ -9,11 +9,11 @@ RUN npm run build
 
 FROM rust:1-bookworm AS build
 WORKDIR /src
-COPY crates/api/rust-toolchain.toml crates/api/Cargo.toml crates/api/Cargo.lock ./
+COPY backend/api/rust-toolchain.toml backend/api/Cargo.toml backend/api/Cargo.lock ./
 # dependency cache layer
 RUN mkdir src && echo 'fn main() {}' > src/main.rs \
     && cargo build --release --locked && rm -rf src target/release/api target/release/deps/api-*
-COPY crates/api/src ./src
+COPY backend/api/src ./src
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim

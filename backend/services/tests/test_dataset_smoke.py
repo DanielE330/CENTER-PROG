@@ -8,7 +8,7 @@ import pytest
 
 from parser.statement import parse_statement
 
-DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "dataset", "statements")
+DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "dataset", "statements")
 FILES = sorted(glob.glob(os.path.join(DIR, "*.csv")))
 pytestmark = pytest.mark.skipif(not FILES, reason="data/dataset отсутствует")
 
