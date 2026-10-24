@@ -827,3 +827,47 @@ def test_mail_is_limited_to_50_per_hour_per_company(client, smtp):
     r = c.post("/internal/v1/mail/invite", json=body).json()
     assert r["sent"] is False and r["limited"] is True and len(smtp.sent) == 50
     assert c.post("/internal/v1/mail/invite", json={**body, "company_id": "other"}).json()["sent"] is True   # лимит на компанию
+
+
+# ---------- маскирование перед облаком ----------
+def test_masker_hides_names_inn_accounts_phones_and_restores_names():
+    from notifier.mask import Masker
+    m = Masker()
+    text = ("Оплата от ООО «Ромашка» 7707083893, счёт 40702810900000000001, тел. +7 (495) 123-45-67, ivan@firma.ru; "
+            "ИП Иванов И.И. 770708389312 и снова ООО «Ромашка»; ПАО Банк")
+    out = m.mask(text)
+    for secret in ("Ромашка", "7707083893", "40702810900000000001", "123-45-67", "ivan@firma.ru", "Иванов", "770708389312"):
+        assert secret not in out, secret
+    assert out.count("Контрагент A") == 2                    # одно и то же название — один псевдоним
+    assert "[ИНН]" in out and "[счёт]" in out and "[телефон]" in out and "[email]" in out
+    restored = m.unmask("Позвоните Контрагент A: просрочка. Контрагент B тоже. Контрагент Z неизвестен")
+    assert restored.startswith("Позвоните ООО «Ромашка»: просрочка.") and "ИП Иванов" in restored and "Контрагент Z неизвестен" in restored
+
+
+def test_masker_walks_nested_data_but_keeps_numbers_and_keys():
+    from notifier.mask import Masker
+    m = Masker()
+    obj = {"upcoming": [{"title": "Оплата ООО Ромашка", "rub": 300000, "date": "2026-10-06"}], "note": None}
+    out = m.mask_obj(obj)
+    assert out["upcoming"][0]["rub"] == 300000 and out["upcoming"][0]["date"] == "2026-10-06" and "Ромашка" not in str(out)
+    assert m.unmask_obj(out)["upcoming"][0]["title"] == "Оплата ООО Ромашка"
+
+
+def test_hermes_never_sees_counterparty_names_and_user_gets_them_back(core, monkeypatch):
+    store, jobs, bot, w = core
+    reply = json.dumps({"summary": "Контрагент A просрочил оплату", "priorities": ["Позвонить Контрагент A"], "actions": [], "consulting": ""}, ensure_ascii=False)
+    calls = with_hermes(core, monkeypatch, reply=reply)
+    w.forecast["result"]["planned"][-1]["title"] = "Оплата от ООО «Ромашка» ИНН 7707083893"
+    run(jobs.send_risk(CID))
+    sent = json.dumps(calls[0], ensure_ascii=False)
+    assert "Ромашка" not in sent and "7707083893" not in sent and "Контрагент A" in sent
+    shown = w.texts()[-1]
+    assert "ООО «Ромашка»" in shown and "Контрагент A" not in shown     # пользователь видит настоящее название
+
+
+def test_question_is_masked_too(core, monkeypatch):
+    store, jobs, bot, w = core
+    calls = with_hermes(core, monkeypatch, reply="Позвоните: Контрагент A, Контрагент B, Контрагент C.")  # какие именно псевдонимы выданы, зависит от порядка в данных
+    run(bot.handle({"update_id": 1, "message": {"chat": {"id": 111, "type": "private"}, "from": {"id": 5}, "text": "/ask когда заплатит ООО «Ромашка» (ИНН 7707083893)?"}}))
+    assert "Ромашка" not in json.dumps(calls[0], ensure_ascii=False) and "7707083893" not in json.dumps(calls[0])
+    assert "ООО «Ромашка»" in w.texts(111)[-1]

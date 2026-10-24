@@ -1,0 +1,80 @@
+# Таксономия и правила: из проекта «ЦИ1» (ветка gleb, swimshadow), адаптировано под парсер.
+# System taxonomy. Groups are fixed (the forecast relies on them); tenants get
+# one category per subcategory to start with and can rename, merge or add their own.
+# Rules are checked top to bottom; the first match wins. `purpose` and `name`
+# are case-insensitive regular expressions; `direction` is inflow/outflow.
+
+groups:
+  revenue: Выручка
+  purchases: Закупки и услуги
+  payroll: Зарплата
+  taxes: Налоги и взносы
+  rent_utilities: Аренда и коммуналка
+  loans: Кредиты и лизинг
+  own_funds: Свои средства
+  refunds: Возвраты
+  bank_fees: Комиссии банка
+  other: Прочее
+
+subcategories:
+  acquiring: {group: revenue, name: Эквайринг}
+  sbp: {group: revenue, name: Оплаты по СБП}
+  cash_deposit: {group: revenue, name: Наличная выручка}
+  marketplace_payout: {group: revenue, name: Выплаты маркетплейсов}
+  customer_payment: {group: revenue, name: Оплаты клиентов}
+  supplier_payment: {group: purchases, name: Поставщики}
+  advertising: {group: purchases, name: Реклама}
+  software: {group: purchases, name: Программы и подписки}
+  services: {group: purchases, name: Услуги подрядчиков}
+  fuel_transport: {group: purchases, name: Топливо и дороги}
+  salary: {group: payroll, name: Зарплата сотрудникам}
+  contractors_gph: {group: payroll, name: Договоры ГПХ}
+  enp: {group: taxes, name: Единый налоговый платёж}
+  rent: {group: rent_utilities, name: Аренда}
+  utilities: {group: rent_utilities, name: Коммунальные услуги и связь}
+  loan_payment: {group: loans, name: Платежи по кредитам}
+  leasing: {group: loans, name: Лизинг}
+  loan_received: {group: loans, name: Получение кредита}
+  own_transfer_in: {group: own_funds, name: Перевод своих средств на счёт}
+  own_transfer_out: {group: own_funds, name: Перевод своих средств со счёта}
+  founder_loan_in: {group: own_funds, name: Заём учредителя}
+  founder_loan_return: {group: own_funds, name: Возврат займа учредителю}
+  owner_withdrawal: {group: own_funds, name: Вывод владельцу и дивиденды}
+  refund_in: {group: refunds, name: Возвраты нам}
+  refund_out: {group: refunds, name: Возвраты от нас}
+  bank_fee: {group: bank_fees, name: Комиссии банка}
+  other_in: {group: other, name: Прочие поступления}
+  other_out: {group: other, name: Прочие списания}
+
+rules:
+  - {sub: acquiring, purpose: "эквайр|мерчант"}
+  - {sub: sbp, purpose: "\\bсбп\\b|qr-код"}
+  - {sub: cash_deposit, purpose: "взнос наличных|инкассир|торговая выручка"}
+  - {sub: marketplace_payout, purpose: "договору оферты.*за период|маркетплейс|wildberries|ozon", direction: inflow}
+  - {sub: bank_fee, purpose: "комиссия за|плата за обслуживание|ведение счета", direction: outflow}
+  - {sub: enp, purpose: "\\bенп\\b|единый налог|единого налог"}
+  - {sub: enp, name: "казначейство|фнс", direction: outflow}
+  - {sub: salary, purpose: "заработн|зарплат"}
+  - {sub: contractors_gph, purpose: "договору гпх|по договору гпх"}
+  - {sub: own_transfer_in, purpose: "собственных средств с|собственных средств на расчетный счет", direction: inflow}
+  - {sub: founder_loan_in, purpose: "предоставление .*займа|заем учредител|заём учредител|взнос в уставный капитал", direction: inflow}
+  - {sub: own_transfer_in, purpose: "пополнение счета собственными средствами", direction: inflow}
+  - {sub: founder_loan_return, purpose: "возврат .*займа учредител", direction: outflow}
+  - {sub: own_transfer_out, purpose: "перевод собственных средств на расчетный счет|собственных средств на счет в", direction: outflow}
+  - {sub: owner_withdrawal, purpose: "личн(ый|ую) (счет|карту)|дивиденд|собственных средств ип на счет физ", direction: outflow}
+  - {sub: loan_received, purpose: "выдача кредита|предоставление кредита", direction: inflow}
+  - {sub: loan_payment, purpose: "погашение .*кредит|проценты по кредит|кредитному договору|процентов за пользование овердрафт|процентов по договору кредитн"}
+  - {sub: leasing, purpose: "лизинг"}
+  - {sub: rent, purpose: "аренд"}
+  - {sub: utilities, purpose: "электроэнерг|водоснабж|водоотвед|теплоснаб|тко|вывоз отходов|связи|интернет"}
+  - {sub: utilities, name: "энергосбыт|водоканал|телеком|оператор тко"}
+  - {sub: advertising, purpose: "реклам"}
+  - {sub: software, purpose: "лицензи|подписк|использования по|программн"}
+  - {sub: fuel_transport, purpose: "топлив|бензин|дизел|провоз|платон"}
+  - {sub: refund_in, purpose: "возврат", direction: inflow}
+  - {sub: refund_out, purpose: "возврат", direction: outflow}
+  - {sub: services, purpose: "бухгалтерск|уборк|клининг|охран|услуг", direction: outflow}
+  - {sub: other_in, purpose: "страхового возмещения|субсиди|грант", direction: inflow}
+  - {sub: other_out, purpose: "исполнительному листу|штраф|пени", direction: outflow}
+  - {sub: customer_payment, purpose: "оплата|предоплата|расчет по договору|по счету|упд|агентскому договору|авансовый платеж|аванс по договору", direction: inflow}
+  - {sub: supplier_payment, purpose: "оплата|предоплата|по счету|упд|поставк|подряд|авансовый платеж", direction: outflow}

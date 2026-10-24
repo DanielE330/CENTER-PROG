@@ -11,10 +11,13 @@ dependencies = [
   "httpx>=0.27",
   "matplotlib>=3.9",
   "tzdata>=2024.1",
+  "pyyaml>=6",
 ]
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx>=0.27"]
+# ML-лаборатория (бэктест, challenger-модели): в образы сервисов не попадает, ставится `uv sync --group ml`
+ml = ["numpy>=2", "pandas>=2.2", "scikit-learn>=1.5", "statsforecast>=2.0"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

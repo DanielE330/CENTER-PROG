@@ -1249,6 +1249,14 @@ pub struct Backtest {
     pub alarm_tp: usize,
     pub alarm_fp: usize,
     pub alarm_fn: usize,
+    /// То же, но разрыв размечен с учётом «спасательных» поступлений: переводов собственных денег, без которых остаток ушёл бы в минус.
+    /// Владелец закрывает такие дыры сам, и в остатке разрыва не видно, но предпринимателю о нём надо было предупредить.
+    pub actual_gap_windows_adj: usize,
+    pub alarm_tp_adj: usize,
+    pub alarm_fp_adj: usize,
+    pub alarm_fn_adj: usize,
+    pub alarm_precision_adj: Option<f64>,
+    pub alarm_recall_adj: Option<f64>,
     /// (прогнозная вероятность разрыва, был ли разрыв) по каждой контрольной дате; для калибровки
     #[serde(skip)]
     #[allow(dead_code)]
@@ -1269,6 +1277,29 @@ pub struct SeriesPoint {
     pub actual: i64,
 }
 
+/// Поступления собственных денег (категория `transfers`), которые не дали остатку уйти в минус: остаток дня без них < 0.
+/// Возвращает сумму таких поступлений по датам. В данных организаторов это 408 из 417 переводов от владельца.
+pub fn rescue_inflows(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>) -> BTreeMap<NaiveDate, i64> {
+    let mut out: BTreeMap<NaiveDate, i64> = BTreeMap::new();
+    for t in txs {
+        if t.category == "transfers" && t.amount > 0 && balances.get(&t.date).is_some_and(|b| *b - t.amount < 0) {
+            *out.entry(t.date).or_insert(0) += t.amount;
+        }
+    }
+    out
+}
+
+/// Был ли разрыв в окне `origin+1..=origin+horizon`, если вычесть спасательные поступления после `origin`.
+pub fn adjusted_gap(balances: &BTreeMap<NaiveDate, i64>, rescue: &BTreeMap<NaiveDate, i64>, origin: NaiveDate, horizon: i64) -> bool {
+    (1..=horizon).any(|k| {
+        let day = origin + Duration::days(k);
+        balances.range(..=day).next_back().is_some_and(|(_, b)| {
+            let rescued: i64 = rescue.range((origin + Duration::days(1))..=day).map(|x| *x.1).sum();
+            *b - rescued < 0
+        })
+    })
+}
+
 /// Rolling-origin: на каждой точке модель видит только прошлое.
 pub fn backtest(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days: i64) -> Option<Backtest> {
     backtest_with(txs, balances, step_days, &Params { horizon: 30, seed: 1, n_paths: 200, ..Default::default() })
@@ -1283,6 +1314,8 @@ pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days:
     let mut origin = first + Duration::days(min_hist);
     let mut errs: HashMap<usize, Vec<(i64, i64, i64, bool)>> = HashMap::new();
     let (mut tp, mut fp, mut fn_, mut gaps, mut n_orig) = (0, 0, 0, 0, 0);
+    let (mut tp_a, mut fp_a, mut fn_a, mut gaps_a) = (0, 0, 0, 0);
+    let rescue = rescue_inflows(txs, balances);
     let mut series_14: Vec<SeriesPoint> = vec![];
     let mut risk_samples: Vec<(f64, bool)> = vec![];
     let mut risk_feats: Vec<(usize, Vec<f64>)> = vec![];
@@ -1328,6 +1361,16 @@ pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days:
                 (false, true) => fn_ += 1,
                 _ => {}
             }
+            let actual_adj = adjusted_gap(balances, &rescue, origin, 30);
+            if actual_adj {
+                gaps_a += 1;
+            }
+            match (alarm, actual_adj) {
+                (true, true) => tp_a += 1,
+                (true, false) => fp_a += 1,
+                (false, true) => fn_a += 1,
+                _ => {}
+            }
         }
         origin += Duration::days(step_days);
     }
@@ -1361,6 +1404,12 @@ pub fn backtest_with(txs: &[Tx], balances: &BTreeMap<NaiveDate, i64>, step_days:
         alarm_tp: tp,
         alarm_fp: fp,
         alarm_fn: fn_,
+        actual_gap_windows_adj: gaps_a,
+        alarm_tp_adj: tp_a,
+        alarm_fp_adj: fp_a,
+        alarm_fn_adj: fn_a,
+        alarm_precision_adj: if tp_a + fp_a > 0 { Some(tp_a as f64 / (tp_a + fp_a) as f64) } else { None },
+        alarm_recall_adj: if tp_a + fn_a > 0 { Some(tp_a as f64 / (tp_a + fn_a) as f64) } else { None },
         risk_samples,
         risk_feats,
         series_14,
@@ -1403,6 +1452,28 @@ mod tests {
             b.insert(t.date, bal);
         }
         (v, b)
+    }
+
+    #[test]
+    fn rescue_inflow_hides_a_gap_that_adjusted_labels_reveal() {
+        let mut bal: BTreeMap<NaiveDate, i64> = BTreeMap::new();
+        for k in 0..=10 {
+            bal.insert(d(2026, 3, 1) + Duration::days(k), 5_000_000);
+        }
+        // 5 марта: крупный платёж увёл бы остаток в −2 000 000, владелец перевёл 8 000 000 своих денег в тот же день
+        let rescue_tx = Tx { date: d(2026, 3, 5), amount: 8_000_000, counterparty: "Свой счёт".into(), inn: String::new(), purpose: String::new(), category: "transfers".into() };
+        let planned = Tx { date: d(2026, 3, 6), amount: 100_000, counterparty: "Свой счёт".into(), inn: String::new(), purpose: String::new(), category: "transfers".into() };
+        let mut b = bal.clone();
+        for k in 4..=10 {
+            b.insert(d(2026, 3, 1) + Duration::days(k), 6_000_000); // остаток после перевода: −2 000 000 + 8 000 000
+        }
+        b.insert(d(2026, 3, 6), 6_100_000);
+        let rescue = rescue_inflows(&[rescue_tx.clone(), planned.clone()], &b);
+        assert_eq!(rescue.get(&d(2026, 3, 5)), Some(&8_000_000));
+        assert!(!rescue.contains_key(&d(2026, 3, 6))); // плановый перевод при нормальном остатке спасательным не считается
+        assert!(!(1..=7).any(|k| b[&(d(2026, 3, 1) + Duration::days(k))] < 0)); // в остатке разрыва не видно
+        assert!(adjusted_gap(&b, &rescue, d(2026, 3, 1), 9)); // а без вмешательства владельца он есть
+        assert!(!adjusted_gap(&b, &rescue, d(2026, 3, 5), 5)); // после вмешательства окно чистое
     }
 
     #[test]

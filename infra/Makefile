@@ -1,4 +1,4 @@
-.PHONY: up down logs demo-data seed test smoke
+.PHONY: up down logs demo-data seed test smoke ml-backtest
 ROOT := $(abspath $(CURDIR)/..)
 up:
 	docker compose up --build -d
@@ -15,3 +15,7 @@ smoke:
 	./scripts/smoke.sh
 seed:
 	$(ROOT)/infra/scripts/seed_demo.sh
+
+# ML-лаборатория: единый бэктест на датасете (нужен MOCK_DATASET_DIR), см. docs/ml-architecture.md
+ml-backtest:
+	cd $(ROOT) && python3 -m ml.backtest.run --companies 30 --cutoffs 8

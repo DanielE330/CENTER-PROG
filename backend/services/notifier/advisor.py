@@ -9,6 +9,7 @@ from datetime import timedelta
 import httpx
 
 from . import analytics as an, config
+from .mask import Masker
 from .service import Bundle
 
 log = logging.getLogger("notifier")
@@ -95,14 +96,16 @@ class Advisor:
         if not self.enabled:
             return None
         headers = {"Authorization": f"Bearer {config.hermes_key()}"} if config.hermes_key() else {}
+        mk = Masker()  # названия контрагентов, ИНН, счета, телефоны наружу не уходят
         body = {"model": config.hermes_model(), "temperature": 0.3, "max_tokens": 700,
                 "messages": [{"role": "system", "content": SYSTEM},
-                             {"role": "user", "content": "DATA:\n" + json.dumps(build_facts(b, kind), ensure_ascii=False)}]}
+                             {"role": "user", "content": "DATA:\n" + json.dumps(mk.mask_obj(build_facts(b, kind)), ensure_ascii=False)}]}
         try:
             async with httpx.AsyncClient(timeout=config.hermes_timeout(), transport=self.transport, headers=headers) as c:
                 r = await c.post(config.hermes_url() + "/chat/completions", json=body)
             r.raise_for_status()
-            return parse_advice(r.json()["choices"][0]["message"]["content"])
+            advice = parse_advice(r.json()["choices"][0]["message"]["content"])
+            return mk.unmask_obj(advice) if advice else None
         except (httpx.HTTPError, KeyError, IndexError, ValueError) as e:
             log.warning("консультант недоступен: %s", type(e).__name__)  # без тел и ключа
             return None
@@ -112,14 +115,17 @@ class Advisor:
         if not self.enabled:
             return None
         headers = {"Authorization": f"Bearer {config.hermes_key()}"} if config.hermes_key() else {}
+        mk = Masker()
         body = {"model": config.hermes_model(), "temperature": 0.3, "max_tokens": 600,
                 "messages": [{"role": "system", "content": ASK_SYSTEM},
-                             {"role": "user", "content": "DATA:\n" + json.dumps(build_facts(b, "question"), ensure_ascii=False) + "\n\nВОПРОС: " + question[:500]}]}
+                             {"role": "user", "content": "DATA:\n" + json.dumps(mk.mask_obj(build_facts(b, "question")), ensure_ascii=False)
+                              + "\n\nВОПРОС: " + mk.mask(question[:500])}]}
         try:
             async with httpx.AsyncClient(timeout=config.hermes_timeout(), transport=self.transport, headers=headers) as c:
                 r = await c.post(config.hermes_url() + "/chat/completions", json=body)
             r.raise_for_status()
-            return clean_answer(r.json()["choices"][0]["message"]["content"])
+            ans = clean_answer(r.json()["choices"][0]["message"]["content"])
+            return mk.unmask(ans) if ans else None
         except (httpx.HTTPError, KeyError, IndexError, ValueError) as e:
             log.warning("консультант недоступен: %s", type(e).__name__)
             return None

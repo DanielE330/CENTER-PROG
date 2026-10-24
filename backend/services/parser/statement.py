@@ -10,6 +10,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from .categorize import categorize
+from .taxonomy import classify
 
 MAX_ROWS = 200_000
 
@@ -165,18 +166,25 @@ def parse_statement(filename: str, data: bytes) -> dict:
             sid = str(get("source_id") or "").strip()[:100]
             purpose = str(get("purpose") or "").strip()[:1000]
             cat, conf = categorize(purpose, direction)
+            counterparty = str(get("counterparty") or "").strip()[:300]
+            cl = classify(purpose, counterparty, signed, balance)  # признаки для ML: подкатегория, группа, документ, «спасательное»
             txs.append(
                 {
                     "row_no": i,
                     "date": d.isoformat(),
                     "amount_kop": str(signed),
                     "direction": direction,
-                    "counterparty": str(get("counterparty") or "").strip()[:300],
+                    "counterparty": counterparty,
                     "inn": re.sub(r"\D", "", str(get("inn") or ""))[:12],
                     "purpose": purpose,
                     "balance_kop": None if balance is None else str(balance),
                     "category": cat,
                     "category_confidence": conf,
+                    "subcategory": cl["subcategory"],
+                    "group": cl["group"],
+                    "doc_no": cl["doc_no"],
+                    "doc_date": cl["doc_date"],
+                    "is_rescue": cl["is_rescue"],
                 }
             )
             if sid:

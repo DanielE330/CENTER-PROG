@@ -150,6 +150,8 @@ struct Agg {
     fp: usize,
     fnn: usize,
     gaps: usize,
+    /// разметка разрывов с учётом «спасательных» поступлений владельца: (tp, fp, fn, окон с разрывом)
+    adj: (usize, usize, usize, usize),
     /// (порог, precision, recall) для разных порогов вероятности
     curve: Vec<(f64, f64, f64)>,
     /// (нижняя граница корзины, число, доля фактических разрывов)
@@ -196,8 +198,10 @@ fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
         });
     }
     let (mut tp, mut fp, mut fnn, mut gaps) = (0, 0, 0, 0);
+    let mut adj = (0, 0, 0, 0);
     for r in res {
         if let Some(bt) = &r.bt {
+            adj = (adj.0 + bt.alarm_tp_adj, adj.1 + bt.alarm_fp_adj, adj.2 + bt.alarm_fn_adj, adj.3 + bt.actual_gap_windows_adj);
             tp += bt.alarm_tp;
             fp += bt.alarm_fp;
             fnn += bt.alarm_fn;
@@ -238,6 +242,7 @@ fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
         fp,
         fnn,
         gaps,
+        adj,
     }
 }
 
@@ -260,6 +265,12 @@ fn print_agg(a: &Agg) {
         print_metrics("risk probability (active)", m);
     }
     println!("alarm (P(gap in 30d)>=0.5) pooled: precision {} recall {} (tp {} fp {} fn {}); actual gap windows {}", f(a.prec), f(a.rec), a.tp, a.fp, a.fnn, a.gaps);
+    let (tpa, fpa, fna, ga) = a.adj;
+    let ratio = |n: usize, d: usize| if d > 0 { Some(n as f64 / d as f64) } else { None };
+    println!(
+        "same alarm, gaps labelled with owner's rescue inflows removed: precision {} recall {} (tp {} fp {} fn {}); actual gap windows {} (hidden by the owner: {})",
+        f(ratio(tpa, tpa + fpa)), f(ratio(tpa, tpa + fna)), tpa, fpa, fna, ga, ga.saturating_sub(a.gaps)
+    );
 }
 
 fn write_csv(dir: &std::path::Path, name: &str, res: &[CompanyResult]) {
