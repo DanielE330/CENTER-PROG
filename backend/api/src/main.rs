@@ -4,6 +4,10 @@
 mod admin;
 mod advisor;
 mod demo;
+mod demo_login;
+mod fns;
+#[cfg(test)]
+mod fns_tests;
 mod http;
 mod legacy;
 mod mail;
@@ -39,6 +43,7 @@ pub struct AppState {
     pub notifier: Upstream,
     pub backoffice: Upstream,
     pub notify: Upstream,
+    pub fns: Upstream,
     pub demo: Arc<demo::Demo>,
     pub cfg: Arc<Config>,
 }
@@ -58,6 +63,7 @@ async fn main() {
         notifier: Upstream::new("notifier", "Сервис уведомлений", &env("NOTIFIER_URL", "http://127.0.0.1:8009"), 60),
         backoffice: Upstream::new("backoffice", "Сервис оператора", &env("BACKOFFICE_URL", "http://127.0.0.1:8013"), 60),
         notify: Upstream::new("notify", "Почтовый сервис", &env("NOTIFY_URL", "http://127.0.0.1:8014"), 30),
+        fns: Upstream::new("fns", "Сервис ФНС", &env("FNS_URL", "http://127.0.0.1:8015"), 70),
         demo: Arc::new(demo::Demo::from_env()),
         cfg: Arc::new(Config { cookie_secure: env("COOKIE_SECURE", "0") == "1" }),
     };
@@ -68,6 +74,8 @@ async fn main() {
     let api = tenant_routes()
         // панель оператора платформы: отдельная cookie op_session, префикс /api/admin/v1 (admin.rs)
         .merge(admin::routes())
+        // быстрый вход в демо-аккаунты (кнопки на странице входа), только при DEMO_LOGIN=1: demo_login.rs
+        .merge(demo_login::routes(Arc::new(demo_login::DemoLogin::from_env())))
         .layer(middleware::from_fn(security_layer))
         .with_state(state.clone());
 
@@ -144,6 +152,8 @@ pub fn tenant_routes() -> Router<AppState> {
         .route("/api/ext/v1/transactions", get(http::ext_transactions))
         .route("/api/ext/v1/expected-events", get(http::ext_events).post(http::ext_events))
         .route("/api/ext/v1/plan-fact", get(http::ext_plan_fact))
+        .route("/api/ext/v1/fns/ens", get(fns::ext_ens))
+        .route("/api/ext/v1/fns/counterparties", get(fns::ext_counterparties))
         .route(co, patch(http::update_company))
         .route(&format!("{co}/imports"), get(http::to_ledger).post(http::to_ledger))
         .route(&format!("{co}/imports/{{iid}}"), get(http::to_ledger))
@@ -155,6 +165,11 @@ pub fn tenant_routes() -> Router<AppState> {
         .route(&format!("{co}/expected-events/tax-calendar"), post(http::tax_calendar))
         .route(&format!("{co}/expected-events/{{eid}}"), delete(http::to_ledger))
         .route(&format!("{co}/integrations/sync"), post(http::integrations_sync))
+        // сведения ФНС: налоговые события на год, ЕНС, проверка контрагентов (fns.rs)
+        .route(&format!("{co}/integrations/fns/sync"), post(fns::sync))
+        .route(&format!("{co}/fns/ens"), get(fns::ens))
+        .route(&format!("{co}/fns/ens/import"), post(fns::ens_import))
+        .route(&format!("{co}/fns/counterparties"), get(fns::counterparties))
         .route(&format!("{co}/advisor/ask"), post(advisor::ask))
         .route(&format!("{co}/advisor/suggestions/apply"), post(advisor::apply))
         // демо «Прошла неделя»: только для демо-пользователя при DEMO_FEED_ENABLED=1

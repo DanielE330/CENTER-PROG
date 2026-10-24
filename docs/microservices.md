@@ -41,6 +41,10 @@ Cargo workspace в `backend/` (общие `Cargo.lock`, `rust-toolchain.toml`): 
 
 `POST /api/v1/companies/{cid}/integrations/sync` `{"external_company":"C001"}`: api запрашивает у integrator `GET /internal/v1/obligations?company=...` (`INTEGRATOR_URL`, `http://127.0.0.1:8008`), превращает обязательства в ожидаемые события (`source`: `contract` для kind=contract, иначе `invoice`) и записывает их в ledger через `expected-events/bulk`; ключ идемпотентности — уникальный индекс `(company_id, external_id)`. Ответ `{created, skipped, sources}`.
 
+## Тестовый вход (кнопки демо-аккаунтов)
+
+api (`backend/api/src/demo_login.rs`, env `DEMO_LOGIN`, `DEMO_PASSWORD`; в compose `DEMO_LOGIN` по умолчанию равен `DEMO_SEED`): `GET /api/v1/auth/demo` и `POST /api/v1/auth/demo/login {account}` (контракт и безопасность в `docs/roles.md`). auth: внутренний `POST /internal/v1/demo/trust {email}`. Frontend: `features/auth/DemoLogin.tsx`. Сотрудников `demo-editor@` и `demo-viewer@example.com` заводит `seed_demo.sh`.
+
 ## Демо «Прошла неделя»
 
 У демо-пользователя `demo@example.com` «сегодня» — дата отсечки внутри выписки: `seed_demo.sh` грузит C001 только до `DEMO_CUTOFF` (по умолчанию 2026-07-12; после неё 131 операция, около 13 недель), остальное лежит «в будущем» и отдаётся сервисом `demo_feed` (:8012; env `DEMO_DATASET_DIR`/`MOCK_DATASET_DIR`, `DEMO_CUTOFF`, `DEMO_COMPANY`; для `seed_demo.sh` и `demo_feed` нужен один и тот же датасет). `demo_feed`: `/live`, `/internal/v1/feed/status?company=&after=`, `/internal/v1/feed/week?company=&after=` (JSON: `from`, `to`, `count`, `weeks_left`, `filename`, `csv`) и `/internal/v1/feed/week.csv`. Курсор `after` — дата последней операции в ledger: лента отдаёт следующие 7 дней (пустые недели пропускаются), CSV той же структуры, что и загружаемая выписка; когда данные кончились — 409 `feed_exhausted`.

@@ -107,4 +107,5 @@ echo "Дальше вход только по паролю и коду из пр
 echo "Потеряли телефон и резервные коды? Сбросить 2FA (при следующем входе настроится заново):"
 echo "  docker compose -f infra/docker-compose.yml exec backoffice python -m backoffice.create_operator --reset-2fa $EMAIL"
 echo
+echo "Сведения ФНС (налоги на год, ЕНС, проверка контрагентов): режим sim, данные имитатора. Режим live выключен: docs/fns.md"
 echo "Сайт для компаний: ${URL%/operator}  (вход и регистрация; пользователи компаний видят свою компанию, а не панель оператора)"

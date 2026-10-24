@@ -51,5 +51,6 @@
 - **Очередь.** Письмо сначала попадает в outbox (SQLite, том `notify-data`); вложения хранятся до отправки.
 - **Повторы.** При сбое SMTP следующая попытка через 1, 5, 30 и 120 минут, затем статус `failed`. В журнал пишутся только id письма и класс ошибки, без адресов и содержимого.
 - **Mailpit по умолчанию.** Все письма ловит Mailpit: http://localhost:8025 (доступен только с этой машины).
+- **Подключение и диагностика.** Gmail, Яндекс, Mail.ru, свой сервер, проверка `python -m notify.check` и `GET /internal/v1/smtp/check`, расшифровка ошибок: [mail.md](mail.md).
 - **Реальный SMTP.** В `infra/.env` задайте `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY=ssl|starttls`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`. Для совместимости понимаются и `SMTP_FROM`, `SMTP_SSL=1`, `SMTP_STARTTLS=1`. Ссылки в письмах строятся от `PUBLIC_URL`.
 - **Сеть.** У `notify` две сети: `internal` для данных и `mail` для выхода к SMTP.

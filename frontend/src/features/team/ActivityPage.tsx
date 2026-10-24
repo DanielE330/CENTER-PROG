@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { Navigate } from 'react-router-dom'
+import { usePerms } from '../../app/perms'
 import { PageContainer, PageHeader, Card } from '../../components/shared/Page'
 import { DataTable } from '../../components/shared/DataTable'
 import type { Column } from '../../components/shared/DataTable'
@@ -19,11 +21,19 @@ const FILTERS = ['', 'team', 'member', 'goal', 'notifications', 'telegram', 'imp
 /** Who did what: team changes, goals, Telegram settings, imports. Admins and the owner only (the API enforces it). */
 export default function ActivityPage() {
   const { t, i18n } = useTranslation()
+  const { admin } = usePerms()
   const [offset, setOffset] = useState(0)
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('')
-  const q = useQuery({ queryKey: ['activity', filter, offset], queryFn: () => api.activity({ limit: PAGE, offset, q: filter }), placeholderData: keepPreviousData })
+  const q = useQuery({ queryKey: ['activity', filter, offset], queryFn: () => api.activity({ limit: PAGE, offset, q: filter }), placeholderData: keepPreviousData, enabled: admin })
 
-  const action = (a: string) => (i18n.exists(`activity.actions.${a}`) ? t(`activity.actions.${a}`) : a)
+  // Некоторые действия приходят с суффиксом через двоеточие («member.add:viewer»): роль или статус.
+  const action = (a: string) => {
+    if (i18n.exists(`activity.actions.${a}`)) return t(`activity.actions.${a}`)
+    const [base, suffix] = a.split(':', 2)
+    if (!i18n.exists(`activity.actions.${base}`)) return a
+    const label = t(`activity.actions.${base}`)
+    return suffix && i18n.exists(`role.${suffix}`) ? `${label}: ${t(`role.${suffix}`)}` : label
+  }
   const actor = (r: AuditItem) => {
     if (r.actor_name) return r.actor_name
     if (r.actor.startsWith('tg:')) return t('activity.telegram', { id: r.actor.slice(3) })
@@ -36,6 +46,8 @@ export default function ActivityPage() {
     { key: 'object', header: t('activity.object'), render: (r) => <span className="tnum text-muted break-all">{r.object_id ? r.object_id.slice(0, 24) : '—'}</span> },
   ]
   const total = q.data?.total ?? 0
+  // Журнал виден владельцу и администратору: остальных (прямая ссылка) возвращаем на обзор, не обращаясь к API.
+  if (!admin) return <Navigate to="/dashboard" replace />
 
   return (
     <PageContainer>

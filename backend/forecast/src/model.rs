@@ -26,7 +26,17 @@ const OVERDUE_IN_DELAY: [i64; 6] = [1, 2, 3, 5, 7, 10];
 /// Максимальная длина «моста» от конца выписки до сегодняшнего дня; дальше выписка считается слишком старой.
 pub const MAX_BRIDGE_DAYS: i64 = 60;
 
-pub use common::{Event, Tx};
+// Риск контрагента по данным ФНС (флаги приходят из ledger; без флагов расчёт не меняется ни на один бит).
+/// Дополнительная задержка оплаты (рабочие дни) у клиента с высоким / средним риском.
+const HIGH_RISK_EXTRA_DELAY_BD: i64 = 5;
+const MEDIUM_RISK_EXTRA_DELAY_BD: i64 = 2;
+/// Множитель уверенности в ожидаемом поступлении от клиента с высоким / средним риском.
+const HIGH_RISK_CONFIDENCE: f64 = 0.85;
+const MEDIUM_RISK_CONFIDENCE: f64 = 0.95;
+/// Клиент попадает в предупреждение «крупный клиент в зоне риска», если его доля ожидаемых поступлений не меньше этой.
+pub const RISKY_CLIENT_MIN_SHARE: f64 = 0.10;
+
+pub use common::{CounterpartyRisk, Event, Tx};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Scenario {
@@ -91,6 +101,46 @@ pub struct PlannedItem {
     pub title: String,
     pub source: String,
     pub overdue: bool,
+    /// уровень риска клиента по данным ФНС ("medium" | "high"), если он повлиял на оценку этого поступления
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk: Option<&'static str>,
+    #[serde(skip)]
+    pub cp: String,
+}
+
+/// Поступление, исключённое из плана: клиент ликвидируется, ликвидирован или признан банкротом (по данным ФНС).
+#[derive(Clone, Debug, Serialize)]
+pub struct ExcludedItem {
+    pub date: NaiveDate,
+    pub amount: i64,
+    pub title: String,
+    pub counterparty: String,
+    /// "liquidation" | "bankruptcy"
+    pub reason: &'static str,
+    pub source: String,
+}
+
+/// Клиент в зоне риска и его доля в ожидаемых поступлениях горизонта.
+#[derive(Clone, Debug, Serialize)]
+pub struct RiskyClient {
+    pub counterparty: String,
+    pub inn: String,
+    pub risk_level: String,
+    pub status: String,
+    pub tax_debt_kop: i64,
+    /// доля в ожидаемых поступлениях (с учётом исключённых), 0..1
+    pub share: f64,
+    pub amount: i64,
+    /// поступления от клиента исключены из плана
+    pub excluded: bool,
+}
+
+/// Клиент, к которому применён сценарий задержки оплаты, и почему выбран он.
+#[derive(Clone, Debug, Serialize)]
+pub struct ScenarioClient {
+    pub counterparty: String,
+    /// "explicit" — назван в сценарии; "risk" — по умолчанию, крупный клиент в зоне риска; "largest" — по умолчанию, самый крупный
+    pub reason: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -126,6 +176,9 @@ pub struct Warning {
     /// уровень разрыва: "warning" — остаток может уйти ниже нуля, "critical" — уход ниже нуля вероятен (>= 50 %) или есть на медианной траектории
     pub tier: Option<&'static str>,
     pub drivers: Vec<Driver>,
+    /// для предупреждения `risky_client`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<RiskyClient>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -171,6 +224,12 @@ pub struct ForecastResult {
     pub risk: Risk,
     pub rules: Vec<Rule>,
     pub planned: Vec<PlannedItem>,
+    /// поступления, исключённые из плана из-за ликвидации или банкротства клиента (по данным ФНС)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub excluded: Vec<ExcludedItem>,
+    /// кому применён сценарий задержки оплаты клиента
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scenario_client: Option<ScenarioClient>,
     /// признаки калибровки риска (см. `risk_features`); в JSON не выводятся
     #[serde(skip)]
     pub risk_feats: Vec<f64>,
@@ -701,6 +760,52 @@ fn expand_events(events: &[Event], as_of: NaiveDate, horizon: usize) -> Vec<Occu
         .collect()
 }
 
+/// Нормализованное имя контрагента для сопоставления событий и регулярных платежей с флагами по ИНН.
+fn norm_name(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Значимые флаги контрагента, по которым меняется расчёт.
+#[derive(Clone, Debug)]
+struct RiskInfo {
+    /// "low" | "medium" | "high"
+    level: &'static str,
+    /// причина исключения поступлений из плана: "liquidation" | "bankruptcy"
+    excluded: Option<&'static str>,
+    inn: String,
+    status: String,
+    tax_debt_kop: i64,
+}
+
+fn index_risks(risks: &[CounterpartyRisk]) -> HashMap<String, RiskInfo> {
+    let mut m = HashMap::new();
+    for r in risks {
+        let level = match r.risk_level.as_str() {
+            "high" => "high",
+            "medium" => "medium",
+            _ => "low",
+        };
+        let status = r.status.to_lowercase();
+        let excluded = if r.bankruptcy_flag || status == "bankrupt" {
+            Some("bankruptcy")
+        } else if status == "liquidating" || status == "liquidated" {
+            Some("liquidation")
+        } else {
+            None
+        };
+        if level == "low" && excluded.is_none() {
+            continue;
+        }
+        for n in &r.names {
+            let k = norm_name(n);
+            if !k.is_empty() {
+                m.insert(k, RiskInfo { level, excluded, inn: r.inn.clone(), status: status.clone(), tax_debt_kop: r.tax_debt_kop });
+            }
+        }
+    }
+    m
+}
+
 pub fn forecast(
     txs: &[Tx],
     balances: &BTreeMap<NaiveDate, i64>,
@@ -708,7 +813,21 @@ pub fn forecast(
     scenario: &Scenario,
     p: &Params,
 ) -> Result<ForecastResult, ForecastError> {
-    simulate(&fit(txs, balances)?, events, scenario, p)
+    forecast_with_risk(txs, balances, events, scenario, p, &[])
+}
+
+/// Прогноз с учётом риска контрагентов (флаги ФНС из ledger). Пустой список флагов даёт ровно тот же результат, что и `forecast`.
+/// Клиент с высоким риском: ниже уверенность и больше задержка оплаты (кривая Каплана–Мейера + добавка); с ликвидацией
+/// или банкротством: ожидаемые поступления исключаются из плана (список `excluded`); крупный клиент в зоне риска даёт предупреждение `risky_client`.
+pub fn forecast_with_risk(
+    txs: &[Tx],
+    balances: &BTreeMap<NaiveDate, i64>,
+    events: &[Event],
+    scenario: &Scenario,
+    p: &Params,
+    risks: &[CounterpartyRisk],
+) -> Result<ForecastResult, ForecastError> {
+    simulate_with_risk(&fit(txs, balances)?, events, scenario, p, risks)
 }
 
 /// Обученная по истории часть модели: всё, что зависит только от операций и остатков. Не зависит от событий,
@@ -989,6 +1108,12 @@ impl Fitted {
 
 /// Прогноз по обученной модели: события, сценарий, траектории, риск и объяснения.
 pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -> Result<ForecastResult, ForecastError> {
+    simulate_with_risk(f, events, scenario, p, &[])
+}
+
+/// `simulate` с флагами риска контрагентов (см. `forecast_with_risk`): риск влияет только на события и сценарий,
+/// поэтому работает и поверх сохранённой обученной модели (режим «Обновлять по новым данным»).
+pub fn simulate_with_risk(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params, risks: &[CounterpartyRisk]) -> Result<ForecastResult, ForecastError> {
     let (as_of, first, opening) = (f.as_of, f.first, f.opening);
     let bridge = p.today.map_or(0, |t| (t - as_of).num_days().clamp(0, MAX_BRIDGE_DAYS) as usize);
     let h = p.horizon + bridge;
@@ -1004,9 +1129,25 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
     // Явно названный контрагент сдвигается в любом направлении (перенос своего платежа);
     // без названия сдвигается самый крупный клиент (только поступления).
     let explicit_cp = scenario.delay_counterparty.as_deref().map_or(false, |c| !c.trim().is_empty());
+    let risk_ix = index_risks(risks);
+    let mut scenario_client: Option<ScenarioClient> = None;
     let delay_cp: Option<String> = if scenario.delay_days != 0 {
-        scenario.delay_counterparty.clone().filter(|c| !c.trim().is_empty()).or_else(|| {
-            rules.iter().filter(|r| r.direction == "in").max_by_key(|r| r.amount).map(|r| r.counterparty.clone())
+        let picked = scenario.delay_counterparty.clone().filter(|c| !c.trim().is_empty()).map(|c| (c, "explicit")).or_else(|| {
+            // по умолчанию: самый крупный клиент; при флагах ФНС — крупный клиент в зоне риска (высокий риск, доля не меньше порога)
+            let in_total: i64 = rules.iter().filter(|r| r.direction == "in").map(|r| r.amount).sum();
+            let risky = rules
+                .iter()
+                .filter(|r| r.direction == "in" && in_total > 0 && r.amount as f64 / in_total as f64 >= RISKY_CLIENT_MIN_SHARE)
+                .filter(|r| risk_ix.get(&norm_name(&r.counterparty)).is_some_and(|x| x.level == "high" && x.excluded.is_none()))
+                .max_by_key(|r| r.amount);
+            match risky {
+                Some(r) => Some((r.counterparty.clone(), "risk")),
+                None => rules.iter().filter(|r| r.direction == "in").max_by_key(|r| r.amount).map(|r| (r.counterparty.clone(), "largest")),
+            }
+        });
+        picked.map(|(cp, reason)| {
+            scenario_client = Some(ScenarioClient { counterparty: cp.clone(), reason });
+            cp
         })
     } else {
         None
@@ -1030,12 +1171,61 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
         None => true,
     });
     occs.extend(ev_occs);
+    // ликвидация и банкротство клиента (ФНС): ожидаемые от него поступления исключаются из плана с пометкой
+    let mut excluded: Vec<ExcludedItem> = vec![];
+    if !risk_ix.is_empty() {
+        let horizon_end = as_of + Duration::days(h as i64);
+        let mut keep = Vec::with_capacity(occs.len());
+        for o in occs.drain(..) {
+            let income = match o.rule_ix {
+                Some(ri) => rules[ri].direction == "in",
+                None => o.fixed_amount > 0,
+            };
+            let reason = risk_ix.get(&norm_name(&o.counterparty)).and_then(|r| r.excluded).filter(|_| income);
+            let Some(reason) = reason else {
+                keep.push(o);
+                continue;
+            };
+            if o.base <= horizon_end {
+                let (amount, title, source) = match o.rule_ix {
+                    Some(ri) => (median_i64(&rules[ri].amounts[o.anchor_ix]), o.counterparty.clone(), "recurring".to_string()),
+                    None => {
+                        let e = events.iter().find(|e| e.amount == o.fixed_amount && e.counterparty == o.counterparty);
+                        (o.fixed_amount, e.map_or_else(|| o.counterparty.clone(), |e| e.title.clone()), e.map_or("manual".to_string(), |e| e.source.clone()))
+                    }
+                };
+                excluded.push(ExcludedItem { date: roll_forward(o.base), amount, title, counterparty: o.counterparty.clone(), reason, source });
+            }
+        }
+        occs = keep;
+        excluded.sort_by_key(|x| (x.date, x.amount));
+    }
     let km: Option<DelayModel> = if p.km_delays { fit_delays(&rules, &occs) } else { None };
     if let (Some(a), Some(d)) = (scenario.extra_expense_kop, scenario.extra_expense_date) {
         occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: -a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: String::new(), age: 0 });
     }
     if let (Some(a), Some(d)) = (scenario.extra_income_kop, scenario.extra_income_date) {
         occs.push(Occurrence { base: d.max(as_of + Duration::days(1)), rule_ix: None, anchor_ix: 0, fixed_amount: a.abs(), p_include: 1.0, overdue: false, income_delay: false, counterparty: "\u{0}scenario-income".into(), age: 0 });
+    }
+
+    // риск клиента: ниже уверенность в поступлении и больше задержка оплаты (только поступления)
+    let mut extra_delay = vec![0i64; occs.len()];
+    if !risk_ix.is_empty() {
+        for (i, o) in occs.iter_mut().enumerate() {
+            let income = match o.rule_ix {
+                Some(ri) => rules[ri].direction == "in",
+                None => o.fixed_amount > 0,
+            };
+            if let (true, Some(r)) = (income, risk_ix.get(&norm_name(&o.counterparty))) {
+                let (conf, extra) = match r.level {
+                    "high" => (HIGH_RISK_CONFIDENCE, HIGH_RISK_EXTRA_DELAY_BD),
+                    "medium" => (MEDIUM_RISK_CONFIDENCE, MEDIUM_RISK_EXTRA_DELAY_BD),
+                    _ => (1.0, 0),
+                };
+                o.p_include *= conf;
+                extra_delay[i] = extra;
+            }
+        }
     }
 
     // --- плановый календарь (детерминированный, для объяснений) ---
@@ -1058,7 +1248,8 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
             if delay_cp.as_deref() == Some(o.counterparty.as_str()) && (amt > 0 || explicit_cp) {
                 date = roll_forward(date + Duration::days(scenario.delay_days));
             }
-            PlannedItem { date, amount: amt, title, source, overdue: o.overdue }
+            let risk = if amt > 0 { risk_ix.get(&norm_name(&o.counterparty)).map(|r| r.level).filter(|l| *l != "low") } else { None };
+            PlannedItem { date, amount: amt, title, source, overdue: o.overdue, risk, cp: o.counterparty.clone() }
         })
         .collect();
     planned.sort_by_key(|p| (p.date, p.amount));
@@ -1189,7 +1380,7 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
             }
         }
         // события
-        for o in &occs {
+        for (oi, o) in occs.iter().enumerate() {
             if o.p_include < 1.0 && rng.unit() > o.p_include {
                 continue;
             }
@@ -1205,15 +1396,24 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
             let raw_amount = amount;
             amount = scale_amount(amount, in_scale, out_scale, o.rule_ix.is_some());
             let mut shift = jitter;
+            let mut km_sampled = false;
             if o.income_delay {
                 shift += match &km {
                     Some(m) if o.rule_ix.is_none() || o.overdue => {
+                        km_sampled = true;
                         let d = m.sample(&o.counterparty, if o.overdue { o.age } else { 0 }, &mut rng);
                         if o.overdue { d - o.age } else { d }
                     }
                     _ if o.overdue => OVERDUE_IN_DELAY[rng.below(OVERDUE_IN_DELAY.len())] - 1,
                     _ => DEFAULT_PAY_DELAY[rng.below(DEFAULT_PAY_DELAY.len())],
                 };
+            }
+            if extra_delay[oi] > 0 {
+                // клиент в зоне риска: добавка к задержке; у регулярного поступления своей задержки оплаты нет, берём её из кривой Каплана–Мейера
+                shift += extra_delay[oi];
+                if let (false, Some(m)) = (km_sampled, &km) {
+                    shift += m.sample(&o.counterparty, 0, &mut rng);
+                }
             }
             // сдвиги (джиттер, задержка оплаты) — в рабочих днях от номинальной даты, перенесённой с выходного
             let mut date = bd_add(roll_forward(o.base), shift);
@@ -1377,6 +1577,7 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
             reasons,
             tier: Some(if shortfall_probability >= 0.5 || median_path_deficit > 0 { "critical" } else { "warning" }),
             drivers,
+            client: None,
         });
     }
     for it in planned.iter().filter(|x| x.overdue) {
@@ -1392,7 +1593,60 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
             reasons: vec![it.clone()],
             tier: None,
             drivers: vec![],
+            client: None,
         });
+    }
+
+    // крупный клиент в зоне риска (высокий риск или исключён из плана): доля его поступлений в ожидаемых
+    let mut risk_notes: Vec<String> = vec![];
+    if !risk_ix.is_empty() {
+        let mut agg: BTreeMap<String, (String, i64, NaiveDate)> = BTreeMap::new();
+        for x in planned.iter().filter(|x| x.amount > 0 && !x.cp.is_empty()) {
+            let e = agg.entry(norm_name(&x.cp)).or_insert((x.cp.clone(), 0, x.date));
+            e.1 += x.amount;
+            e.2 = e.2.min(x.date);
+        }
+        for x in &excluded {
+            let e = agg.entry(norm_name(&x.counterparty)).or_insert((x.counterparty.clone(), 0, x.date));
+            e.1 += x.amount;
+            e.2 = e.2.min(x.date);
+        }
+        let total_in: i64 = planned.iter().filter(|x| x.amount > 0).map(|x| x.amount).sum::<i64>() + excluded.iter().map(|x| x.amount).sum::<i64>();
+        let mut clients: Vec<(RiskyClient, NaiveDate)> = vec![];
+        for (k, (name, amount, first)) in &agg {
+            let Some(r) = risk_ix.get(k) else { continue };
+            if total_in <= 0 || !(r.level == "high" || r.excluded.is_some()) {
+                continue;
+            }
+            let share = *amount as f64 / total_in as f64;
+            if share >= RISKY_CLIENT_MIN_SHARE {
+                clients.push((RiskyClient { counterparty: name.clone(), inn: r.inn.clone(), risk_level: r.level.to_string(), status: r.status.clone(), tax_debt_kop: r.tax_debt_kop, share, amount: *amount, excluded: r.excluded.is_some() }, *first));
+            }
+        }
+        clients.sort_by(|a, b| b.0.share.partial_cmp(&a.0.share).unwrap_or(std::cmp::Ordering::Equal).then(a.0.counterparty.cmp(&b.0.counterparty)));
+        for (c, first) in clients.into_iter().take(3) {
+            let pct = c.share * 100.0;
+            warnings.push(Warning {
+                code: "risky_client".into(),
+                severity: if c.excluded || c.share >= 0.3 { "high" } else { "medium" },
+                date: Some(first),
+                message: if c.excluded {
+                    format!("Поступления от «{}» исключены из плана (ликвидация или банкротство по данным ФНС): {:.0}% ожидаемых поступлений", c.counterparty, pct)
+                } else {
+                    format!("Крупный клиент «{}» в зоне риска: на него приходится {:.0}% ожидаемых поступлений, оплата может задержаться", c.counterparty, pct)
+                },
+                reasons: planned.iter().filter(|x| x.amount > 0 && norm_name(&x.cp) == norm_name(&c.counterparty)).take(3).cloned().collect(),
+                tier: None,
+                drivers: vec![],
+                client: Some(c),
+            });
+        }
+        let mut seen = HashSet::new();
+        for x in &excluded {
+            if seen.insert(norm_name(&x.counterparty)) {
+                risk_notes.push(format!("Поступления от «{}» исключены из плана: по данным ФНС контрагент ликвидируется, ликвидирован или в банкротстве", x.counterparty));
+            }
+        }
     }
 
     // --- качество данных ---
@@ -1426,6 +1680,7 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
     if !use_blocks {
         notes.push("Мало данных для остаточного потока: использовано среднее".to_string());
     }
+    notes.extend(risk_notes);
     if bridge > 0 {
         notes.push(format!("Выписка заканчивается {as_of}: {bridge} дн. до сегодняшнего дня оценены моделью, загрузите свежую выписку"));
     }
@@ -1446,6 +1701,8 @@ pub fn simulate(f: &Fitted, events: &[Event], scenario: &Scenario, p: &Params) -
         risk: Risk { level, shortfall_probability, first_break_date, possible_break_date, median_path_deficit, max_deficit_p90, deficit_given_break_median, warnings, raw_shortfall_probability: raw_probability },
         rules,
         planned,
+        excluded,
+        scenario_client,
         risk_feats,
     })
 }
@@ -2174,5 +2431,127 @@ mod tests {
         let no_bal = tx(d(2026, 9, 1), 50_000, "Розница");
         assert_eq!(f.advance(std::slice::from_ref(&no_bal), &BTreeMap::new()).map(|_| ()), Ok(()));
         assert_eq!(f.opening, b[&d(2026, 8, 31)]); // остатка за 1 сентября нет — берём последний известный
+    }
+
+    // ---------- риск контрагента (ФНС) ----------
+    fn flag(inn: &str, name: &str, level: &str, status: &str, bankruptcy: bool) -> CounterpartyRisk {
+        CounterpartyRisk { inn: inn.into(), names: vec![name.into()], risk_level: level.into(), status: status.into(), tax_debt_kop: 1_500_000, bankruptcy_flag: bankruptcy, checked_at: "2026-10-20T10:00:00Z".into(), source: "fns_sim".into() }
+    }
+
+    /// Два клиента: «Клиент» (+300 000 ₽ 10-го) и «Клиент Б» (+120 000 ₽ 20-го), аренда и розница.
+    fn two_clients() -> (Vec<Tx>, BTreeMap<NaiveDate, i64>) {
+        let (mut v, _) = sample();
+        let mut day = d(2026, 1, 20);
+        while day <= d(2026, 8, 31) {
+            if day.day() == 20 {
+                v.push(tx(day, 12_000_000, "Клиент Б"));
+            }
+            day += Duration::days(1);
+        }
+        v.sort_by_key(|t| t.date);
+        let mut bal = 5_000_000i64;
+        let mut b = BTreeMap::new();
+        for t in &v {
+            bal += t.amount;
+            b.insert(t.date, bal);
+        }
+        (v, b)
+    }
+
+    fn run_risk(v: &[Tx], b: &BTreeMap<NaiveDate, i64>, sc: &Scenario, risks: &[CounterpartyRisk]) -> ForecastResult {
+        forecast_with_risk(v, b, &[], sc, &Params { horizon: 30, seed: 3, n_paths: 300, ..Default::default() }, risks).unwrap()
+    }
+
+    #[test]
+    fn no_risk_flags_means_identical_result() {
+        let (v, b) = two_clients();
+        let p = Params { horizon: 30, seed: 3, n_paths: 300, ..Default::default() };
+        let a = serde_json::to_string(&forecast(&v, &b, &[], &Scenario::default(), &p).unwrap()).unwrap();
+        let c = serde_json::to_string(&forecast_with_risk(&v, &b, &[], &Scenario::default(), &p, &[]).unwrap()).unwrap();
+        assert_eq!(a, c);
+        // «нейтральные» флаги (низкий риск, действует) тоже не меняют расчёт
+        let neutral = [flag("7701234567", "Клиент", "low", "active", false), flag("7702000000", "Клиент Б", "unknown", "", false)];
+        let n = serde_json::to_string(&forecast_with_risk(&v, &b, &[], &Scenario::default(), &p, &neutral).unwrap()).unwrap();
+        assert_eq!(a, n);
+        assert!(!a.contains("\"excluded\"") && !a.contains("risky_client"));
+    }
+
+    #[test]
+    fn high_risk_client_pays_later_and_is_marked() {
+        let (v, b) = two_clients();
+        let base = run_risk(&v, &b, &Scenario::default(), &[]);
+        let risky = run_risk(&v, &b, &Scenario::default(), &[flag("7701234567", "Клиент", "high", "active", false)]);
+        // тот же клиент, те же суммы, но деньги приходят позже: сумма медиан остатка по горизонту ниже
+        let sum = |r: &ForecastResult| r.days.iter().map(|x| x.p50).sum::<i64>();
+        assert!(sum(&risky) < sum(&base), "{} vs {}", sum(&risky), sum(&base));
+        assert!(risky.risk.shortfall_probability >= base.risk.shortfall_probability);
+        assert!(risky.planned.iter().any(|x| x.amount > 0 && x.risk == Some("high") && x.cp == "Клиент"));
+        assert!(base.planned.iter().all(|x| x.risk.is_none()));
+        // детерминизм
+        let again = run_risk(&v, &b, &Scenario::default(), &[flag("7701234567", "Клиент", "high", "active", false)]);
+        assert_eq!(risky.days.iter().map(|x| x.p50).collect::<Vec<_>>(), again.days.iter().map(|x| x.p50).collect::<Vec<_>>());
+        // средний риск действует слабее высокого
+        let medium = run_risk(&v, &b, &Scenario::default(), &[flag("7701234567", "Клиент", "medium", "active", false)]);
+        assert!(sum(&medium) <= sum(&base) && sum(&medium) >= sum(&risky), "{} {} {}", sum(&base), sum(&medium), sum(&risky));
+    }
+
+    #[test]
+    fn high_risk_big_client_raises_a_risky_client_warning_with_share() {
+        let (v, b) = two_clients();
+        let r = run_risk(&v, &b, &Scenario::default(), &[flag("7701234567", "ООО  КЛИЕНТ".trim_start_matches("ООО  "), "high", "active", false)]);
+        let w = r.risk.warnings.iter().find(|w| w.code == "risky_client").expect("предупреждение");
+        let c = w.client.as_ref().unwrap();
+        assert_eq!((c.counterparty.as_str(), c.inn.as_str(), c.risk_level.as_str(), c.excluded), ("Клиент", "7701234567", "high", false));
+        // 300 000 из 420 000 ₽ ожидаемых поступлений за месяц
+        assert!(c.share > 0.55 && c.share < 0.85, "{}", c.share);
+        assert!(w.message.contains("Клиент") && w.message.contains('%'));
+        // небольшой клиент ниже порога доли не даёт предупреждения
+        let small = run_risk(&v, &b, &Scenario::default(), &[flag("7702000000", "Клиент Б", "high", "active", false)]);
+        let share_b = small.risk.warnings.iter().find(|w| w.code == "risky_client").map(|w| w.client.as_ref().unwrap().share);
+        assert!(share_b.is_some_and(|s| s >= RISKY_CLIENT_MIN_SHARE && s < 0.5), "{share_b:?}");
+    }
+
+    #[test]
+    fn liquidated_or_bankrupt_client_is_excluded_from_the_plan_with_a_note() {
+        let (v, b) = two_clients();
+        let base = run_risk(&v, &b, &Scenario::default(), &[]);
+        assert!(base.planned.iter().any(|x| x.amount == 30_000_000));
+        for (status, bankruptcy, reason) in [("liquidating", false, "liquidation"), ("liquidated", false, "liquidation"), ("active", true, "bankruptcy"), ("bankrupt", false, "bankruptcy")] {
+            let r = run_risk(&v, &b, &Scenario::default(), &[flag("7701234567", "Клиент", "high", status, bankruptcy)]);
+            assert!(r.planned.iter().all(|x| x.amount != 30_000_000), "{status}: поступление осталось в плане");
+            assert!(!r.excluded.is_empty() && r.excluded.iter().all(|x| x.counterparty == "Клиент" && x.reason == reason && x.amount == 30_000_000), "{status}: {:?}", r.excluded);
+            assert!(r.quality.notes.iter().any(|n| n.contains("исключены из плана")));
+            let w = r.risk.warnings.iter().find(|w| w.code == "risky_client").unwrap();
+            assert!(w.client.as_ref().unwrap().excluded && w.severity == "high");
+            // без поступления остаток ниже
+            assert!(r.days.iter().map(|x| x.p50).sum::<i64>() < base.days.iter().map(|x| x.p50).sum::<i64>());
+        }
+        // поступление ожидаемого события тоже исключается
+        let ev = Event { id: "1".into(), date: d(2026, 9, 12), amount: 50_000_000, title: "Счёт 17".into(), source: "invoice".into(), confidence: 1.0, counterparty: "Клиент".into() };
+        let r = forecast_with_risk(&v, &b, &[ev], &Scenario::default(), &Params { horizon: 30, seed: 3, n_paths: 100, ..Default::default() }, &[flag("7701234567", "Клиент", "high", "liquidating", false)]).unwrap();
+        assert!(r.excluded.iter().any(|x| x.title == "Счёт 17" && x.source == "invoice"));
+        assert!(r.planned.iter().all(|x| x.title != "Счёт 17"));
+        // исходящие платежи ликвидируемому контрагенту не исключаются
+        let out = forecast_with_risk(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 3, n_paths: 100, ..Default::default() }, &[flag("7703000000", "Арендодатель", "high", "liquidating", false)]).unwrap();
+        assert!(out.excluded.is_empty() && out.planned.iter().any(|x| x.amount == -10_000_000));
+    }
+
+    #[test]
+    fn default_scenario_client_prefers_the_risky_big_client() {
+        let (v, b) = two_clients();
+        let sc = Scenario { delay_days: 14, ..Default::default() };
+        // без флагов — самый крупный клиент (как раньше)
+        let plain = run_risk(&v, &b, &sc, &[]);
+        let c = plain.scenario_client.as_ref().unwrap();
+        assert_eq!((c.counterparty.as_str(), c.reason), ("Клиент", "largest"));
+        // меньший клиент в зоне риска и с долей выше порога — сценарий берёт его
+        let risky = run_risk(&v, &b, &sc, &[flag("7702000000", "Клиент Б", "high", "active", false)]);
+        let c = risky.scenario_client.as_ref().unwrap();
+        assert_eq!((c.counterparty.as_str(), c.reason), ("Клиент Б", "risk"));
+        // явно названный клиент важнее
+        let named = run_risk(&v, &b, &Scenario { delay_days: 14, delay_counterparty: Some("Клиент".into()), ..Default::default() }, &[flag("7702000000", "Клиент Б", "high", "active", false)]);
+        assert_eq!(named.scenario_client.as_ref().unwrap().reason, "explicit");
+        // без задержки в сценарии клиент не выбирается
+        assert!(run_risk(&v, &b, &Scenario::default(), &[]).scenario_client.is_none());
     }
 }

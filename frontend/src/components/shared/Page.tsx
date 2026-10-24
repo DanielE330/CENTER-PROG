@@ -34,8 +34,8 @@ export function Card({ title, subtitle, action, children, className = '' }: Card
   return (
     <section className={`card enter ${className}`}>
       {(title || action) && (
-        <header className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
-          <div className="min-w-0">
+        <header className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 px-5 pt-4 pb-3">
+          <div className="min-w-0 flex-1 basis-32">
             {title && <h2 className="text-base font-semibold">{title}</h2>}
             {subtitle && <p className="text-[13px] text-muted mt-0.5">{subtitle}</p>}
           </div>

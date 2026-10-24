@@ -76,7 +76,7 @@ export function AddEventModal({ open, onClose }: { open: boolean; onClose: () =>
       <div className="flex flex-col gap-4">
         <p className="text-[13px] text-muted">{t('obligations.add.hint')}</p>
         <form className="flex flex-col gap-3" onSubmit={add}>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <DatePicker label={t('obligations.add.date')} required value={f.date} onChange={(v) => set('date', v)} />
             <Select
               label={t('obligations.add.type')}

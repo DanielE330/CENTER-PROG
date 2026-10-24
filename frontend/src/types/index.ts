@@ -12,6 +12,16 @@ export interface MfaChallenge {
   mfa: 'setup' | 'verify'
   mfa_token: string
 }
+/** Быстрый вход в демо-аккаунты (GET /auth/demo): без паролей; `enabled=false` — блок на странице входа не показывается. */
+export interface DemoLoginAccount {
+  id: 'director' | 'editor' | 'viewer'
+  role: string
+  email: string
+}
+export interface DemoLoginStatus {
+  enabled: boolean
+  accounts: DemoLoginAccount[]
+}
 export interface MfaSetup {
   secret: string
   otpauth_uri: string
@@ -118,6 +128,11 @@ export interface RiskWarning {
   date: string | null
   message: string
   reasons: RiskItem[]
+  /** `cash_gap`: уровень и вклад статей. */
+  tier?: 'warning' | 'critical' | null
+  drivers?: { title: string; share: number; amount: Kop }[]
+  /** `risky_client`: крупный клиент в зоне риска по данным ФНС. */
+  client?: { counterparty: string; risk_level: string; status: string | null; share: number; excluded: boolean } | null
 }
 
 export interface Risk {
@@ -264,7 +279,7 @@ export interface TransactionPage {
   offset: number
 }
 
-export type EventSource = 'manual' | 'invoice' | 'contract' | 'tax'
+export type EventSource = 'manual' | 'invoice' | 'contract' | 'tax' | 'onec'
 
 export interface ExpectedEvent {
   id: string
@@ -637,4 +652,80 @@ export interface AuditPage {
   total: number
   limit: number
   offset: number
+}
+
+// ----- ФНС: ЕНС, налоговые события, проверка контрагентов -----
+export type FnsMode = 'sim' | 'live'
+export type FnsRisk = 'low' | 'medium' | 'high' | 'unknown'
+
+export interface FnsUpcoming {
+  kind: string
+  date: string
+  amount_kop: Kop | null
+  title: string | null
+}
+
+export interface FnsEns {
+  balance_kop: Kop | null
+  debt_kop: Kop
+  has_debt: boolean
+  upcoming: FnsUpcoming[]
+  checked_at: string | null
+  /** `fns_sim` (имитатор), `import` (загруженная справка) или реестр режима live. */
+  source: string
+  source_label: string
+  mode: FnsMode
+}
+
+export interface FnsEnsImportResult extends FnsEns {
+  format: 'knd_1160080' | 'csv'
+  warnings: string[]
+}
+
+export interface FnsCounterparty {
+  inn: string
+  name: string | null
+  income_kop: Kop | null
+  income_share: number | null
+  tx_count: number | null
+  checked: boolean
+  status: string
+  risk_level: FnsRisk
+  tax_debt_kop?: Kop
+  has_tax_debt?: boolean
+  bankruptcy_flag?: boolean
+  unreliable?: boolean
+  mass_address?: boolean
+  disqualified?: boolean
+  registered_at?: string | null
+  checked_at: string | null
+  source: string | null
+  mode?: FnsMode
+  stale?: boolean
+}
+
+export interface FnsCounterparties {
+  items: FnsCounterparty[]
+  checked_at: string
+  source: string | null
+  source_label: string
+  mode: FnsMode | null
+  saved: boolean
+  total_income_kop: Kop | null
+}
+
+export interface FnsSyncResult {
+  created: number
+  skipped: number
+  estimated: number
+  no_amount: number
+  year: number
+  regime: string
+  regime_source: 'request' | 'statement' | 'default'
+  source: string
+  source_label: string
+  mode: FnsMode
+  fetched_at: string
+  items: { kind: string; title: string; date: string; amount_kop: Kop; estimated: boolean }[]
+  debt_kop: Kop | null
 }

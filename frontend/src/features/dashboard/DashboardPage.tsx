@@ -112,7 +112,7 @@ function DashboardBody({ v, days }: { v: ForecastView; days: number }) {
     <>
       <ForecastBanners run={run} />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           index={0}
           icon={<Wallet size={16} aria-hidden />}
@@ -151,7 +151,7 @@ function DashboardBody({ v, days }: { v: ForecastView; days: number }) {
         />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex flex-col gap-5 min-w-0">
           <Card title={t('dashboard.chartTitle')} subtitle={t('dashboard.chartSubtitle', { days })}>
             <div className="px-3 pb-4 sm:px-5">
@@ -160,7 +160,7 @@ function DashboardBody({ v, days }: { v: ForecastView; days: number }) {
             </div>
           </Card>
 
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             <Card title={t('dashboard.upcomingPayments')} action={<Link to="/obligations" className="text-[13px] text-primary font-medium hover:underline">{t('common.all')}</Link>}>
               <PlannedList items={r.planned} kind="payment" icon={<ArrowUpFromLine size={15} />} />
             </Card>

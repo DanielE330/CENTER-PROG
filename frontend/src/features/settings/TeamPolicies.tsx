@@ -94,7 +94,7 @@ export function TeamPolicies() {
           <section className="flex flex-col gap-3">
             <p className="text-[13px] font-medium">{t('team.chats')}</p>
             {data.chats.map((c) => (
-              <div key={c.chat_id} className="grid gap-2 sm:grid-cols-2 sm:items-center">
+              <div key={c.chat_id} className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:items-center">
                 <span className="text-sm truncate">{c.title || String(c.chat_id)}</span>
                 <Select aria-label={t('team.department')} value={c.department_id ?? NONE} options={deptOptions}
                   onChange={(v) => chatDept.mutate({ chat: c.chat_id, dept: v === NONE ? null : Number(v) })} />
@@ -107,7 +107,7 @@ export function TeamPolicies() {
           <p className="text-[13px] font-medium">{t('team.members')}</p>
           {data.members.length === 0 && <p className="text-sm text-muted">{t('team.noMembers')}</p>}
           {data.members.map((m) => (
-            <div key={m.tg_user_id} className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-center">
+            <div key={m.tg_user_id} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-center">
               <span className="text-sm truncate">{m.name || m.tg_user_id}</span>
               <Select aria-label={t('team.role')} value={m.role ?? NONE} options={[{ value: NONE, label: t('team.inherit') }, ...roleOptions]}
                 onChange={(v) => member.mutate({ uid: m.tg_user_id, b: { role: v as TgRole | '' } })} />

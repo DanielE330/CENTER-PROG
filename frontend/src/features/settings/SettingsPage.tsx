@@ -84,7 +84,7 @@ export default function SettingsPage() {
         actions={<Button onClick={() => void logout()}><LogOut size={16} aria-hidden /> {t('auth.logout')}</Button>}
       />
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <div className="flex flex-col gap-5">
           <Card title={t('settings.language.title')} subtitle={t('settings.language.subtitle')}>
             <div className="px-5 pb-5"><LanguageSwitch /></div>

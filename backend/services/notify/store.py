@@ -132,11 +132,12 @@ def mark_sent(mid: int) -> None:
         conn.execute("DELETE FROM attachments WHERE msg_id=?", (mid,))  # отправленное вложение хранить незачем
 
 
-def mark_failed(mid: int, error: str) -> str:
-    """Ошибка отправки: следующая попытка по расписанию RETRY_DELAYS или окончательный failed."""
+def mark_failed(mid: int, error: str, permanent: bool = False) -> str:
+    """Ошибка отправки: следующая попытка по расписанию RETRY_DELAYS или окончательный failed.
+    permanent: повтор бесполезен (адреса не существует, письмо отклонено) — сразу failed."""
     with db() as conn:
         attempts = conn.execute("SELECT attempts FROM outbox WHERE id=?", (mid,)).fetchone()["attempts"] + 1
-        if attempts > len(RETRY_DELAYS):
+        if permanent or attempts > len(RETRY_DELAYS):
             conn.execute(
                 "UPDATE outbox SET status='failed', attempts=?, last_error=? WHERE id=?", (attempts, error[:500], mid)
             )
@@ -147,6 +148,43 @@ def mark_failed(mid: int, error: str) -> str:
             (attempts, error[:500], time.time() + RETRY_DELAYS[attempts - 1], mid),
         )
         return "queued"
+
+
+def stats() -> dict:
+    """Состояние очереди для диагностики: письма по статусам, возраст самого старого ожидающего, род последних ошибок.
+    Адресов и текстов писем здесь нет."""
+    with db() as conn:
+        by_status = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) n FROM outbox GROUP BY status")}
+        oldest = conn.execute("SELECT MIN(created_at) FROM outbox WHERE status='queued'").fetchone()[0]
+        errors: dict[str, int] = {}
+        for r in conn.execute(
+            "SELECT last_error FROM outbox WHERE status IN ('queued','failed') AND last_error IS NOT NULL"
+        ):
+            cls = r["last_error"].split(":")[0].split(" ")[0]
+            errors[cls] = errors.get(cls, 0) + 1
+        last = conn.execute(
+            "SELECT status, attempts, last_error FROM outbox WHERE last_error IS NOT NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    return {
+        "queued": by_status.get("queued", 0),
+        "sent": by_status.get("sent", 0),
+        "failed": by_status.get("failed", 0),
+        "oldest_queued_seconds": int(time.time() - oldest) if oldest else 0,
+        "errors": errors,
+        "last_error": last["last_error"] if last else None,
+    }
+
+
+def requeue_failed(max_age_seconds: int = 86400) -> int:
+    """Вернуть в очередь письма со статусом failed за последние сутки (после исправления SMTP_*).
+    Вложения у failed удалены, поэтому подходят только письма без них."""
+    now = time.time()
+    with db() as conn:
+        return conn.execute(
+            "UPDATE outbox SET status='queued', attempts=0, next_try=?, last_error=NULL"
+            " WHERE status='failed' AND kind NOT IN ('report') AND created_at>?",
+            (now, now - max_age_seconds),
+        ).rowcount
 
 
 def message(mid: int) -> dict | None:

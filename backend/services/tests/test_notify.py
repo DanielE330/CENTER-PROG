@@ -63,6 +63,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "sub" / "notify.db"))
     monkeypatch.setattr(na, "SCHEDULER", False)
     na._subscribed.clear()
+    mailer._sent_at.clear()
     mesh, smtp = Mesh(), Smtp()
     monkeypatch.setattr(na.app.state, "transport", httpx.MockTransport(mesh.handler), raising=False)
     monkeypatch.setattr(mailer, "send_impl", smtp)

@@ -1451,7 +1451,12 @@ pub fn obligation_to_event(it: &Value) -> Option<Value> {
         _ => return None,
     };
     let date = NaiveDate::parse_from_str(it["date"].as_str()?, "%Y-%m-%d").ok()?;
-    let source = if it["kind"].as_str() == Some("contract") { "contract" } else { "invoice" };
+    // документы из 1С помечаем отдельным источником, чтобы в прогнозе было видно, откуда счёт или платёжка
+    let source = match (it["source"].as_str(), it["kind"].as_str()) {
+        (Some("onec"), _) => "onec",
+        (_, Some("contract")) => "contract",
+        _ => "invoice",
+    };
     let title: String = it["title"].as_str().filter(|t| !t.trim().is_empty()).unwrap_or("Обязательство из интеграции").chars().take(200).collect();
     let confidence = it["confidence"].as_f64().unwrap_or(0.8).clamp(0.0, 1.0);
     Some(json!({"external_id": external_id, "date": date, "amount_kop": signed, "title": title.trim(),
@@ -1543,6 +1548,9 @@ mod tests {
         assert_eq!(e["source"], "contract");
         let inv = json!({"external_id": "x2", "kind": "act", "direction": "in", "date": "2026-10-05", "amount_kop": 500, "title": "t"});
         assert_eq!(obligation_to_event(&inv).unwrap()["source"], "invoice");
+        let order = json!({"external_id": "pp1", "source": "onec", "kind": "payment_order", "direction": "out", "date": "2026-10-24", "amount_kop": "15000000", "title": "Платёжное поручение № 101", "counterparty": "ЦТСК ООО", "confidence": 0.97});
+        let e = obligation_to_event(&order).unwrap();
+        assert_eq!((e["source"].as_str(), e["amount_kop"].as_i64(), e["confidence"].as_f64()), (Some("onec"), Some(-15_000_000), Some(0.97)));
         assert!(obligation_to_event(&json!({"direction": "in"})).is_none());
         assert!(obligation_to_event(&json!({"external_id": "a", "direction": "up", "date": "2026-10-05", "amount_kop": "1"})).is_none());
     }

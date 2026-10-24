@@ -25,6 +25,9 @@ services:
     environment:
       AUTH_DB: /data/auth.db
       DEMO_SEED: ${DEMO_SEED:-1}
+      # тестовый вход (кнопки на странице входа): auth снимает у демо-сотрудников обязательную смену пароля и создаёт директора с этим паролем
+      DEMO_LOGIN: ${DEMO_LOGIN:-${DEMO_SEED:-1}}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo12345}
       # ключ шифрования секретов TOTP (пусто — файл mfa.key в томе); AUTH_REQUIRE_2FA=1 — 2FA для всех, кто входит по паролю
       AUTH_MFA_KEY: ${AUTH_MFA_KEY:-}
       AUTH_REQUIRE_2FA: ${AUTH_REQUIRE_2FA:-0}
@@ -116,17 +119,58 @@ services:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8012/live', timeout=2)"]
 
+  fns-sim:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: fns_sim}
+    # имитатор источников ФНС (ЕНС, реестры контрагентов): данные из датасета, детерминированы по ИНН; только внутренняя сеть
+    environment:
+      MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
+      MOCK_DATASET_DIR: /dataset
+      FNS_SIM_TOKEN: ${FNS_SIM_TOKEN:-fns-sim-demo}
+    networks: [internal]
+    volumes: ["${DATASET_DIR:-../data/demo}:/dataset:ro"]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8016/live', timeout=2)"]
+
+  fns:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: fns}
+    # сведения ФНС. FNS_MODE=sim (по умолчанию) работает без сети через fns-sim. Режим live (реальные открытые источники)
+    # выключен: включается FNS_MODE=live и файлом docker-compose.fns-live.yml, который даёт сервису выход наружу (docs/fns.md)
+    environment:
+      FNS_MODE: ${FNS_MODE:-sim}
+      FNS_DB: /data/fns.db
+      FNS_SIM_URL: http://fns-sim:8016
+      FNS_SIM_TOKEN: ${FNS_SIM_TOKEN:-fns-sim-demo}
+      GOV_URL: http://gov:8003
+      FNS_CONTACT: ${FNS_CONTACT:-https://github.com/DanielE330/CI-hack}
+      FNS_MIN_INTERVAL: ${FNS_MIN_INTERVAL:-1.0}
+      FNS_CACHE_TTL: ${FNS_CACHE_TTL:-86400}
+    volumes: [fns-data:/data]
+    networks: [internal]
+    depends_on:
+      fns-sim: {condition: service_healthy}
+      gov: {condition: service_healthy}
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8015/live', timeout=2)"]
+
   integrator:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: integrator}
-    # имитаторы 1С/ЭДО/банка и integrator живут только во внутренней сети
+    # по умолчанию ходит в имитаторы 1С/ЭДО/банка; с ONEC_URL из infra/.env — в настоящую 1С (например, 1С:Фреш),
+    # поэтому у integrator есть выход наружу (edge)
     environment:
-      ONEC_URL: http://onec:8004
+      ONEC_URL: ${ONEC_URL:-http://onec:8004}
+      ONEC_USER: ${ONEC_USER:-demo}
+      ONEC_PASSWORD: ${ONEC_PASSWORD:-demo}
       EDO_URL: http://edo:8005
       BANK_URL: http://bank:8006
       MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
-      INTEGRATOR_TODAY: ${MOCK_TODAY:-2026-09-29}
-    networks: [internal]
+      INTEGRATOR_TODAY: ${INTEGRATOR_TODAY:-${MOCK_TODAY:-2026-09-29}}
+      INTEGRATOR_TIMEOUT: ${INTEGRATOR_TIMEOUT:-30}
+    networks: [internal, edge]
     depends_on:
       onec: {condition: service_healthy}
       edo: {condition: service_healthy}
@@ -247,7 +291,12 @@ services:
       SMTP_SECURITY: ${SMTP_SECURITY:-}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      MAIL_FROM: ${MAIL_FROM:-}
+      MAIL_FROM: ${MAIL_FROM:-}        # пусто — адрес SMTP_USER (провайдеры принимают только свой адрес отправителя)
+      SMTP_HELO: ${SMTP_HELO:-}        # имя в EHLO; пусто — хост из PUBLIC_URL или домен отправителя
+      SMTP_TLS_VERIFY: ${SMTP_TLS_VERIFY:-1}   # 0 — не проверять сертификат (только для своего сервера с самоподписанным)
+      SMTP_CA_FILE: ${SMTP_CA_FILE:-}  # путь к корневому сертификату внутри контейнера (смонтируйте файл через override)
+      SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-15}
+      SMTP_MAX_PER_MINUTE: ${SMTP_MAX_PER_MINUTE:-30}   # лимит скорости; 0 — без лимита
       # прежние переменные notifier (.env из ura): понимаются, если новых нет
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_SSL: ${SMTP_SSL:-}
@@ -338,7 +387,11 @@ services:
       DEMO_FEED_URL: http://demo-feed:8012
       BACKOFFICE_URL: http://backoffice:8013
       NOTIFY_URL: http://notify:8014
+      FNS_URL: http://fns:8015
       DEMO_FEED_ENABLED: ${DEMO_FEED_ENABLED:-${DEMO_SEED:-1}}  # демо «Прошла неделя» только для demo@example.com
+      # кнопки «Тестовый вход» (Директор / Редактор / Наблюдатель) на странице входа; на публичном стенде с настоящими данными: DEMO_LOGIN=0
+      DEMO_LOGIN: ${DEMO_LOGIN:-${DEMO_SEED:-1}}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo12345}
       WEB_DIR: /app/frontend/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     networks: [internal, edge]
@@ -351,6 +404,7 @@ services:
       notifier: {condition: service_healthy}
       backoffice: {condition: service_started}
       notify: {condition: service_started}
+      fns: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/live"]
       interval: 10s
@@ -384,3 +438,4 @@ volumes:
   llm-gateway-data:
   backoffice-data:
   notify-data:
+  fns-data:

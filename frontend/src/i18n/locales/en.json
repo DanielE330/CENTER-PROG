@@ -43,6 +43,23 @@
     "haveAccount": "Already have an account? Sign in",
     "or": "or",
     "logout": "Sign out",
+    "demo": {
+      "title": "Test sign-in",
+      "lead": "Open the demo company in one click, no password needed. Pick a role to see what it can do.",
+      "listLabel": "Demo accounts",
+      "director": {
+        "name": "Director",
+        "hint": "Role \u201cOwner\u201d: all data, the team, company settings and sign-in methods."
+      },
+      "editor": {
+        "name": "Editor",
+        "hint": "Role \u201cAnalyst\u201d: view and change data (imports, payments, categories), no team management."
+      },
+      "viewer": {
+        "name": "Viewer",
+        "hint": "Read-only: forecast, transactions and reports, nothing can be changed."
+      }
+    },
     "mfa": {
       "setupTitle": "Set up two-factor authentication",
       "setupText": "It is mandatory for the operator. Scan the QR code in an authenticator app (Google Authenticator, Microsoft Authenticator) and enter the 6-digit code.",
@@ -73,7 +90,7 @@
       "signRegister": "Sign and register",
       "companyRequired": "Enter the legal entity name above first"
     },
-    "directorNoteLogin": "The director signs in with email and password or with an e-signature. Employees sign in with the email and password given by the director.",
+    "directorNoteLogin": "The director signs in with email and password or with an e-signature. Employees sign in with email and password: they can set the password via the link in the invitation email.",
     "directorNoteRegister": "The director must have a password: after registering with an e-signature you will be asked to set an email and password."
   },
   "cades": {
@@ -147,10 +164,12 @@
     "txAuto": "Auto category"
   },
   "source": {
+    "fns": "Tax service",
     "recurring": "Recurring",
     "manual": "Manual",
     "invoice": "Invoice",
     "contract": "Contract",
+    "onec": "1C",
     "tax": "Tax calendar",
     "event": "Expected event",
     "scenario": "Scenario"
@@ -177,11 +196,25 @@
     "unknown": "Unknown error"
   },
   "apiErrors": {
+    "inn_required": "Enter the TIN in the company details: tax service data is requested by TIN",
+    "fns_unavailable": "The tax service is unavailable right now, try again later",
+    "fns_unknown_taxpayer": "The taxpayer was not found in the tax service source",
+    "fns_ens_not_imported": "The account comes from a statement: upload the statement of settlements",
+    "fns_import_bad_file": "The file could not be read. Use the KND 1160080 statement (XML) or a CSV",
+    "fns_import_unrecognized": "No account balance or arrears found in the file. Upload the KND 1160080 statement or a CSV",
+    "fns_import_wrong_form": "This is not a statement of settlements (KND 1160080)",
+    "fns_import_inn_mismatch": "The TIN in the statement does not match the company TIN",
+    "fns_import_too_large": "The file is larger than 1 MB",
+    "invalid_top": "Number of counterparties: 1 to 50",
     "invalid_credentials": "Wrong email or password",
     "invalid_mfa_code": "Wrong code. Check your phone clock or use a backup code",
     "mfa_session_expired": "The code entry timed out, please sign in again",
     "mfa_required": "This account uses two-factor authentication: sign in with email, password and code",
     "too_many_attempts": "Too many attempts, please wait a few minutes",
+    "demo_disabled": "Test sign-in is turned off on this server",
+    "invalid_account": "Unknown demo account",
+    "demo_account_unavailable": "The demo account is unavailable: demo data has not been loaded yet",
+    "demo_rate_limited": "Too many test sign-in attempts, please wait a minute",
     "email_taken": "This email is already registered",
     "invalid_email": "Invalid email",
     "invalid_password": "Password must be 8 to 128 characters",
@@ -233,16 +266,26 @@
     "invalid_current_password": "The current password is incorrect",
     "user_not_found": "Employee not found",
     "token_not_found": "Token not found",
-    "token_invalid": "The link is invalid or has expired. Request a new letter",
-    "too_many_requests": "The letter has already been sent, try again in a minute",
+    "token_invalid": "The link is invalid or has expired. Request a new email",
+    "too_many_requests": "The email has already been sent, try again in a minute",
     "already_verified": "The email is already confirmed",
-    "email_not_verified": "Confirm your email first: the link is in the letter sent after registration",
+    "email_not_verified": "Confirm your email first: the link is in the email sent after registration",
     "notify_unavailable": "The notification service is unavailable, try again later",
     "mail_limited": "Too many invitations this hour, try again later"
   },
   "quality": {
     "title": "Data quality",
     "history": "History: {{count}} d",
+    "notes": {
+      "short60": "History is shorter than 60 days: regular payments cannot be detected, the forecast is approximate",
+      "short180": "History is shorter than 6 months: seasonality is not accounted for",
+      "gaps": "Gaps found in the statement: {{count}} ({{days}} d in total); these days are excluded from the residual flow, the balance after a gap \"jumps\"",
+      "overdraft": "The history contains a negative balance (overdraft)",
+      "noRules": "No regular payments found",
+      "fewData": "Too little data for the residual flow: the average is used",
+      "bridge": "The statement ends on {{date}}: {{days}} d up to today are estimated by the model, upload a fresh statement",
+      "stale": "Statement data is current as of {{date}}, more than {{days}} d ago: the forecast is unreliable"
+    },
     "level": {
       "good": "Good",
       "medium": "Medium",
@@ -430,6 +473,94 @@
       "category": "Category",
       "status": "Category status",
       "amount": "Amount"
+    }
+  },
+  "fns": {
+    "modeSim": "simulation",
+    "sync": "Update taxes from the Federal Tax Service",
+    "importOpen": "Upload the unified account statement",
+    "checkedAt": "checked {{at}}",
+    "noInnTitle": "Company TIN is not set",
+    "noInnText": "Tax service data is requested by TIN. Enter it in the company details.",
+    "toSettings": "Open settings",
+    "syncDoneTitle": "Taxes from the Federal Tax Service added",
+    "syncDoneText": "Tax events for {{year}}: {{created}} created, {{skipped}} already existed.",
+    "syncEstimated": "For {{count}} payments the amount is estimated from the statement.",
+    "syncNoAmount": "For {{count}} payments the amount cannot be estimated (annual taxes, income-based contributions): add it manually.",
+    "syncSim": "Simulated tax service data, not real.",
+    "sourceName": {
+      "fns_sim": "Tax service simulator",
+      "import": "Tax service statement",
+      "egrul": "Business registry",
+      "data_nalog": "Tax open data",
+      "fedresurs": "Bankruptcy registry",
+      "unavailable": "unavailable"
+    },
+    "ens": {
+      "title": "Unified tax account",
+      "subtitle": "Balance, arrears and upcoming payments",
+      "balance": "Account balance",
+      "debt": "Arrears",
+      "noDebt": "none",
+      "debtNote": "The tax account has arrears: they are in the forecast as an overdue payment.",
+      "payment": "Payment",
+      "notImportedTitle": "No statement uploaded yet",
+      "notImportedText": "The account is only available in the taxpayer's personal cabinet. Upload the statement of settlements and the balance will appear here."
+    },
+    "import": {
+      "title": "Statement of settlements",
+      "step1": "In the taxpayer's personal cabinet open «Unified tax account».",
+      "step2": "Order the «Statement of settlements» (KND 1160080) and download it as XML.",
+      "step3": "Choose the downloaded file below. We never sign in to the cabinet for you: you upload the file.",
+      "csv": "If XML does not work, a CSV with columns as_of;balance;debt;penalty;due_date;due_amount will do (amounts in roubles, e.g. 12500.50).",
+      "file": "Statement file",
+      "checking": "Checking the file…",
+      "tooBig": "The file is larger than 1 MB: a statement is never that big.",
+      "doneTitle": "Statement uploaded",
+      "doneText": "Arrears {{debt}}, balance {{balance}}.",
+      "asOf": "Uploaded {{date}}."
+    },
+    "status": {
+      "active": "Active",
+      "liquidating": "Being liquidated",
+      "liquidated": "Liquidated",
+      "bankrupt": "Bankruptcy",
+      "not_found": "Not in the registry",
+      "invalid_inn": "Invalid TIN",
+      "unknown": "No data"
+    },
+    "risk": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "unknown": "Not checked"
+    },
+    "reason": {
+      "bankruptcy": "signs of bankruptcy",
+      "liquidating": "the company is being liquidated",
+      "liquidated": "the company is liquidated",
+      "taxDebt": "owes the tax office",
+      "unreliable": "unreliable registry data",
+      "disqualified": "disqualified director",
+      "massAddress": "mass registration address"
+    },
+    "cp": {
+      "title": "Counterparties and risks",
+      "subtitle": "Largest customers and suppliers in the open tax registries",
+      "name": "Counterparty",
+      "share": "Share of receipts",
+      "status": "Status",
+      "debt": "Tax debt",
+      "risk": "Risk",
+      "noDebt": "none",
+      "riskyTitle": "Large customer at risk: «{{name}}», {{share}} of receipts",
+      "riskyText": "This customer has signs that may delay or stop its payments:",
+      "riskyScenario": "Check the «customer does not pay» scenario",
+      "emptyTitle": "No counterparties yet",
+      "emptyText": "They will appear after a statement is uploaded.",
+      "source": "Source: {{source}}",
+      "checked": "checked {{date}}",
+      "notSaved": "risk flags were not saved, the forecast will not use them"
     }
   },
   "obligations": {
@@ -1043,7 +1174,19 @@
       "member.delete": "Staff member removed",
       "member.reset_password": "Staff password reset",
       "team.invite_accept": "Invitation accepted",
-      "account.token_revoke_other": "Staff API token revoked"
+      "account.token_revoke_other": "Staff API token revoked",
+      "account.password_change": "Password changed",
+      "account.credentials_set": "Email and password set",
+      "notifications.update": "Notification settings changed",
+      "team.activity_export": "Activity log exported",
+      "event.tax_calendar": "Tax calendar added",
+      "company.ban": "Company blocked",
+      "company.unban": "Company unblocked",
+      "member.add": "Staff member added",
+      "member.role": "Staff role changed",
+      "member.remove": "Staff member removed",
+      "member.join": "Staff member joined",
+      "member.transfer": "Ownership transferred"
     },
     "export": "Download CSV"
   },
@@ -1203,7 +1346,7 @@
     "createdTitle": "Employee added",
     "createdText": "If the email invitation does not arrive, give the password to {{email}} yourself. They must change it at first sign-in.",
     "resetDoneTitle": "Password reset",
-    "resetDoneText": "The letter with a link could not be sent, so here is a new password for {{email}}. All their sessions are closed; they must change the password at sign-in.",
+    "resetDoneText": "The email with a link could not be sent, so here is a new password for {{email}}. All their sessions are closed; they must change the password at sign-in.",
     "passwordAria": "Generated password",
     "onceTitle": "The password is shown only once",
     "onceText": "After you close this window the password cannot be shown again: copy it now. If you lose it, reset the password again.",
@@ -1216,9 +1359,9 @@
     "transferText": "{{email}} becomes the owner and you become an administrator. Only the new owner can give ownership back.",
     "transferConfirm": "Transfer ownership",
     "inviteMailedTitle": "Invitation sent",
-    "inviteMailedText": "A letter with a link was sent to {{email}}: the employee will set their own password. The link is valid for 72 hours.",
+    "inviteMailedText": "An email with a link was sent to {{email}}: the employee will set their own password. The link is valid for 72 hours.",
     "resetMailedTitle": "Password reset",
-    "resetMailedText": "The employee's sessions are closed. A letter with a link to set a new password was sent to {{email}} (valid for 72 hours)."
+    "resetMailedText": "The employee's sessions are closed. An email with a link to set a new password was sent to {{email}} (valid for 72 hours)."
   },
   "mail": {
     "forgot": {
@@ -1227,8 +1370,8 @@
       "text": "Enter the email you sign in with. We will send you a link to set a new password.",
       "submit": "Send link",
       "sentTitle": "Check your inbox",
-      "sentText": "If {{email}} is registered, a letter with a link has been sent to it. The link is valid for 1 hour.",
-      "noLetter": "No letter? Check the spam folder or request a new link in a minute. The company owner or an administrator can also reset an employee's password."
+      "sentText": "If {{email}} is registered, an email with a link has been sent to it. The link is valid for 1 hour.",
+      "noLetter": "No email? Check the spam folder or request a new link in a minute. The company owner or an administrator can also reset an employee's password."
     },
     "reset": {
       "title": "New password",
@@ -1244,21 +1387,21 @@
     "verify": {
       "title": "Email confirmation",
       "doneTitle": "Email confirmed",
-      "doneText": "Cash gap alerts and reports can now come to this address. Letters can be set up in Settings.",
-      "expiredText": "The link has already been used or has expired (it is valid for 24 hours). Sign in and click \"Send the letter again\" in the top bar."
+      "doneText": "Cash gap alerts and reports can now come to this address. Emails can be set up in Settings.",
+      "expiredText": "The link has already been used or has expired (it is valid for 24 hours). Sign in and click \"Send the email again\" in the top bar."
     },
     "unsubscribe": {
       "title": "Unsubscribe",
       "doneTitle": "You have unsubscribed",
-      "doneText": "Alerts and reports will no longer be emailed. Sign-in letters (password recovery) still arrive. You can turn mailings back on in Settings.",
-      "expiredText": "The link is invalid. Letters can be managed in Settings → Email notifications.",
+      "doneText": "Alerts and reports will no longer be emailed. Sign-in emails (password recovery) still arrive. You can turn mailings back on in Settings.",
+      "expiredText": "The link is invalid. Emails can be managed in Settings → Email notifications.",
       "toSettings": "Open settings"
     },
     "banner": {
       "text": "Confirm your email {{email}}: until it is confirmed, alerts and reports are not emailed.",
-      "sent": "A letter has been sent to {{email}}. Follow the link in it.",
+      "sent": "An email has been sent to {{email}}. Follow the link in it.",
       "sentShort": "Sent",
-      "resend": "Send the letter again"
+      "resend": "Send the email again"
     },
     "settings": {
       "title": "Email notifications",
@@ -1266,15 +1409,15 @@
       "verified": "confirmed",
       "unverified": "not confirmed",
       "lockedTitle": "Email not confirmed",
-      "lockedText": "Follow the link from the letter sent after registration. Mailings are off until the email is confirmed.",
+      "lockedText": "Follow the link from the email sent after registration. Mailings are off until the email is confirmed.",
       "alerts": "Cash gap alerts",
-      "alertsHint": "A warning 7, 3 and 1 day before a possible gap, a letter when the risk goes down, and missed plan-fact payments.",
+      "alertsHint": "A warning 7, 3 and 1 day before a possible gap, an email when the risk goes down, and missed plan-fact payments.",
       "reports": "Reports",
       "reportsHint": "Risk report, weekly and monthly results with a chart; the monthly one comes with an Excel file.",
       "schedule": "When reports arrive and the alert probability threshold are set by the owner or an administrator in \"Notification schedule\".",
       "scheduleLink": "Open the schedule",
-      "test": "Send a test letter",
-      "testSent": "A test letter has been sent to {{email}}."
+      "test": "Send a test email",
+      "testSent": "A test email has been sent to {{email}}."
     },
     "expiredTitle": "The link is invalid",
     "checking": "Checking the link…",

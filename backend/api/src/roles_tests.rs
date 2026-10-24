@@ -48,7 +48,7 @@ struct Mem {
 }
 
 #[derive(Default)]
-struct Fake {
+pub(crate) struct Fake {
     users: Vec<User>,
     sessions: HashMap<String, String>,
     /// сырой токен -> (id токена, user_id, название)
@@ -64,9 +64,17 @@ struct Fake {
     /// письма, принятые заглушкой notify (тело запроса /internal/v1/send)
     mails: Vec<Value>,
     notify_down: bool,
+    /// ИНН компаний (company_id -> inn) для ответов members/by-user
+    pub(crate) inns: HashMap<String, String>,
+    /// ожидаемые события, принятые заглушкой ledger через expected-events/bulk (идемпотентно по external_id)
+    pub(crate) bulk: Vec<Value>,
+    pub(crate) snapshot: Option<Value>,
+    pub(crate) top: Option<Value>,
+    /// тела PUT counterparty-risk
+    pub(crate) risk_puts: Vec<Value>,
 }
 
-type Shared = Arc<Mutex<Fake>>;
+pub(crate) type Shared = Arc<Mutex<Fake>>;
 type Resp = (StatusCode, Json<Value>);
 
 fn detail(s: StatusCode, code: &str) -> Resp {
@@ -262,7 +270,7 @@ async fn a_tokens_of(State(f): State<Shared>, Query(q): Query<HashMap<String, St
 
 fn view(g: &Fake, cid: &str, role: &str) -> Value {
     let c = &g.companies[cid];
-    json!({"company_id": cid, "company_name": c.name, "inn": "", "ogrn": "", "role": role, "banned": c.banned.is_some(), "ban_reason": c.banned})
+    json!({"company_id": cid, "company_name": c.name, "inn": g.inns.get(cid).cloned().unwrap_or_default(), "ogrn": "", "role": role, "banned": c.banned.is_some(), "ban_reason": c.banned})
 }
 
 async fn l_ensure(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
@@ -467,6 +475,37 @@ async fn n_send(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
     (StatusCode::ACCEPTED, Json(json!({"id": g.mails.len(), "status": "queued"})))
 }
 
+async fn l_snapshot(State(f): State<Shared>) -> Resp {
+    let g = f.lock().unwrap();
+    (StatusCode::OK, Json(g.snapshot.clone().unwrap_or_else(|| json!({"data_revision": 1, "transactions": [], "events": []}))))
+}
+
+async fn l_bulk(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    let (mut created, mut skipped) = (0, 0);
+    for e in b["events"].as_array().cloned().unwrap_or_default() {
+        if e["external_id"].is_string() && g.bulk.iter().any(|x| x["external_id"] == e["external_id"]) {
+            skipped += 1;
+        } else {
+            g.bulk.push(e);
+            created += 1;
+        }
+    }
+    (StatusCode::OK, Json(json!({"created": created, "skipped": skipped, "ids": []})))
+}
+
+async fn l_top(State(f): State<Shared>) -> Resp {
+    let g = f.lock().unwrap();
+    (StatusCode::OK, Json(g.top.clone().unwrap_or_else(|| json!({"items": [], "total_income_kop": 0}))))
+}
+
+async fn l_risk_put(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    let n = b["items"].as_array().map_or(0, Vec::len);
+    g.risk_puts.push(b);
+    (StatusCode::OK, Json(json!({"upserted": n, "changed": n})))
+}
+
 async fn fallback() -> Json<Value> {
     Json(json!({"items": [], "ok": true}))
 }
@@ -494,6 +533,10 @@ fn fake_router(f: Shared) -> Router {
         .route("/internal/v1/companies/ensure", post(l_ensure))
         .route("/internal/v1/members/by-user/{uid}", get(l_by_user))
         .route("/internal/v1/companies/{cid}", patch(l_company_patch))
+        .route("/internal/v1/companies/{cid}/snapshot", get(l_snapshot))
+        .route("/internal/v1/companies/{cid}/expected-events/bulk", post(l_bulk))
+        .route("/internal/v1/companies/{cid}/counterparties/top", get(l_top))
+        .route("/internal/v1/companies/{cid}/counterparty-risk", axum::routing::put(l_risk_put))
         .route("/internal/v1/companies/{cid}/members", get(l_members).post(l_member_add))
         .route("/internal/v1/companies/{cid}/members/join", post(l_member_join))
         .route("/internal/v1/companies/{cid}/members/{uid}", patch(l_member_patch).delete(l_member_delete))
@@ -510,14 +553,19 @@ fn fake_router(f: Shared) -> Router {
 }
 
 // ---------- окружение теста ----------
-struct T {
-    app: Router,
-    f: Shared,
-    st: AppState,
+pub(crate) struct T {
+    pub(crate) app: Router,
+    pub(crate) f: Shared,
+    pub(crate) st: AppState,
 }
 
 impl T {
-    async fn new() -> T {
+    pub(crate) async fn new() -> T {
+        T::with_fns(None).await
+    }
+
+    /// `fns_base` — адрес заглушки сервиса fns; по умолчанию fns отвечает той же общей заглушкой.
+    pub(crate) async fn with_fns(fns_base: Option<String>) -> T {
         let f: Shared = Arc::default();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
@@ -536,6 +584,7 @@ impl T {
             notifier: up("notifier"),
             backoffice: up("backoffice"),
             notify: up("notify"),
+            fns: Upstream::new("fns", "тест", fns_base.as_deref().unwrap_or(&base), 10),
             demo: Arc::new(demo::Demo { enabled: false, email: "demo@example.com".into(), external_company: "C001".into(), feed: up("demo_feed") }),
             cfg: Arc::new(Config { cookie_secure: false }),
         };
@@ -544,7 +593,7 @@ impl T {
     }
 
     /// Пользователь с паролем; `member` — (компания, роль), иначе без членства.
-    fn user(&self, email: &str, password: &str, has_email: bool) -> String {
+    pub(crate) fn user(&self, email: &str, password: &str, has_email: bool) -> String {
         let mut g = self.f.lock().unwrap();
         g.seq += 1;
         let id = format!("u{}", g.seq);
@@ -552,7 +601,7 @@ impl T {
         id
     }
 
-    fn session(&self, uid: &str) -> String {
+    pub(crate) fn session(&self, uid: &str) -> String {
         let mut g = self.f.lock().unwrap();
         g.seq += 1;
         let tok = format!("sess-{}", g.seq);
@@ -560,7 +609,7 @@ impl T {
         tok
     }
 
-    fn company(&self, name: &str, director: &str) -> String {
+    pub(crate) fn company(&self, name: &str, director: &str) -> String {
         let mut g = self.f.lock().unwrap();
         g.seq += 1;
         let cid = format!("c{}", g.seq);
@@ -570,21 +619,25 @@ impl T {
         cid
     }
 
-    fn join(&self, cid: &str, uid: &str, role: &str) {
+    pub(crate) fn join(&self, cid: &str, uid: &str, role: &str) {
         let mut g = self.f.lock().unwrap();
         let email = g.users.iter().find(|u| u.id == uid).map(|u| u.email.clone()).unwrap_or_default();
         g.members.push(Mem { cid: cid.into(), uid: uid.into(), email, role: role.into() });
     }
 
-    fn set_role(&self, uid: &str, role: &str) {
+    pub(crate) fn uid_by_role(&self, cid: &str, role: &str) -> String {
+        self.f.lock().unwrap().members.iter().find(|m| m.cid == cid && m.role == role).unwrap().uid.clone()
+    }
+
+    pub(crate) fn set_role(&self, uid: &str, role: &str) {
         self.f.lock().unwrap().members.iter_mut().find(|m| m.uid == uid).unwrap().role = role.into();
     }
 
-    fn ban(&self, cid: &str, reason: Option<&str>) {
+    pub(crate) fn ban(&self, cid: &str, reason: Option<&str>) {
         self.f.lock().unwrap().companies.get_mut(cid).unwrap().banned = reason.map(str::to_string);
     }
 
-    fn token_of(&self, uid: &str) -> String {
+    pub(crate) fn token_of(&self, uid: &str) -> String {
         let mut g = self.f.lock().unwrap();
         g.seq += 1;
         let raw = format!("ckt_{:04}yyyyyyyyyyyy", g.seq);
@@ -593,16 +646,16 @@ impl T {
         raw
     }
 
-    fn calls(&self) -> Vec<String> {
+    pub(crate) fn calls(&self) -> Vec<String> {
         self.f.lock().unwrap().calls.clone()
     }
 
-    fn companies_count(&self) -> usize {
+    pub(crate) fn companies_count(&self) -> usize {
         self.f.lock().unwrap().companies.len()
     }
 
     /// Компания с директором и сотрудниками по ролям; возвращает (cid, токены сессий director/editor/viewer).
-    fn team(&self) -> (String, [String; 3]) {
+    pub(crate) fn team(&self) -> (String, [String; 3]) {
         let d = self.user("dir@x.ru", "dir-pass-1", true);
         let cid = self.company("Ромашка", &d);
         let e = self.user("ed@x.ru", "ed-pass-12", true);
@@ -613,14 +666,14 @@ impl T {
     }
 
     /// То же с администратором: токены сессий director/admin/editor/viewer.
-    fn team4(&self) -> (String, [String; 4]) {
+    pub(crate) fn team4(&self) -> (String, [String; 4]) {
         let (cid, [d, e, v]) = self.team();
         let a = self.user("adm@x.ru", "adm-pass-12", true);
         self.join(&cid, &a, "admin");
         (cid, [d, self.session(&a), e, v])
     }
 
-    async fn send(&self, method: &str, uri: &str, cookie: Option<&str>, bearer: Option<&str>, body: Option<Value>) -> (StatusCode, Value) {
+    pub(crate) async fn send(&self, method: &str, uri: &str, cookie: Option<&str>, bearer: Option<&str>, body: Option<Value>) -> (StatusCode, Value) {
         let mut rb = Request::builder().method(method).uri(uri).header("content-type", "application/json");
         if let Some(c) = cookie {
             rb = rb.header("cookie", format!("session={c}"));
@@ -635,12 +688,12 @@ impl T {
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
-    async fn call(&self, method: &str, uri: &str, tok: &str, body: Option<Value>) -> (StatusCode, Value) {
+    pub(crate) async fn call(&self, method: &str, uri: &str, tok: &str, body: Option<Value>) -> (StatusCode, Value) {
         self.send(method, uri, Some(tok), None, body).await
     }
 }
 
-fn code(v: &Value) -> &str {
+pub(crate) fn code(v: &Value) -> &str {
     v["error"]["code"].as_str().unwrap_or("")
 }
 
@@ -684,6 +737,10 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
         ("DELETE", format!("{co}/expected-events/e1"), Edit),
         ("POST", format!("{co}/expected-events/tax-calendar"), Edit),
         ("POST", format!("{co}/integrations/sync"), Edit),
+        ("POST", format!("{co}/integrations/fns/sync"), Edit),
+        ("GET", format!("{co}/fns/ens"), Read),
+        ("POST", format!("{co}/fns/ens/import"), Edit),
+        ("GET", format!("{co}/fns/counterparties"), Read),
         ("POST", format!("{co}/advisor/ask"), Read),
         ("POST", format!("{co}/advisor/suggestions/apply"), Edit),
         ("GET", format!("{co}/demo/status"), Read),
@@ -759,7 +816,7 @@ async fn every_route_enforces_its_permission_for_each_role() {
     let (cid, toks) = t.team4();
     let roles = ["director", "admin", "editor", "viewer"];
     let table = route_table(&cid);
-    assert_eq!(table.len(), 56, "таблица маршрутов должна совпадать с docs/roles.md");
+    assert_eq!(table.len(), 60, "таблица маршрутов должна совпадать с docs/roles.md");
     for (method, uri, need) in &table {
         for (i, tok) in toks.iter().enumerate() {
             let before = t.calls().len();

@@ -142,17 +142,58 @@ pub async fn get_company(State(st): State<AppState>, Path(cid): Path<String>) ->
 
 #[derive(Deserialize)]
 pub struct CompanyPatch {
-    name: String,
+    #[serde(default)]
+    name: Option<String>,
+    /// реквизиты: пустая строка очищает, иначе только цифры (ИНН 10 или 12, ОГРН 13 или 15)
+    #[serde(default)]
+    inn: Option<String>,
+    #[serde(default)]
+    ogrn: Option<String>,
+}
+
+fn requisite(v: &Option<String>, lens: &[usize], code: &str, msg: &str) -> R<Option<String>> {
+    let Some(s) = v.as_deref().map(str::trim) else { return Ok(None) };
+    if s.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    if s.bytes().all(|b| b.is_ascii_digit()) && lens.contains(&s.len()) {
+        Ok(Some(s.to_string()))
+    } else {
+        Err(err(StatusCode::UNPROCESSABLE_ENTITY, code, msg))
+    }
 }
 
 pub async fn update_company(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<CompanyPatch>) -> R<Json<Value>> {
-    let name = b.name.trim();
-    if name.chars().count() < 2 || name.chars().count() > 200 {
-        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_company_name", "Название от 2 до 200 символов"));
+    let name = match b.name.as_deref().map(str::trim) {
+        Some(n) if n.chars().count() < 2 || n.chars().count() > 200 => {
+            return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_company_name", "Название от 2 до 200 символов"));
+        }
+        Some(n) => Some(n.to_string()),
+        None => None,
+    };
+    let inn = requisite(&b.inn, &[10, 12], "invalid_inn", "ИНН: 10 или 12 цифр")?;
+    let ogrn = requisite(&b.ogrn, &[13, 15], "invalid_ogrn", "ОГРН: 13 или 15 цифр")?;
+    if name.is_none() && inn.is_none() && ogrn.is_none() {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "empty_patch", "Нечего менять"));
     }
-    lock(&st).execute("UPDATE companies SET name=? WHERE id=?", params![name, cid]).map_err(internal)?;
+    let c = lock(&st);
+    if let Some(n) = &name {
+        c.execute("UPDATE companies SET name=? WHERE id=?", params![n, cid]).map_err(internal)?;
+    }
+    if let Some(v) = &inn {
+        c.execute("UPDATE companies SET inn=? WHERE id=?", params![v, cid]).map_err(internal)?;
+    }
+    if let Some(v) = &ogrn {
+        c.execute("UPDATE companies SET ogrn=? WHERE id=?", params![v, cid]).map_err(internal)?;
+    }
+    let (name, inn, ogrn): (String, String, String) = c
+        .query_row("SELECT name, inn, ogrn FROM companies WHERE id=?", [&cid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()
+        .map_err(internal)?
+        .ok_or_else(not_found)?;
+    drop(c);
     audit(&st, &ctx, &cid, "company.update", &cid, "ok");
-    Ok(Json(json!({"company_id": cid, "company_name": name})))
+    Ok(Json(json!({"company_id": cid, "company_name": name, "inn": inn, "ogrn": ogrn})))
 }
 
 // ---------- снимок для расчётных сервисов ----------
@@ -216,7 +257,7 @@ pub async fn snapshot(State(st): State<AppState>, Path(cid): Path<String>, Query
         .map_err(internal)?
         .ok_or_else(not_found)?;
     let since = q.since_rev.unwrap_or(0).max(0);
-    Ok(Json(Snapshot { data_revision: rev, tx_reset_rev: reset, transactions: load_history(&c, &cid, since)?, events: load_events(&c, &cid)? }))
+    Ok(Json(Snapshot { data_revision: rev, tx_reset_rev: reset, transactions: load_history(&c, &cid, since)?, events: load_events(&c, &cid)?, counterparty_risks: crate::counterparties::load_risks(&c, &cid, true)? }))
 }
 
 // ---------- импорт ----------
@@ -699,7 +740,7 @@ pub async fn bulk_events(State(st): State<AppState>, _ctx: Ctx, Path(cid): Path<
             )
             .map_err(internal)?;
         for e in &b.events {
-            if e.amount_kop == 0 || !["manual", "invoice", "contract", "tax"].contains(&e.source.as_str()) || !(0.0..=1.0).contains(&e.confidence) {
+            if e.amount_kop == 0 || !["manual", "invoice", "contract", "tax", "onec"].contains(&e.source.as_str()) || !(0.0..=1.0).contains(&e.confidence) {
                 return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_event", "Некорректное событие"));
             }
             let id = uuid::Uuid::new_v4().to_string();

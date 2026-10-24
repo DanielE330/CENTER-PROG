@@ -9,7 +9,7 @@ export function ThemeToggle() {
   const next = theme === 'dark' ? 'light' : 'dark'
   const label = next === 'dark' ? t('theme.toDark') : t('theme.toLight')
   return (
-    <Tooltip text={label}>
+    <Tooltip text={label} align="end">
       <button
         onClick={() => setTheme(next)}
         aria-label={label}

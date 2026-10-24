@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::NaiveDate;
-use common::{ApiError, Ctx, Event, R, Snapshot, Tx, err, internal, money, stringify_money};
+use common::{ApiError, CounterpartyRisk, Ctx, Event, R, Snapshot, Tx, err, internal, money, stringify_money};
 use fc_model::{self as model, ForecastError, Fitted, Params, Scenario};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -54,8 +54,23 @@ fn sim_params(horizon: usize) -> Params {
     Params { horizon, today: Some(chrono::Local::now().date_naive()), ..Default::default() }
 }
 
-async fn simulate(f: Arc<Fitted>, events: Arc<Vec<Event>>, horizon: usize, scenario: Scenario) -> R<model::ForecastResult> {
-    tokio::task::spawn_blocking(move || model::simulate(&f, &events, &scenario, &sim_params(horizon))).await.map_err(internal)?.map_err(map_fc_err)
+/// То, что меняется без переобучения модели: ожидаемые события и флаги риска контрагентов (ФНС).
+struct Live {
+    events: Vec<Event>,
+    risks: Vec<CounterpartyRisk>,
+}
+
+impl Live {
+    fn of(snap: Snapshot) -> Arc<Live> {
+        Arc::new(Live { events: snap.events, risks: snap.counterparty_risks })
+    }
+}
+
+async fn simulate(f: Arc<Fitted>, live: Arc<Live>, horizon: usize, scenario: Scenario) -> R<model::ForecastResult> {
+    tokio::task::spawn_blocking(move || model::simulate_with_risk(&f, &live.events, &scenario, &sim_params(horizon), &live.risks))
+        .await
+        .map_err(internal)?
+        .map_err(map_fc_err)
 }
 
 // ---------- обновление прогноза: полный пересчёт или дописывание новых данных ----------
@@ -130,7 +145,7 @@ fn too_old(full_fit_at: &str) -> bool {
 /// дописывается операциями, появившимися после её ревизии (или используется как есть, если изменились только события);
 /// иначе — полный пересчёт по всей истории. Обученная модель сохраняется в обоих режимах, чтобы переключение режима
 /// сразу давало быстрое обновление.
-async fn prepare(st: &AppState, ctx: &Ctx, cid: &str, force_full: bool) -> R<(Arc<Fitted>, Arc<Vec<Event>>, i64, UpdateInfo)> {
+async fn prepare(st: &AppState, ctx: &Ctx, cid: &str, force_full: bool) -> R<(Arc<Fitted>, Arc<Live>, i64, UpdateInfo)> {
     let incremental = update_mode(st, cid) == "incremental";
     let mut reason = if force_full { "forced" } else if !incremental { "mode_full" } else { "first" };
     let cached = if incremental && !force_full { load_cached(st, cid) } else { None };
@@ -142,7 +157,7 @@ async fn prepare(st: &AppState, ctx: &Ctx, cid: &str, force_full: bool) -> R<(Ar
             if delta.tx_reset_rev <= c.fit_revision {
                 let (txs, balances) = history_of(&delta);
                 let rev = delta.data_revision;
-                let events = Arc::new(delta.events);
+                let events = Live::of(delta);
                 let (res, mut c) = tokio::task::spawn_blocking(move || {
                     let r = c.fitted.advance(&txs, &balances);
                     (r, c)
@@ -168,11 +183,12 @@ async fn prepare(st: &AppState, ctx: &Ctx, cid: &str, force_full: bool) -> R<(Ar
     let snap = snapshot(st, ctx, cid).await?;
     let rev = snap.data_revision;
     let (txs, balances) = history_of(&snap);
+    let live = Live::of(snap);
     let fitted = tokio::task::spawn_blocking(move || model::fit(&txs, &balances)).await.map_err(internal)?.map_err(map_fc_err)?;
     let c = Cached { full_fit_ops: fitted.n_ops, fitted, fit_revision: rev, full_fit_at: now(), ops_added: 0 };
     save_cached(st, cid, &c)?;
     let info = UpdateInfo { mode: "full", reason, ops_added: 0, full_fit_at: c.full_fit_at.clone() };
-    Ok((Arc::new(c.fitted), Arc::new(snap.events), rev, info))
+    Ok((Arc::new(c.fitted), live, rev, info))
 }
 
 fn save_run(st: &AppState, cid: &str, rev: i64, scenario: Option<&Scenario>, res: &model::ForecastResult, upd: &UpdateInfo) -> R<(String, String)> {

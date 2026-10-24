@@ -116,7 +116,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
         data: [
           { yAxis: 0, lineStyle: { color: ink, type: 'dashed', width: 1 }, label: { formatter: formatCurrency(0), color: ink, position: 'insideEndTop' } },
           ...(dates.includes(today)
-            ? [{ xAxis: today, lineStyle: { color: muted, type: 'solid' as const, width: 1 }, label: { formatter: t('chart.today'), color: muted, position: 'insideEndTop' as const } }]
+            ? [{ xAxis: today, lineStyle: { color: muted, type: 'solid' as const, width: 1 }, label: { show: dates.indexOf(today) > 2, formatter: t('chart.today'), color: muted, position: 'insideEndTop' as const } }]
             : []),
         ],
       },
