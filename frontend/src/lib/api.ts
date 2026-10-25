@@ -3,6 +3,7 @@
  * money as kopeck strings. Components never call fetch directly — they use hooks/queries.ts.
  */
 import type { AccountMethods, AuditPage, DemoLoginAccount, DemoLoginStatus, ApiTokenInfo, Backtest, Department, ExpectedEvent, FnsCounterparties, FnsEns, FnsEnsImportResult, FnsSyncResult, Goal, GoalStatus, ForecastRun, ImportPreview, DemoAdvance, DemoStatus, ImportRow, KeyRate, Me, MeWithCodes, MfaChallenge, MfaSetup, Member, NewMemberRequest, NewMemberResult, MemberResetResult, NotificationPrefs, ForecastUpdateMode, Role, NewApiToken, NewInvite, NewExpectedEvent, PlanFact, Retro, ScenarioParams, ScenarioResponse, SprintHistoryItem, SprintView, SyncResult, TgLink, TgKind, TgMember, TgPrefs, TgRole, TgStatus, TgTeam, TaxCalendarRequest, TaxCalendarResult, TeamInvite, Taxonomy, TransactionPage, FnsSettings, FnsSettingsView } from '../types'
+import type { EvalRow } from './datasetSplit'
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
 
@@ -164,6 +165,8 @@ export const api = {
   scenario: (horizonDays: number, scenario: ScenarioParams) =>
     request<ScenarioResponse>('POST', co('/scenarios'), { body: { horizon_days: horizonDays, scenario } }),
   backtest: () => request<Backtest>('GET', co('/backtest')),
+  evaluate: (company: string, rows: EvalRow[]) =>
+    request<{ company: string; operations: number; backtest: Backtest | null }>('POST', co('/evaluate'), { body: { company, rows } }),
 
   // ----- ledger -----
   transactions: (q: TransactionQuery) => {

@@ -208,6 +208,14 @@ pub struct Quality {
     pub notes: Vec<String>,
 }
 
+/// Шаг журнала расчёта: что сделала модель и с какими числами (экран «Как построен прогноз» и лог сервиса).
+#[derive(Clone, Debug, Serialize)]
+pub struct TraceStep {
+    pub step: usize,
+    pub title: String,
+    pub detail: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ForecastResult {
     pub as_of: NaiveDate,
@@ -233,6 +241,22 @@ pub struct ForecastResult {
     /// признаки калибровки риска (см. `risk_features`); в JSON не выводятся
     #[serde(skip)]
     pub risk_feats: Vec<f64>,
+    /// пошаговый журнал расчёта
+    pub trace: Vec<TraceStep>,
+}
+
+/// Сумма в копейках -> «1 234 567 ₽» для журнала расчёта.
+pub fn rub(kop: i64) -> String {
+    let r = (kop as f64 / 100.0).round() as i64;
+    let s = r.abs().to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    format!("{}{out} ₽", if r < 0 { "−" } else { "" })
 }
 
 #[derive(Debug)]
@@ -1692,6 +1716,100 @@ pub fn simulate_with_risk(f: &Fitted, events: &[Event], scenario: &Scenario, p: 
         notes.push(format!("Данные выписки актуальны на {as_of}, это более {MAX_BRIDGE_DAYS} дн. назад: прогноз ненадёжен"));
     }
 
+    // --- журнал расчёта ---
+    let mut trace: Vec<TraceStep> = vec![];
+    let mut step = |title: &str, detail: String| trace.push(TraceStep { step: trace.len() + 1, title: title.into(), detail });
+    step(
+        "Данные выписки",
+        format!(
+            "{} операций с {first} по {as_of} ({history_days} дн.). Остаток на конец выписки {}. Пропусков в выписке: {} ({gap_days_total} дн.) — эти дни не используются для статистики.",
+            f.n_ops,
+            rub(opening),
+            gaps.len()
+        ),
+    );
+    {
+        let (r_in, r_out): (Vec<&Rule>, Vec<&Rule>) = rules.iter().partition(|r| r.direction == "in");
+        let mut top: Vec<&Rule> = rules.iter().collect();
+        top.sort_by_key(|r| -r.amount.abs());
+        let names: Vec<String> = top
+            .iter()
+            .take(5)
+            .map(|r| format!("«{}» {} {}, {}", r.counterparty, if r.kind == "weekly" { "еженедельно" } else { "ежемесячно" }, rub(r.amount), if r.kind == "weekly" { format!("день недели {}", r.anchors.first().map_or(0, |a| a + 1)) } else { format!("числа {}", r.anchors.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ")) }))
+            .collect();
+        step(
+            "Регулярные платежи",
+            format!(
+                "Найдено {} регулярностей: поступлений {}, платежей {}. Признак — один контрагент и назначение, повтор не меньше 3 раз с устойчивым днём месяца/недели и похожей суммой. Крупнейшие: {}.",
+                rules.len(),
+                r_in.len(),
+                r_out.len(),
+                if names.is_empty() { "—".into() } else { names.join("; ") }
+            ),
+        );
+    }
+    {
+        let ev_in: i64 = planned.iter().filter(|x| x.source != "recurring" && x.amount > 0).map(|x| x.amount).sum();
+        let ev_out: i64 = planned.iter().filter(|x| x.source != "recurring" && x.amount < 0).map(|x| x.amount).sum();
+        let n_ev = planned.iter().filter(|x| x.source != "recurring").count();
+        let overdue = planned.iter().filter(|x| x.overdue).count();
+        step(
+            "Ожидаемые события",
+            format!(
+                "В план на горизонт вошло {} операций, из них {n_ev} — ожидаемые события (счета 1С, налоги ФНС, ручной ввод): поступления {}, платежи {}. Просроченных: {overdue} — перенесены с типичной задержкой. Событие заменяет совпадающую регулярность, чтобы не посчитать платёж дважды.{}",
+                planned.len(),
+                rub(ev_in),
+                rub(ev_out),
+                if excluded.is_empty() { String::new() } else { format!(" Исключено поступлений от ликвидируемых/банкротящихся клиентов (ФНС): {}.", excluded.len()) }
+            ),
+        );
+    }
+    step(
+        "Остаточный поток",
+        format!(
+            "Всё, что не регулярно, — остаточный поток. Окно: {n_valid} рабочих дней с {win_start} (последние до {RESIDUAL_BDAYS}). Средний день: поступления {}, списания {}. Метод: {}.",
+            rub(mean_in),
+            rub(mean_out),
+            if use_blocks { "блочный бутстрэп недель — копируются реальные недели истории целиком, с сохранением дня недели" } else { "среднее по рабочим дням (истории мало)" }
+        ),
+    );
+    step(
+        "Траектории (Монте-Карло)",
+        format!(
+            "Смоделировано {n} траекторий остатка на {} дн. (seed {}): в каждой — регулярные платежи со случайным сдвигом дня и суммой из истории, ожидаемые события и остаточный поток.{} По траекториям для каждого дня взяты квантили P10/P50/P90.",
+            h,
+            p.seed,
+            if bridge > 0 { format!(" Первые {bridge} дн. — мост от конца выписки до сегодня.") } else { String::new() }
+        ),
+    );
+    if let Some(last) = days.last() {
+        step(
+            "Прогноз остатка",
+            format!("На {}: медиана {}, коридор 80% — от {} до {}.", last.date, rub(last.p50), rub(last.p10), rub(last.p90)),
+        );
+    }
+    step(
+        "Вероятность кассового разрыва",
+        format!(
+            "Разрыв — остаток ниже нуля хотя бы в один день горизонта. Доля таких траекторий: {:.1}% ({} из {n}). {} Итог: {:.1}%, уровень «{}»{}{}.",
+            raw_probability * 100.0,
+            breaks.len(),
+            if p.calibrate && opening >= 0 {
+                "Калибровка логистической регрессией по 8 признакам (обучена на 5 314 исторических точках датасета): сырая доля, остаток к обороту, доля дней в минусе за 120 дн., минимум остатка и др.".to_string()
+            } else {
+                "Калибровка не применяется.".to_string()
+            },
+            shortfall_probability * 100.0,
+            match level { "high" => "высокий", "medium" => "средний", "low" => "низкий", _ => "нет риска" },
+            first_break_date.map_or(String::new(), |d| format!(", вероятная дата {d}")),
+            if max_deficit_p90 > 0 { format!(", дефицит в плохом случае (P90) {}", rub(max_deficit_p90)) } else { String::new() }
+        ),
+    );
+    step(
+        "Качество данных",
+        format!("Оценка «{}». {}", match level_q { "good" => "хорошее", "medium" => "среднее", _ => "низкое" }, if notes.is_empty() { "Замечаний нет.".to_string() } else { notes.join(" ") }),
+    );
+
     Ok(ForecastResult {
         as_of,
         horizon: p.horizon,
@@ -1708,6 +1826,7 @@ pub fn simulate_with_risk(f: &Fitted, events: &[Event], scenario: &Scenario, p: 
         excluded,
         scenario_client,
         risk_feats,
+        trace,
     })
 }
 
@@ -1803,6 +1922,12 @@ pub struct HorizonMetric {
     pub model_beats_baselines_share: f64,
     /// доля фактических остатков внутри полосы [p10, p90]
     pub band_coverage: f64,
+    /// MSE модели, ₽² (квадрат ошибки медианного прогноза остатка)
+    pub mse_model_rub2: f64,
+    /// корень из MSE, коп.
+    pub rmse_model: i64,
+    /// MAE в процентах медианного недельного оборота компании (сравнимо между компаниями)
+    pub mae_pct_turnover: f64,
     pub n: usize,
 }
 
@@ -1817,14 +1942,28 @@ pub struct Backtest {
     pub alarm_tp: usize,
     pub alarm_fp: usize,
     pub alarm_fn: usize,
+    /// верно «разрыва нет»: матрица ошибок — [[tn, fp], [fn, tp]]
+    pub alarm_tn: usize,
+    pub alarm_accuracy: Option<f64>,
+    pub alarm_f1: Option<f64>,
+    /// Brier score вероятности разрыва: среднее (p − факт)², 0 — идеально, 0.25 — как монетка
+    pub brier: Option<f64>,
+    /// средняя прогнозная вероятность против фактической доли окон с разрывом (калибровка)
+    pub mean_probability: Option<f64>,
+    pub gap_rate: Option<f64>,
+    /// порог вероятности, с которого прогноз считается предупреждением о разрыве
+    pub alarm_threshold: f64,
     /// То же, но разрыв размечен с учётом «спасательных» поступлений: переводов собственных денег, без которых остаток ушёл бы в минус.
     /// Владелец закрывает такие дыры сам, и в остатке разрыва не видно, но предпринимателю о нём надо было предупредить.
     pub actual_gap_windows_adj: usize,
     pub alarm_tp_adj: usize,
     pub alarm_fp_adj: usize,
     pub alarm_fn_adj: usize,
+    pub alarm_tn_adj: usize,
     pub alarm_precision_adj: Option<f64>,
     pub alarm_recall_adj: Option<f64>,
+    pub alarm_accuracy_adj: Option<f64>,
+    pub alarm_f1_adj: Option<f64>,
     /// (прогнозная вероятность разрыва, был ли разрыв) по каждой контрольной дате; для калибровки
     #[serde(skip)]
     #[allow(dead_code)]
@@ -1910,8 +2049,17 @@ where
     let max_h = 30;
     let mut origin = first + Duration::days(min_hist);
     let mut errs: HashMap<usize, Vec<(i64, i64, i64, bool)>> = HashMap::new();
-    let (mut tp, mut fp, mut fn_, mut gaps, mut n_orig) = (0, 0, 0, 0, 0);
-    let (mut tp_a, mut fp_a, mut fn_a, mut gaps_a) = (0, 0, 0, 0);
+    let (mut tp, mut fp, mut fn_, mut tn, mut gaps, mut n_orig) = (0, 0, 0, 0, 0, 0);
+    let (mut tp_a, mut fp_a, mut fn_a, mut tn_a, mut gaps_a) = (0, 0, 0, 0, 0);
+    let scale = {
+        let mut weekly: BTreeMap<i64, i64> = BTreeMap::new();
+        for t in txs {
+            *weekly.entry(week_idx(t.date)).or_default() += t.amount.abs();
+        }
+        let mut v: Vec<i64> = weekly.values().copied().collect();
+        v.sort_unstable();
+        v.get(v.len() / 2).copied().unwrap_or(1).max(1) as f64
+    };
     let rescue = rescue_inflows(txs, balances);
     let mut series_14: Vec<SeriesPoint> = vec![];
     let mut risk_samples: Vec<(f64, bool)> = vec![];
@@ -1956,7 +2104,7 @@ where
                 (true, true) => tp += 1,
                 (true, false) => fp += 1,
                 (false, true) => fn_ += 1,
-                _ => {}
+                (false, false) => tn += 1,
             }
             let actual_adj = adjusted_gap(balances, &rescue, origin, 30);
             if actual_adj {
@@ -1966,7 +2114,7 @@ where
                 (true, true) => tp_a += 1,
                 (true, false) => fp_a += 1,
                 (false, true) => fn_a += 1,
-                _ => {}
+                (false, false) => tn_a += 1,
             }
         }
         origin += Duration::days(step_days);
@@ -1988,6 +2136,9 @@ where
                 mae_drift: v.iter().map(|x| x.2).sum::<i64>() / n,
                 model_beats_baselines_share: beats as f64 / v.len() as f64,
                 band_coverage: cov as f64 / v.len() as f64,
+                mse_model_rub2: v.iter().map(|x| (x.0 as f64 / 100.0).powi(2)).sum::<f64>() / n as f64,
+                rmse_model: (v.iter().map(|x| (x.0 as f64).powi(2)).sum::<f64>() / n as f64).sqrt().round() as i64,
+                mae_pct_turnover: v.iter().map(|x| x.0).sum::<i64>() as f64 / n as f64 / scale * 100.0,
                 n: v.len(),
             })
         })
@@ -2001,12 +2152,22 @@ where
         alarm_tp: tp,
         alarm_fp: fp,
         alarm_fn: fn_,
+        alarm_tn: tn,
+        alarm_accuracy: Some((tp + tn) as f64 / n_orig as f64),
+        alarm_f1: if 2 * tp + fp + fn_ > 0 { Some(2.0 * tp as f64 / (2 * tp + fp + fn_) as f64) } else { None },
+        brier: Some(risk_samples.iter().map(|(p, y)| (p - if *y { 1.0 } else { 0.0 }).powi(2)).sum::<f64>() / risk_samples.len().max(1) as f64),
+        mean_probability: Some(risk_samples.iter().map(|x| x.0).sum::<f64>() / risk_samples.len().max(1) as f64),
+        gap_rate: Some(gaps as f64 / n_orig as f64),
+        alarm_threshold: 0.5,
         actual_gap_windows_adj: gaps_a,
         alarm_tp_adj: tp_a,
         alarm_fp_adj: fp_a,
         alarm_fn_adj: fn_a,
+        alarm_tn_adj: tn_a,
         alarm_precision_adj: if tp_a + fp_a > 0 { Some(tp_a as f64 / (tp_a + fp_a) as f64) } else { None },
         alarm_recall_adj: if tp_a + fn_a > 0 { Some(tp_a as f64 / (tp_a + fn_a) as f64) } else { None },
+        alarm_accuracy_adj: Some((tp_a + tn_a) as f64 / n_orig as f64),
+        alarm_f1_adj: if 2 * tp_a + fp_a + fn_a > 0 { Some(2.0 * tp_a as f64 / (2 * tp_a + fp_a + fn_a) as f64) } else { None },
         risk_samples,
         risk_feats,
         series_14,
@@ -2092,6 +2253,32 @@ mod tests {
         let a = forecast(&v, &b, &[], &Scenario::default(), &p).unwrap();
         let c = forecast(&v, &b, &[], &Scenario::default(), &p).unwrap();
         assert_eq!(a.days.iter().map(|x| x.p50).collect::<Vec<_>>(), c.days.iter().map(|x| x.p50).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn trace_explains_every_step_with_numbers() {
+        let (v, b) = sample();
+        let fc = forecast(&v, &b, &[], &Scenario::default(), &Params { horizon: 30, seed: 1, n_paths: 200, ..Default::default() }).unwrap();
+        let titles: Vec<&str> = fc.trace.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["Данные выписки", "Регулярные платежи", "Ожидаемые события", "Остаточный поток", "Траектории (Монте-Карло)", "Прогноз остатка", "Вероятность кассового разрыва", "Качество данных"]);
+        assert!(fc.trace.iter().enumerate().all(|(i, s)| s.step == i + 1 && !s.detail.is_empty()));
+        assert!(fc.trace[1].detail.contains("Найдено 2 регулярност") || fc.trace[1].detail.contains("Найдено"), "{}", fc.trace[1].detail);
+        assert_eq!(rub(-12_345_678), "−123 457 ₽");
+    }
+
+    #[test]
+    fn backtest_confusion_matrix_adds_up() {
+        let (v, b) = sample();
+        let bt = backtest(&v, &b, 14).unwrap();
+        assert_eq!(bt.alarm_tp + bt.alarm_fp + bt.alarm_fn + bt.alarm_tn, bt.origins);
+        let acc = bt.alarm_accuracy.unwrap();
+        assert!((acc - (bt.alarm_tp + bt.alarm_tn) as f64 / bt.origins as f64).abs() < 1e-12);
+        assert!(bt.brier.unwrap() >= 0.0 && bt.brier.unwrap() <= 1.0);
+        for m in &bt.metrics {
+            // RMSE не меньше MAE, MSE согласован с RMSE
+            assert!(m.rmse_model >= m.mae_model);
+            assert!(((m.mse_model_rub2.sqrt() * 100.0) - m.rmse_model as f64).abs() <= 1.0);
+        }
     }
 
     #[test]
