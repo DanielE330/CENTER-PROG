@@ -126,13 +126,18 @@ async def _run(http: httpx.AsyncClient, t: tickets.Ticket, question: str, histor
         raise LlmError("provider_unavailable", f"Hermes вернул HTTP {r.status_code}")
     try:
         j = r.json()
-        msg = j["choices"][0]["message"]
-        text = (msg.get("content") or "").strip()
+        choice = j["choices"][0]
+        text = (choice["message"].get("content") or "").strip()
     except (ValueError, KeyError, IndexError, TypeError):
         raise LlmError("provider_unavailable", "некорректный ответ Hermes") from None
+    # ошибку модели (подписка, лимит, неизвестная модель) Hermes отдаёт с HTTP 200 и текстом ошибки вместо ответа
+    if choice.get("finish_reason") == "error" or (j.get("hermes") or {}).get("failed"):
+        raise LlmError("provider_unavailable", str((j.get("hermes") or {}).get("error") or text)[:200])
     if not text:
         raise LlmError("provider_unavailable", "пустой ответ Hermes")
     u = j.get("usage") or {}
     usage = {k: int(u.get(k) or 0) for k in ("prompt_tokens", "completion_tokens", "total_tokens")} | {"steps": len(t.used) + 1}
     known = {s["function"]["name"] for s in TOOL_SPECS}
-    return Outcome(text, t.proposals, "hermes", j.get("model") or "hermes-agent", usage, [n for n in t.used if n in known])
+    # Hermes называет себя hermes-agent; настоящая модель подписки — из конфигурации
+    model = os.environ.get("HERMES_AGENT_MODEL") or j.get("model") or "hermes-agent"
+    return Outcome(text, t.proposals, "hermes", model, usage, [n for n in t.used if n in known])

@@ -6,6 +6,7 @@ POST /mcp — initialize, tools/list, tools/call, ping; уведомления -
 без права или с чужим/просроченным пропуском не выполняется."""
 import hmac
 import json
+import logging
 import os
 from typing import Any
 
@@ -17,6 +18,7 @@ from . import permissions, tickets
 from . import tools as tl
 
 router = APIRouter()
+log = logging.getLogger("advisor.mcp")
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 SERVER = {"name": "ci-advisor-tools", "version": "1.0"}
 TICKET_PROP = {"ticket": {"type": "string", "description": "Пропуск из системного сообщения; передавай без изменений в каждом вызове"}}
@@ -57,7 +59,11 @@ async def call_tool(request: Request, name: str, args: dict) -> dict:
         return text({"error": "permission_denied", "message": "Это действие консультанту не разрешено в настройках компании"}, True)
     async with httpx.AsyncClient(timeout=30, transport=request.app.state.transport) as http:
         box = tl.Toolbox(tl.Services(http, t.cid, t.rid, t.actor), t.lang, permissions.allowed_tools(t.perms), state=t)
-        res = await box.call(name, args)
+        try:
+            res = await box.call(name, args)
+        except Exception:  # noqa: BLE001 — сбой инструмента не должен рвать MCP-сессию Hermes (иначе он ждёт таймаут)
+            log.exception("MCP tool %s failed", name)
+            res = {"error": "tool_failed", "message": "Инструмент не выполнился; если это была запись, проверь результат перед повтором"}
     return text(res, isinstance(res, dict) and "error" in res)
 
 

@@ -1,6 +1,6 @@
 # ИИ-консультант на Hermes Agent
 
-Консультант в чате («AI-ассистент») работает на [Hermes Agent](https://github.com/NousResearch/hermes-agent) 0.19.0. Модель берётся по подписке ChatGPT/Codex: вход по OAuth, провайдер `openai-codex`, модель `HERMES_MODEL`, по умолчанию `gpt-5.5`. Ключ API OpenAI не нужен.
+Консультант в чате («AI-ассистент») работает на [Hermes Agent](https://github.com/NousResearch/hermes-agent) 0.19.0. Модель берётся по подписке ChatGPT/Codex: вход по OAuth, провайдер `openai-codex`, модель `HERMES_AGENT_MODEL`, по умолчанию `gpt-6.1-sol`; какие модели доступны, зависит от аккаунта ChatGPT. Ключ API OpenAI не нужен.
 
 Hermes выбран вместо OpenClaw по трём причинам:
 - у него есть OpenAI-совместимый API-сервер;
@@ -59,7 +59,7 @@ SPA ── api (права, роль) ── advisor ──/v1/chat/completions�
 ## Запуск
 
 ```sh
-# infra/.env: HERMES_AGENT_KEY и ADVISOR_MCP_TOKEN (openssl rand -hex 24), HERMES_MODEL
+# infra/.env: HERMES_AGENT_KEY и ADVISOR_MCP_TOKEN (openssl rand -hex 24), HERMES_AGENT_MODEL
 docker compose -f infra/docker-compose.yml --profile hermes run --rm hermes-login   # код устройства, вход в ChatGPT
 docker compose -f infra/docker-compose.yml --profile hermes up -d hermes advisor
 ```

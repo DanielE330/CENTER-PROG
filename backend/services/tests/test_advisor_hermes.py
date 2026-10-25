@@ -22,6 +22,7 @@ class Hermes:
         self.plan: list[tuple[str, dict]] = []
         self.answer = "Разрыв 14.10: не хватит около 210 000 ₽."
         self.status = 200
+        self.fail_text = ""  # Hermes вернул ошибку модели с HTTP 200
         self.results: list[dict] = []
         self.requests: list[dict] = []
         self.ticket = ""
@@ -36,6 +37,9 @@ class Hermes:
         self.requests.append({"headers": dict(req.headers), "body": body})
         if self.status != 200:
             return httpx.Response(self.status, json={"error": "down"})
+        if self.fail_text:
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": self.fail_text}, "finish_reason": "error"}],
+                                             "hermes": {"failed": True, "error": self.fail_text}})
         system = body["messages"][0]["content"]
         self.ticket = re.search(r'ticket="(tkt_[^"]+)"', system).group(1)
         await self.mcp("initialize", {"protocolVersion": "2025-06-18"})
@@ -67,7 +71,7 @@ class World:
                 run["result"]["risk"]["first_break_date"] = "2026-11-10"  # дата пересечения нуля есть и при level none
             return httpx.Response(200, json=run)
         if host == "forecast" and path.endswith("/forecasts") and req.method == "POST":
-            return httpx.Response(201, json=forecast_run("low") | {"id": "run2"})
+            return httpx.Response(201, json=forecast_run("low") | {"run_id": "run2"})
         if host == "ledger" and path.endswith("/transactions"):
             return httpx.Response(200, json={"items": TXS, "total": len(TXS)})
         if host == "ledger" and path.endswith("/counterparties/top"):
@@ -80,7 +84,7 @@ class World:
             return httpx.Response(201, json={"id": f"ev{len(self.events)}"})
         if host == "ledger" and path.endswith("/audit"):
             self.audit.append(json.loads(req.content))
-            return httpx.Response(201, json={"ok": True})
+            return httpx.Response(204)  # как настоящий ledger: без тела
         if host == "llm-gateway":
             return httpx.Response(503, json={"error": {"code": "provider_not_configured", "message": "нет ключа"}})
         return httpx.Response(404, json={"error": {"code": "not_found", "message": "?"}})
@@ -152,7 +156,9 @@ def test_add_payment_and_recalc_with_write_permission(client, world):
     ev = world.events[0]
     assert (ev["title"], ev["amount_kop"], ev["direction"], ev["source"], ev["actor"]) == ("ИИ-консультант: Аренда склада", "12000000", "out", "manual", "u1")
     assert world.audit == [{"action": "advisor.add_payment", "object_id": "ev1", "outcome": "ok"}]
-    assert [a["type"] for a in j["actions"]] == ["add_expected_payment", "recalc_forecast"]
+    assert j["actions"][0]["title"].startswith("Добавлен ожидаемый платёж в план: Аренда склада, −120")
+    assert [(a["type"], a["id"]) for a in j["actions"]] == [("add_expected_payment", "ev1"), ("recalc_forecast", "run2")]
+    assert all(not r["error"] for r in world.hermes.results), world.hermes.results
     assert "Можно добавлять платежи" not in world.hermes.requests[0]["body"]["messages"][0]["content"]
 
 
@@ -186,6 +192,12 @@ def test_hermes_down_falls_back_to_template_with_notice(client, world):
     world.hermes.status = 502
     j = ask(client, READ_ONLY).json()
     assert j["provider"] == "none" and j["notice"] == "provider_unavailable" and "14.10.2026" in j["answer"]
+
+
+def test_model_error_inside_200_is_not_an_answer(client, world):
+    world.hermes.fail_text = "HTTP 400: The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."
+    j = ask(client, READ_ONLY).json()
+    assert j["provider"] == "none" and j["notice"] == "provider_unavailable" and "not supported" not in j["answer"]
 
 
 def test_prompts_follow_data_and_permissions(client, world):

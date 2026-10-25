@@ -192,6 +192,7 @@ services:
     environment:
       HERMES_AGENT_URL: ${HERMES_AGENT_KEY:+http://hermes:8642}
       HERMES_AGENT_KEY: ${HERMES_AGENT_KEY:-}
+      HERMES_AGENT_MODEL: ${HERMES_AGENT_MODEL:-gpt-6.1-sol}
       ADVISOR_MCP_TOKEN: ${ADVISOR_MCP_TOKEN:-}
       LLM_GATEWAY_URL: http://llm-gateway:8010
       LEDGER_URL: http://ledger:3002
@@ -216,8 +217,8 @@ services:
     environment:
       API_SERVER_KEY: ${HERMES_AGENT_KEY:-}
       ADVISOR_MCP_TOKEN: ${ADVISOR_MCP_TOKEN:-}
-      HERMES_MODEL: ${HERMES_MODEL:-gpt-5.5}
-    tmpfs: [/tmp, /home/hermes]
+      HERMES_MODEL: ${HERMES_AGENT_MODEL:-gpt-6.1-sol}
+    tmpfs: ["/tmp", "/home/hermes:uid=1000,gid=1000,mode=0700"]
     depends_on:
       advisor: {condition: service_healthy}
     volumes: ["${HERMES_DATA:-hermes-data}:/data"]

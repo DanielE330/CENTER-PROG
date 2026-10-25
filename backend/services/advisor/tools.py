@@ -55,7 +55,12 @@ class Services:
                 raise ToolError(err.get("code", "upstream_error"), err.get("message", ""))
             except (ValueError, KeyError, TypeError):
                 raise ToolError("upstream_error", f"{service} вернул HTTP {r.status_code}") from None
-        return r.json()
+        if not r.content:  # 201/204 без тела (например, запись в журнал)
+            return {}
+        try:
+            return r.json()
+        except ValueError:
+            raise ToolError("upstream_error", f"{service} вернул не JSON") from None
 
     async def latest_forecast(self) -> dict:
         return await self.call("forecast", "GET", "forecasts/latest")
@@ -69,6 +74,8 @@ def summarize_forecast(run: dict) -> dict:
     r = run["result"]
     risk = r["risk"]
     days = r.get("days") or []
+    # уровень none — разрыва в горизонте не ждём: дату пересечения нуля и нехватку не показываем, иначе модель видит противоречие
+    calm = risk.get("level") == "none"
     out: dict = {
         "as_of": r.get("as_of"),
         "horizon_days": r.get("horizon"),
@@ -77,9 +84,9 @@ def summarize_forecast(run: dict) -> dict:
         "risk": {
             "level": risk.get("level"),
             "shortfall_probability_pct": round((risk.get("shortfall_probability") or 0) * 100),
-            "first_break_date": risk.get("first_break_date"),
-            "possible_break_date": risk.get("possible_break_date"),
-            "typical_deficit_rub": rub(risk.get("deficit_given_break_median")),
+            "first_break_date": None if calm else risk.get("first_break_date"),
+            "possible_break_date": None if calm else risk.get("possible_break_date"),
+            "typical_deficit_rub": None if calm else rub(risk.get("deficit_given_break_median")),
             "max_deficit_p90_rub": rub(risk.get("max_deficit_p90")),
         },
         "warnings": [
@@ -196,13 +203,14 @@ def validate_payment(args: dict) -> dict:
     return {"direction": direction, "amount_kop": str(amount), "date": d.isoformat(), "title": title, "counterparty": cp}
 
 
-def suggestion_title(params: dict, lang: str = "ru") -> str:
+def suggestion_title(params: dict, lang: str = "ru", done: bool = False) -> str:
+    """Заголовок карточки: предложение («Добавить …») или сделанное консультантом действие («Добавлен … в план»)."""
     sign = "+" if params["direction"] == "in" else "−"
     amt = f"{round(int(params['amount_kop']) / 100):,}".replace(",", " ")
     d = dt.date.fromisoformat(params["date"])
     if lang == "en":
-        return f"Add expected {'income' if params['direction'] == 'in' else 'payment'}: {params['title']}, {sign}{amt} RUB, {d.isoformat()}"
-    return f"Добавить ожидаемый {'приход' if params['direction'] == 'in' else 'платёж'}: {params['title']}, {sign}{amt} ₽, {d.strftime('%d.%m.%Y')}"
+        return f"{'Added' if done else 'Add'} expected {'income' if params['direction'] == 'in' else 'payment'}: {params['title']}, {sign}{amt} RUB, {d.isoformat()}"
+    return f"{'Добавлен' if done else 'Добавить'} ожидаемый {'приход' if params['direction'] == 'in' else 'платёж'}{' в план' if done else ''}: {params['title']}, {sign}{amt} ₽, {d.strftime('%d.%m.%Y')}"
 
 
 class Toolbox:
@@ -391,7 +399,7 @@ class Toolbox:
         except ToolError:
             pass
         self.actions.append({"type": "add_expected_payment", "id": eid, "params": params | {"title": title},
-                             "title": suggestion_title(params | {"title": title}, self.lang)})
+                             "title": suggestion_title(params, self.lang, done=True)})
         self._remember(params["counterparty"])
         return {"status": "added", "id": eid, "note": "Платёж добавлен в план. Прогноз пересчитается при следующем расчёте (recalc_forecast)."}
 
@@ -402,7 +410,7 @@ class Toolbox:
             except (ToolError, KeyError, TypeError, ValueError):
                 horizon_days = 30
         run = await self.svc.call("forecast", "POST", "forecasts", json={"horizon_days": max(7, min(int(horizon_days), 90))})
-        self.actions.append({"type": "recalc_forecast", "id": run.get("id", ""), "title": "Прогноз пересчитан" if self.lang == "ru" else "Forecast recalculated"})
+        self.actions.append({"type": "recalc_forecast", "id": run.get("run_id") or run.get("id", ""), "title": "Прогноз пересчитан" if self.lang == "ru" else "Forecast recalculated"})
         return summarize_forecast(run)
 
     async def _t_suggest_followups(self, questions: list | None = None) -> dict:
