@@ -200,7 +200,7 @@ pub async fn update_company(State(st): State<AppState>, ctx: Ctx, Path(cid): Pat
 /// Операции компании, добавленные после ревизии `since` (0 — все).
 fn load_history(c: &rusqlite::Connection, cid: &str, since: i64) -> R<Vec<HistoryRow>> {
     let mut s = c
-        .prepare("SELECT date, amount_kop, balance_kop, counterparty, inn, purpose, category FROM transactions WHERE company_id=? AND rev>? ORDER BY date, id")
+        .prepare("SELECT date, amount_kop, balance_kop, counterparty, inn, purpose, category FROM transactions WHERE company_id=?1 AND (?2 = 0 OR rev>?2) ORDER BY date, id")
         .map_err(internal)?;
     let v = s
         .query_map(params![cid, since], |r| {
