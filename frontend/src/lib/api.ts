@@ -200,6 +200,9 @@ export const api = {
   saveOnec: (b: OnecConnectionInput) => request<IntegrationsView>('PUT', co('/integrations/onec'), { body: b }),
   testOnec: (b: Partial<OnecConnectionInput> = {}) => request<IntegrationsView>('POST', co('/integrations/onec/test'), { body: b }),
   disconnectOnec: () => request<void>('DELETE', co('/integrations/onec')),
+  saveTelegram: (token: string) => request<IntegrationsView>('PUT', co('/integrations/telegram'), { body: { token } }),
+  testTelegram: () => request<IntegrationsView>('POST', co('/integrations/telegram/test')),
+  disconnectTelegram: () => request<void>('DELETE', co('/integrations/telegram')),
 
   // ----- ФНС -----
   fnsEns: () => request<FnsEns>('GET', co('/fns/ens')),

@@ -59,6 +59,28 @@ class Upstream:
         except UpstreamError:
             pass
 
+    async def bot_tokens(self) -> list[dict] | None:
+        """Токены собственных ботов компаний [{company_id, token, bot_username}] из ledger (читать их может только svc:notifier).
+        None — ledger недоступен: запущенные боты не трогаем."""
+        try:
+            r = await self._req("ledger", "GET", f"{config.ledger_url()}/internal/v1/integrations/telegram/credentials", headers={"x-actor": "svc:notifier"})
+        except UpstreamError as e:
+            log.warning("токены ботов компаний недоступны: %s", e.status)
+            return None
+        return [i for i in r.get("items", []) if isinstance(i, dict) and i.get("company_id") and i.get("token")]
+
+    async def report_bot(self, cid: str, ok: bool, error: str = "", username: str = "") -> None:
+        """Результат проверки бота компании в статус подключения (ledger). Сбой не должен ломать работу бота."""
+        body: dict = {"ok": ok}
+        if error:
+            body["error"] = error
+        if username:
+            body["bot_username"] = username
+        try:
+            await self._req("ledger", "PUT", f"{config.ledger_url()}/internal/v1/companies/{cid}/integrations/telegram/status", json=body, headers={"x-actor": "svc:notifier"})
+        except UpstreamError:
+            pass
+
     # ---------- почта (notify) ----------
     async def mail(self, cid: str, kind: str, key: str, subject: str, html: str, path: str = "/",
                    png: bytes | None = None, chart_alt: str = "", xlsx: bytes | None = None, xlsx_name: str = "") -> int:

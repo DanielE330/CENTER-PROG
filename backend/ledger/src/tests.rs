@@ -1439,3 +1439,122 @@ async fn onec_password_ciphertext_is_bound_to_its_company() {
     let (s, v, _) = call_as(&e.app, "svc:integrator", "GET", &format!("/internal/v1/companies/{a}/integrations/onec/credentials"), None).await;
     assert_eq!((s, v["password"].as_str()), (StatusCode::OK, Some("pass-of-company-a")));
 }
+
+// ---------- бот Telegram компании ----------
+
+const TG_TOKEN: &str = "123456789:AAExampleExampleExampleExample_abc-xyz";
+const TG_TOKEN_B: &str = "987654321:BBOtherOtherOtherOtherOtherOther_k9z";
+
+#[tokio::test]
+async fn telegram_token_is_encrypted_masked_and_never_returned() {
+    let e = env().await;
+    let cid = company(&e.app, "owner-tg").await;
+    let base = format!("/internal/v1/companies/{cid}/integrations");
+    let (s, v) = call(&e.app, "PUT", &format!("{base}/telegram"), Some(json!({"token": TG_TOKEN, "bot_username": "@My_Company_bot"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["kind"].as_str(), v["bot_username"].as_str(), v["token_mask"].as_str(), v["status"].as_str(), v["token_set"].as_bool()), (Some("telegram"), Some("My_Company_bot"), Some("123…:…xyz"), Some("ok"), Some(true)));
+    assert!(v["last_check_at"].is_string());
+    assert!(!v.to_string().contains("AAExample") && v.get("token").is_none() && v.get("password_enc").is_none());
+    let (_, l) = call(&e.app, "GET", &base, None).await;
+    assert!(!l.to_string().contains("AAExample") && l["items"][0]["kind"] == "telegram");
+    assert!(!db_dump(&e).contains("AAExample"), "токен лежит в БД открытым текстом");
+    let enc: String = {
+        let c = db::open(e._dir.join("ledger.db").to_str().unwrap());
+        let g = c.lock().unwrap();
+        g.query_row("SELECT password_enc FROM integration_connections WHERE company_id=? AND kind='telegram'", [&cid], |r| r.get(0)).unwrap()
+    };
+    assert!(enc.starts_with("v1:") && !enc.contains("AAExample"));
+    // 1С и Telegram живут рядом и не мешают друг другу
+    call(&e.app, "PUT", &format!("{base}/onec"), Some(json!({"url": ONEC_URL, "username": "odata", "password": "p-1c-pass"}))).await;
+    let (_, l) = call(&e.app, "GET", &base, None).await;
+    let kinds: Vec<&str> = l["items"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, vec!["onec", "telegram"]);
+}
+
+#[tokio::test]
+async fn telegram_token_format_is_validated_and_key_is_required() {
+    let e = env().await;
+    let cid = company(&e.app, "owner-tg2").await;
+    let uri = format!("/internal/v1/companies/{cid}/integrations/telegram");
+    for t in ["", "not-a-token", "12345:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "123456:short", "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAA"] {
+        let (s, v) = call(&e.app, "PUT", &uri, Some(json!({"token": t, "bot_username": "My_Company_bot"}))).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_bot_token")), "{t:?}");
+        assert!(!v.to_string().contains(t) || t.is_empty());
+    }
+    let (s, v) = call(&e.app, "PUT", &uri, Some(json!({"token": TG_TOKEN, "bot_username": "x"}))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_bot_username")));
+    // без INTEGRATIONS_KEY токен не принимается
+    let e2 = env_key(None).await;
+    let cid2 = company(&e2.app, "owner-tg3").await;
+    let (s, v) = call(&e2.app, "PUT", &format!("/internal/v1/companies/{cid2}/integrations/telegram"), Some(json!({"token": TG_TOKEN, "bot_username": "My_Company_bot"}))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("integrations_key_missing")));
+    assert!(!v.to_string().contains("AAExample"));
+}
+
+#[tokio::test]
+async fn telegram_credentials_are_for_notifier_only_and_cover_all_companies() {
+    let e = env().await;
+    let (a, b, c) = (company(&e.app, "tg-a").await, company(&e.app, "tg-b").await, company(&e.app, "tg-c").await);
+    for (cid, tok, name) in [(&a, TG_TOKEN, "Alpha_bot"), (&b, TG_TOKEN_B, "Beta_bot")] {
+        let (s, _) = call(&e.app, "PUT", &format!("/internal/v1/companies/{cid}/integrations/telegram"), Some(json!({"token": tok, "bot_username": name}))).await;
+        assert_eq!(s, StatusCode::OK);
+    }
+    let uri = "/internal/v1/integrations/telegram/credentials";
+    for actor in ["tester", "", "u-1", "svc:integrator", "svc:notifier2", "notifier"] {
+        let (s, v, _) = call_as(&e.app, actor, "GET", uri, None).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::FORBIDDEN, Some("forbidden")), "actor={actor:?}");
+        assert!(!v.to_string().contains("AAExample") && !v.to_string().contains("OtherOther"));
+    }
+    // integrator не получает токены Telegram, а notifier не получает пароль 1С
+    let (s, _, _) = call_as(&e.app, "svc:notifier", "GET", &format!("/internal/v1/companies/{a}/integrations/onec/credentials"), None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, v, h) = call_as(&e.app, "svc:notifier", "GET", uri, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(h.get("cache-control").and_then(|x| x.to_str().ok()), Some("no-store"));
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{v}");
+    let of = |cid: &str| items.iter().find(|i| i["company_id"] == cid).cloned();
+    assert_eq!((of(&a).unwrap()["token"].as_str(), of(&a).unwrap()["bot_username"].as_str()), (Some(TG_TOKEN), Some("Alpha_bot")));
+    assert_eq!(of(&b).unwrap()["token"].as_str(), Some(TG_TOKEN_B));
+    assert!(of(&c).is_none());
+    // шифртекст компании A, подложенный в запись B, не расшифровывается и пропускается
+    {
+        let conn = db::open(e._dir.join("ledger.db").to_str().unwrap());
+        let g = conn.lock().unwrap();
+        g.execute("UPDATE integration_connections SET password_enc=(SELECT password_enc FROM integration_connections WHERE company_id=?1 AND kind='telegram') WHERE company_id=?2 AND kind='telegram'", rusqlite::params![a, b]).unwrap();
+    }
+    let (_, v, _) = call_as(&e.app, "svc:notifier", "GET", uri, None).await;
+    assert_eq!((v["items"].as_array().unwrap().len(), v["skipped"].as_i64()), (1, Some(1)));
+}
+
+#[tokio::test]
+async fn telegram_status_disconnect_and_audit_hold_only_the_mask() {
+    let e = env().await;
+    let cid = company(&e.app, "owner-tg4").await;
+    let base = format!("/internal/v1/companies/{cid}/integrations/telegram");
+    let (s, _) = call(&e.app, "PUT", &format!("{base}/status"), Some(json!({"ok": true}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    call(&e.app, "PUT", &base, Some(json!({"token": TG_TOKEN, "bot_username": "My_Company_bot"}))).await;
+    // ошибка со вложенным токеном очищается
+    let (s, v) = call(&e.app, "PUT", &format!("{base}/status"), Some(json!({"ok": false, "error": format!("404 for https://api.telegram.org/bot{TG_TOKEN}/getMe")}))).await;
+    assert_eq!((s, v["status"].as_str()), (StatusCode::OK, Some("error")));
+    assert!(!v.to_string().contains("AAExample") && v["last_error"].as_str().unwrap().contains("[token]"), "{v}");
+    let (_, v) = call(&e.app, "PUT", &format!("{base}/status"), Some(json!({"ok": true, "bot_username": "Renamed_bot"}))).await;
+    assert_eq!((v["status"].as_str(), v["bot_username"].as_str(), v["last_error"].is_null()), (Some("ok"), Some("Renamed_bot"), true));
+    // отключение: токен удалён, повтор безопасен
+    assert_eq!(call(&e.app, "DELETE", &base, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(call(&e.app, "DELETE", &base, None).await.0, StatusCode::NO_CONTENT);
+    let (_, l) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/integrations"), None).await;
+    assert_eq!(l["items"].as_array().unwrap().len(), 0);
+    assert!(!db_dump(&e).contains("AAExample"));
+    let (_, v, _) = call_as(&e.app, "svc:notifier", "GET", "/internal/v1/integrations/telegram/credentials", None).await;
+    assert_eq!(v["items"].as_array().unwrap().len(), 0);
+    // аудит: действие и маска, ни токена, ни имени бота
+    let (_, a) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/audit"), None).await;
+    let actions: Vec<&str> = a["items"].as_array().unwrap().iter().map(|i| i["action"].as_str().unwrap()).collect();
+    for want in ["integrations.telegram.connect", "integrations.telegram.check", "integrations.telegram.disconnect"] {
+        assert!(actions.contains(&want), "{want}: {actions:?}");
+    }
+    let s = a.to_string();
+    assert!(!s.contains("AAExample") && !s.contains("123456789") && s.contains("123…:…xyz"), "{s}");
+}

@@ -25,10 +25,19 @@ GAP_HOURS = range(8, 21)
 class Jobs:
     def __init__(self, store: Store, bot: Bot | None, up: Upstream, advisor: Advisor | None = None):
         self.store, self.bot, self.up, self.advisor = store, bot, up, advisor or Advisor()
+        self.own: dict[str, Bot] = {}  # собственные боты компаний (company_id -> бот); ведёт BotManager
         self._bundles: dict[str, tuple[float, Bundle]] = {}
         self._bans: dict[str, tuple[float, str | None]] = {}
 
     BAN_TTL = 60
+
+    def bot_for(self, cid: str) -> Bot | None:
+        """Бот компании: её собственный (токен директора в «Настройки → Интеграции»), иначе общий бот платформы (TELEGRAM_BOT_TOKEN)."""
+        return self.own.get(cid) or self.bot
+
+    def via_for(self, cid: str) -> str:
+        """`own` — компания ведёт чаты своим ботом, `shared` — общим."""
+        return "own" if cid in self.own else "shared"
 
     async def banned(self, cid: str) -> str | None:
         """Причина блокировки компании оператором платформы или None. Заблокированной компании не шлём ничего и не отвечаем в боте.
@@ -47,11 +56,14 @@ class Jobs:
     # ---------- доставка ----------
     async def broadcast(self, cid: str, fn, kind: str | None = None, excel_only: bool = False) -> int:
         """Вызывает fn(chat_id) для каждого активного чата компании, которому политика отдела разрешает этот вид рассылки.
-        Возвращает число доставленных. Без токена бота Telegram-канал выключен."""
-        if self.bot is None or await self.banned(cid):
+        Возвращает число доставленных. Без бота компании и общего бота Telegram-канал выключен."""
+        if self.bot_for(cid) is None or await self.banned(cid):
             return 0
-        ok = 0
+        ok, via = 0, self.via_for(cid)
+        # чат привязан к конкретному боту: рассылка идёт тем ботом, который у компании сейчас, а чаты другого бота ждут перепривязки
         for ch in self.store.chats(cid):
+            if ch.get("via", "shared") != via:
+                continue
             pol = self.store.policy(ch)
             if (kind and kind not in pol["kinds"]) or (excel_only and not pol["allow_excel"]):
                 continue
@@ -60,7 +72,7 @@ class Jobs:
                 ok += 1
             except TelegramError as e:
                 if e.migrate_to:
-                    self.store.link_chat(e.migrate_to, cid, ch["kind"], ch["title"], ch["linked_by"])
+                    self.store.link_chat(e.migrate_to, cid, ch["kind"], ch["title"], ch["linked_by"], via)
                     self.store.unlink_chat(ch["chat_id"])
                 elif e.chat_gone:
                     self.store.unlink_chat(ch["chat_id"])
@@ -96,7 +108,7 @@ class Jobs:
             company = (await self._company(cid))
             text = reports.gap_alert_text(company, alert, prefs["gap_days"])
             kb = [[{"text": "📊 График и причины", "callback_data": "x:risk"}] + reports.web_button("/forecast")]
-            tg = await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "gap")
+            tg = await self.broadcast(cid, lambda c: self.bot_for(cid).send(c, text, kb), "gap")
             mailed = await self.mail(cid, "gap", alert["key"], text, "/forecast")
             if not tg and not mailed:
                 self.store.release(cid, "gap", alert["key"])  # никто не получил — повторим в следующую проверку
@@ -108,7 +120,7 @@ class Jobs:
             self.store.kv_set(cid, "gap_active", None)
             if fc.break_date is None or fc.prob < prefs["gap_threshold"]:
                 text = reports.gap_recovered_text(await self._company(cid))
-                await self.broadcast(cid, lambda c: self.bot.send(c, text), "gap")
+                await self.broadcast(cid, lambda c: self.bot_for(cid).send(c, text), "gap")
                 await self.mail(cid, "gap_resolved", f"{active}:{today.isoformat()}", text, "/forecast")
                 return "recovered"
         return "none"
@@ -126,7 +138,7 @@ class Jobs:
             return "dup"
         text = reports.missed_text(await self._company(cid), new)
         btn = reports.web_button("/plan-vs-actual")
-        tg = await self.broadcast(cid, lambda c: self.bot.send(c, text, [btn] if btn else None), "missed")
+        tg = await self.broadcast(cid, lambda c: self.bot_for(cid).send(c, text, [btn] if btn else None), "missed")
         key = hashlib.sha1(",".join(i["key"] for i in new).encode()).hexdigest()[:16]
         mailed = await self.mail(cid, "missed", key, text, "/plan-vs-actual")
         if not tg and not mailed:
@@ -186,8 +198,8 @@ class Jobs:
         await self._advise(cid, b, "risk")
         png, text = charts.risk_chart(b), reports.with_advice(reports.risk_text(b), b)
         kb = [[{"text": "📎 Excel", "callback_data": "x:risk"}] + reports.web_button("/forecast")]
-        await self.broadcast(cid, lambda c: self.bot.send_photo(c, png, "🛡 Прогноз остатка на ближайший месяц"), "risk")
-        await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "risk")
+        await self.broadcast(cid, lambda c: self.bot_for(cid).send_photo(c, png, "🛡 Прогноз остатка на ближайший месяц"), "risk")
+        await self.broadcast(cid, lambda c: self.bot_for(cid).send(c, text, kb), "risk")
         await self.mail(cid, "risk", self._mail_key(b), text, "/forecast", png, "Прогноз остатка на ближайший месяц")
 
     def _ensure_sprint(self, cid: str, b: Bundle) -> Bundle:
@@ -215,8 +227,8 @@ class Jobs:
         b = self._ensure_sprint(cid, b)
         await self._advise(cid, b, "week")
         png, text, kb = charts.week_chart(b), reports.with_advice(reports.week_text(b), b), reports.week_keyboard(b)
-        await self.broadcast(cid, lambda c: self.bot.send_photo(c, png, "📅 Неделя: факт против нормы"), "week")
-        await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "week")
+        await self.broadcast(cid, lambda c: self.bot_for(cid).send_photo(c, png, "📅 Неделя: факт против нормы"), "week")
+        await self.broadcast(cid, lambda c: self.bot_for(cid).send(c, text, kb), "week")
         await self.mail(cid, "week", self._mail_key(b), text, "/plan-vs-actual", png, "Неделя: факт против нормы")
 
     async def send_month(self, cid: str) -> None:
@@ -227,9 +239,9 @@ class Jobs:
         xls = excel.build_xlsx(b, "month")
         name = f"otchet_{b.month_last['start'].strftime('%Y-%m')}.xlsx"
         kb = [[{"text": "📎 Excel", "callback_data": "x:month"}] + reports.web_button("/dashboard")]
-        await self.broadcast(cid, lambda c: self.bot.send_photo(c, png, f"🗓 {fmt.month_title(b.month_last['start'])}: потоки и структура расходов"), "month")
-        await self.broadcast(cid, lambda c: self.bot.send(c, text, kb), "month")
-        await self.broadcast(cid, lambda c: self.bot.send_document(c, xls, name, "📎 Подробный отчёт: диаграммы, план-факт и рекомендации"), "month", excel_only=True)
+        await self.broadcast(cid, lambda c: self.bot_for(cid).send_photo(c, png, f"🗓 {fmt.month_title(b.month_last['start'])}: потоки и структура расходов"), "month")
+        await self.broadcast(cid, lambda c: self.bot_for(cid).send(c, text, kb), "month")
+        await self.broadcast(cid, lambda c: self.bot_for(cid).send_document(c, xls, name, "📎 Подробный отчёт: диаграммы, план-факт и рекомендации"), "month", excel_only=True)
         await self.mail(cid, "month", self._mail_key(b), text, "/dashboard", png, "Потоки и структура расходов за месяц", xls, name)
 
     @staticmethod
@@ -246,7 +258,7 @@ class Jobs:
         b.goals_now = self.store.goals(cid, sprint) if sprint else []
         await self._advise(cid, b, "week" if kind == "week" else kind)
         data = excel.build_xlsx(b, kind)
-        await self.bot.send_document(chat_id, data, f"otchet_{b.today.isoformat()}.xlsx", "📎 Excel-отчёт: диаграммы, план-факт, цели и рекомендации")
+        await self.bot_for(cid).send_document(chat_id, data, f"otchet_{b.today.isoformat()}.xlsx", "📎 Excel-отчёт: диаграммы, план-факт, цели и рекомендации")
 
     async def replan(self, cid: str, sprint: str) -> list[dict]:
         """После оценки целей прошлого спринта пересобираем автоплан текущего: так результаты влияют на следующую неделю."""
@@ -322,7 +334,7 @@ class Jobs:
                 for i, g in enumerate(prev, 1) if g["status"] == "open"]
         lines = ["⏰ <b>Не забудьте оценить цели прошлой недели</b>", "От оценок зависит план, поэтому это занимает минуту:", ""]
         lines += [f"{i}. {fmt.esc(g['title'])}" for i, g in enumerate(prev, 1) if g["status"] == "open"]
-        await self.broadcast(cid, lambda c: self.bot.send(c, "\n".join(lines), rows), "week")
+        await self.broadcast(cid, lambda c: self.bot_for(cid).send(c, "\n".join(lines), rows), "week")
 
     async def run_scheduler(self) -> None:
         while True:

@@ -5,6 +5,9 @@ import { Loader2, Send, Trash2, Users, User } from 'lucide-react'
 import { Card } from '../../components/shared/Page'
 import { ErrorState, LoadingState } from '../../components/shared/States'
 import { Notice } from '../../components/shared/Notice'
+import { useTelegramItem, TelegramBotForm } from './TelegramBotForm'
+import { usePerms } from '../../app/perms'
+import { RubInputNote } from '../../components/shared/RubInputNote'
 import { Button } from '../../components/ui/Button'
 import { Checkbox } from '../../components/ui/Checkbox'
 import { Input } from '../../components/ui/Input'
@@ -28,6 +31,8 @@ export function TelegramNotifications() {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const admin = isAdmin(useMe())
+  const { manage } = usePerms()
+  const tg = useTelegramItem()
   const [link, setLink] = useState<TgLink | null>(null)
   const status = useQuery({ queryKey: KEY, queryFn: api.tgStatus, refetchInterval: link ? 4000 : false })
   const [draft, setDraft] = useState<TgPrefs | null>(null)
@@ -71,7 +76,22 @@ export function TelegramNotifications() {
       <div className="px-5 pb-5 flex flex-col gap-4">
         {status.isPending && <LoadingState height={80} />}
         {status.isError && <ErrorState message={errorText(t, status.error)} onRetry={() => void status.refetch()} />}
-        {status.data && !status.data.configured && <Notice tone="warning">{t('telegram.notConfigured')}</Notice>}
+        {status.data && !status.data.configured && (
+          manage && tg.item ? (
+            <div className="flex flex-col gap-3">
+              <Notice tone="warning">{t('telegram.notConfigured')}</Notice>
+              <TelegramBotForm item={tg.item} />
+            </div>
+          ) : (
+            <Notice tone="warning">{t('telegram.notConfigured')}</Notice>
+          )
+        )}
+        {status.data?.configured && (
+          <p className="text-xs text-muted">
+            {status.data.bot_kind === 'own' ? t('telegram.botOwn', { name: `@${status.data.bot_username}` }) : t('telegram.botShared', { name: status.data.bot_username ? `@${status.data.bot_username}` : '—' })}
+            {' '}<a href="#integrations-telegram" className="text-primary underline">{t('integrations.telegram.title')}</a>
+          </p>
+        )}
 
         {status.data?.configured && (
           <>
@@ -87,6 +107,9 @@ export function TelegramNotifications() {
                         {c.kind === 'private' ? <User size={16} className="text-muted shrink-0" aria-hidden /> : <Users size={16} className="text-muted shrink-0" aria-hidden />}
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate">{c.title || t(`telegram.${c.kind}`)} <span className="text-xs text-muted font-normal">· {t(`telegram.${c.kind}`)}</span></p>
+                          {status.data?.bot_kind && status.data.bot_kind !== 'none' && c.via && c.via !== (status.data.bot_kind === 'own' ? 'own' : 'shared') && (
+                            <p className="text-xs text-warning">{t('telegram.relink')}</p>
+                          )}
                           <p className="text-xs text-muted truncate">{t('telegram.linkedAt', { value: formatDateTime(iso(c.linked_at)) })}</p>
                         </div>
                       </div>
@@ -162,7 +185,7 @@ export function TelegramNotifications() {
 
             <div className="flex flex-col gap-2">
               {flag('missed_enabled')}
-              <Input label={t('telegram.missedMin')} type="number" min={0} step={1000} inputMode="numeric"
+              <Input label={t('telegram.missedMin')} hint={<RubInputNote value={Math.round(draft.missed_min_kop / 100)} />} type="number" min={0} step={1000} inputMode="numeric"
                 value={Math.round(draft.missed_min_kop / 100)}
                 onChange={(e) => set('missed_min_kop', Math.max(0, Math.round(Number(e.target.value) || 0)) * 100)} />
               <p className="text-xs text-muted">{t('telegram.missedHint')}</p>

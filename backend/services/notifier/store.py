@@ -75,6 +75,9 @@ class Store:
                 self.conn.execute("ALTER TABLE prefs ADD COLUMN missed_enabled INTEGER NOT NULL DEFAULT 1")
                 self.conn.execute("ALTER TABLE prefs ADD COLUMN missed_min_kop INTEGER NOT NULL DEFAULT 1000000")
                 self.conn.execute("UPDATE departments SET kinds=kinds||',missed' WHERE ','||kinds||',' LIKE '%,gap,%'")
+            if "via" not in [r[1] for r in self.conn.execute("PRAGMA table_info(chats)")]:
+                # каким ботом привязан чат: shared — общий бот платформы, own — собственный бот компании (токен директора)
+                self.conn.execute("ALTER TABLE chats ADD COLUMN via TEXT NOT NULL DEFAULT 'shared'")
             self.conn.commit()
 
     def q(self, sql: str, args: tuple = ()) -> list[dict]:
@@ -106,6 +109,11 @@ class Store:
             self.conn.commit()
         return code
 
+    def peek_link_code(self, code: str) -> dict | None:
+        """Компания, которой выдан код (код не расходуется): бот проверяет, что код выдан именно для него."""
+        row = self.one("SELECT company_id, expires_at FROM link_codes WHERE code_hash=?", (code_hash(code),))
+        return row if row and row["expires_at"] >= time.time() else None
+
     def use_link_code(self, code: str) -> dict | None:
         """Код одноразовый: после успешной проверки удаляется."""
         with self.lock:
@@ -116,20 +124,23 @@ class Store:
             self.conn.commit()
             return row if row["expires_at"] >= time.time() else None
 
-    def link_chat(self, chat_id: int, company_id: str, kind: str, title: str, user_id: str) -> None:
+    def link_chat(self, chat_id: int, company_id: str, kind: str, title: str, user_id: str, via: str = "shared") -> None:
         self.x(
-            "INSERT INTO chats(chat_id,company_id,kind,title,linked_by,linked_at,active) VALUES(?,?,?,?,?,?,1)"
+            "INSERT INTO chats(chat_id,company_id,kind,title,linked_by,linked_at,active,via) VALUES(?,?,?,?,?,?,1,?)"
             " ON CONFLICT(chat_id) DO UPDATE SET company_id=excluded.company_id, kind=excluded.kind, title=excluded.title,"
-            " linked_by=excluded.linked_by, linked_at=excluded.linked_at, active=1, department_id=NULL",
-            (chat_id, company_id, kind, title, user_id, time.time()),
+            " linked_by=excluded.linked_by, linked_at=excluded.linked_at, active=1, department_id=NULL, via=excluded.via",
+            (chat_id, company_id, kind, title, user_id, time.time(), via),
         )
         self.prefs(company_id)  # создаёт настройки по умолчанию
 
-    def unlink_chat(self, chat_id: int, company_id: str | None = None) -> bool:
+    def unlink_chat(self, chat_id: int, company_id: str | None = None, via: str | None = None) -> bool:
         sql, args = "UPDATE chats SET active=0 WHERE chat_id=? AND active=1", [chat_id]
         if company_id:
             sql += " AND company_id=?"
             args.append(company_id)
+        if via:
+            sql += " AND via=?"
+            args.append(via)
         return self.x(sql, tuple(args)) > 0
 
     def chat(self, chat_id: int) -> dict | None:

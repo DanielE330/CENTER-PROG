@@ -543,6 +543,8 @@ export interface TgChat {
   title: string
   linked_at: number
   department_id: number | null
+  /** каким ботом привязан чат: shared — общий бот платформы, own — бот компании */
+  via?: 'shared' | 'own'
 }
 
 export interface TgPrefs {
@@ -569,6 +571,8 @@ export interface TgPrefs {
 
 export interface TgStatus {
   configured: boolean
+  /** какой бот ведёт компанию: own — свой (токен директора), shared — общий бот платформы, none — бота нет */
+  bot_kind?: 'own' | 'shared' | 'none'
   /** Hermes advisor is connected (otherwise reports use rules only). */
   advisor: boolean
   bot_username: string
@@ -790,9 +794,10 @@ export interface FnsSettingsView {
 export type IntegrationStatus = 'not_connected' | 'unchecked' | 'ok' | 'error' | 'sim'
 
 export interface IntegrationItem {
-  kind: 'onec' | 'edo' | 'bank'
+  kind: 'onec' | 'edo' | 'bank' | 'telegram'
   connected: boolean
-  source: 'sim' | 'live'
+  /** sim/live — 1С; own/shared — Telegram (свой бот компании или общий бот платформы) */
+  source: 'sim' | 'live' | 'own' | 'shared'
   status: IntegrationStatus
   last_check_at: string | null
   last_error: string | null
@@ -800,6 +805,9 @@ export interface IntegrationItem {
   url?: string
   username?: string
   password_set?: boolean
+  /** Telegram: имя бота и маска токена (только для manage); сам токен сервер не отдаёт никогда */
+  bot_username?: string
+  token_mask?: string
 }
 
 /** Результат проверки подключения 1С; `code` — причина (bad_credentials, odata_not_published, url_forbidden, timeout…). */
@@ -809,6 +817,8 @@ export interface IntegrationCheck {
   message: string
   documents?: number
   more?: boolean
+  /** Telegram: имя бота из getMe */
+  bot_username?: string
   optional_missing?: string[]
   missing?: string[]
 }

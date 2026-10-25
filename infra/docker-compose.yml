@@ -282,12 +282,15 @@ services:
   notifier:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: notifier}
-    # Расписание уведомлений: Telegram-бот (api.telegram.org, сеть edge) и почта (через notify). Без TELEGRAM_BOT_TOKEN
-    # бот выключен, а алерты и отчёты всё равно уходят на почту участникам, у которых она включена.
+    # Расписание уведомлений: Telegram-бот (api.telegram.org, сеть edge) и почта (через notify). Директор компании вводит токен
+    # СВОЕГО бота в «Настройки → Интеграции» (ledger хранит его зашифрованным, notifier подхватывает без перезапуска); общий бот
+    # TELEGRAM_BOT_TOKEN нужен только как запасной. Без обоих алерты и отчёты всё равно уходят на почту подписчикам.
     environment:
       NOTIFIER_DB: /data/notifier.db
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      # прокси для api.telegram.org (Telegram в России часто заблокирован): http://host:port или socks5h://host:port; пусто — напрямую
+      TELEGRAM_PROXY: ${TELEGRAM_PROXY:-}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       # консультант Hermes (OpenAI-совместимый API, лучше свой сервер: в запрос уходит статистика компании); пусто — только правила
       HERMES_URL: ${HERMES_URL:-}

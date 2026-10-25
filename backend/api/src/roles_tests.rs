@@ -82,6 +82,14 @@ pub(crate) struct Fake {
     /// тела PUT integrations/onec и PUT integrations/onec/status
     pub(crate) integ_puts: Vec<Value>,
     pub(crate) integ_status: Vec<Value>,
+    /// подключение Telegram в заглушке ledger, тела PUT telegram и PUT telegram/status, проверки getMe в заглушке notifier
+    /// (тело запроса), принудительный ответ проверки (статус, код, текст) и число вызовов telegram/sync
+    pub(crate) tg: Option<Value>,
+    pub(crate) tg_puts: Vec<Value>,
+    pub(crate) tg_status: Vec<Value>,
+    pub(crate) tg_verifies: Vec<Value>,
+    pub(crate) tg_verify_fail: Option<(StatusCode, String, String)>,
+    pub(crate) tg_syncs: u32,
     /// заглушка integrator: тела проверок 1С, ответ проверки, принудительная ошибка, query запросов obligations и их ответ
     pub(crate) onec_tests: Vec<Value>,
     pub(crate) onec_result: Option<Value>,
@@ -549,7 +557,7 @@ async fn adv_ask(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
 
 async fn l_integ_list(State(f): State<Shared>) -> Resp {
     let g = f.lock().unwrap();
-    (StatusCode::OK, Json(json!({"key_configured": !g.integ_key_missing, "items": g.integ.clone().into_iter().collect::<Vec<_>>()})))
+    (StatusCode::OK, Json(json!({"key_configured": !g.integ_key_missing, "items": g.integ.clone().into_iter().chain(g.tg.clone()).collect::<Vec<_>>()})))
 }
 
 async fn l_integ_put(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
@@ -582,6 +590,47 @@ async fn l_integ_status(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
 async fn l_integ_delete(State(f): State<Shared>) -> StatusCode {
     f.lock().unwrap().integ = None;
     StatusCode::NO_CONTENT
+}
+
+async fn l_tg_put(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    if g.integ_key_missing {
+        return lerr(StatusCode::SERVICE_UNAVAILABLE, "integrations_key_missing");
+    }
+    g.tg_puts.push(b.clone());
+    let row = json!({"kind": "telegram", "bot_username": b["bot_username"], "token_mask": "123…:…xyz", "token_set": true, "status": "ok",
+        "last_check_at": "2026-10-25T10:00:00Z", "last_error": null});
+    g.tg = Some(row.clone());
+    (StatusCode::OK, Json(row))
+}
+
+async fn l_tg_status(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    g.tg_status.push(b.clone());
+    let Some(row) = g.tg.as_mut() else { return lerr(StatusCode::NOT_FOUND, "not_found") };
+    let ok = b["ok"].as_bool().unwrap_or(false);
+    row["status"] = json!(if ok { "ok" } else { "error" });
+    row["last_error"] = if ok { Value::Null } else { b["error"].clone() };
+    (StatusCode::OK, Json(row.clone()))
+}
+
+async fn l_tg_delete(State(f): State<Shared>) -> StatusCode {
+    f.lock().unwrap().tg = None;
+    StatusCode::NO_CONTENT
+}
+
+async fn n_tg_verify(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    g.tg_verifies.push(b);
+    if let Some((s, c, m)) = g.tg_verify_fail.clone() {
+        return (s, Json(json!({"error": {"code": c, "message": m}})));
+    }
+    (StatusCode::OK, Json(json!({"ok": true, "bot_username": "My_Company_bot", "bot_id": 123456789})))
+}
+
+async fn n_tg_sync(State(f): State<Shared>) -> Resp {
+    f.lock().unwrap().tg_syncs += 1;
+    (StatusCode::OK, Json(json!({"started": 0, "stopped": 0})))
 }
 
 async fn i_check_url(Json(b): Json<Value>) -> Resp {
@@ -643,6 +692,10 @@ fn fake_router(f: Shared) -> Router {
         .route("/internal/v1/companies/{cid}/integrations", get(l_integ_list))
         .route("/internal/v1/companies/{cid}/integrations/onec", axum::routing::put(l_integ_put).delete(l_integ_delete))
         .route("/internal/v1/companies/{cid}/integrations/onec/status", axum::routing::put(l_integ_status))
+        .route("/internal/v1/companies/{cid}/integrations/telegram", axum::routing::put(l_tg_put).delete(l_tg_delete))
+        .route("/internal/v1/companies/{cid}/integrations/telegram/status", axum::routing::put(l_tg_status))
+        .route("/internal/v1/companies/{cid}/telegram/verify", post(n_tg_verify))
+        .route("/internal/v1/telegram/sync", post(n_tg_sync))
         .route("/internal/v1/onec/check-url", post(i_check_url))
         .route("/internal/v1/onec/test", post(i_onec_test))
         .route("/internal/v1/obligations", get(i_obligations))
@@ -855,6 +908,9 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
         ("PUT", format!("{co}/integrations/onec"), Manage),
         ("POST", format!("{co}/integrations/onec/test"), Manage),
         ("DELETE", format!("{co}/integrations/onec"), Manage),
+        ("PUT", format!("{co}/integrations/telegram"), Manage),
+        ("POST", format!("{co}/integrations/telegram/test"), Manage),
+        ("DELETE", format!("{co}/integrations/telegram"), Manage),
         ("GET", format!("{co}/fns/ens"), Read),
         ("POST", format!("{co}/fns/ens/import"), Edit),
         ("GET", format!("{co}/fns/counterparties"), Read),
@@ -950,7 +1006,7 @@ async fn every_route_enforces_its_permission_for_each_role() {
     let (cid, toks) = t.team4();
     let roles = ["director", "admin", "editor", "viewer"];
     let table = route_table(&cid);
-    assert_eq!(table.len(), 81, "таблица маршрутов должна совпадать с docs/roles.md");
+    assert_eq!(table.len(), 84, "таблица маршрутов должна совпадать с docs/roles.md");
     for (method, uri, need) in &table {
         for (i, tok) in toks.iter().enumerate() {
             let before = t.calls().len();

@@ -1,7 +1,9 @@
 """Внутренний сервис уведомлений (порт 8009): Telegram-бот, расписание, цели недели.
 uvicorn notifier.app:app --host 127.0.0.1 --port 8009
-Без TELEGRAM_BOT_TOKEN бот выключен (configured=false), а расписание работает: алерты и отчёты уходят письмом через notify
-тем участникам, у которых включена почта."""
+TELEGRAM_BOT_TOKEN — общий бот платформы (запасной); у компании может быть свой бот: директор вводит его токен в
+«Настройки → Интеграции», токены лежат в ledger, notifier подхватывает их сам (BotManager, раз в минуту и по /internal/v1/telegram/sync).
+Компания без бота (ни своего, ни общего): configured=false, а расписание работает: алерты и отчёты уходят письмом через notify
+тем участникам, у которых включена почта. TELEGRAM_PROXY — прокси для api.telegram.org."""
 import asyncio
 import logging
 import re
@@ -13,10 +15,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import config
+import re as _re
+
 from .bot import BotApp
+from .bots import BotManager, fingerprint
 from .jobs import Jobs
 from .store import KINDS, ROLES, STATUSES, Store
-from .telegram import Bot, TelegramError
+from .telegram import Bot, TelegramError, install_log_scrub, scrub
 from .upstream import Upstream, UpstreamError
 
 log = logging.getLogger("notifier")
@@ -26,12 +31,14 @@ CO = "/internal/v1/companies/{cid}/notifications"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    install_log_scrub()  # токен бота есть в адресе запроса к Telegram: журналы и ошибки его не повторяют
     app.state.store = app.state.store or Store()
     token = config.bot_token()
     app.state.bot = app.state.bot or (Bot(token) if token else None)
     app.state.up = app.state.up or Upstream()
     # расписание нужно и без бота: почтовый канал (notify) работает сам по себе
     app.state.jobs = Jobs(app.state.store, app.state.bot, app.state.up)
+    app.state.bots = BotManager(app.state.store, app.state.jobs, app.state.up, app.state.tg_transport)
     app.state.username = config.env("TELEGRAM_BOT_USERNAME")
     tasks = []
     if app.state.bot and not app.state.disable_tasks:
@@ -43,14 +50,17 @@ async def lifespan(app: FastAPI):
         tasks = [asyncio.create_task(app.state.botapp.poll_forever())]
     if not app.state.disable_tasks:
         tasks.append(asyncio.create_task(app.state.jobs.run_scheduler()))
+        tasks.append(asyncio.create_task(app.state.bots.run_forever()))  # боты компаний: токены из ledger, без перезапуска
     yield
     for t in tasks:
         t.cancel()
+    await app.state.bots.stop_all()
 
 
 app = FastAPI(title="notifier-service", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.state.store = app.state.bot = app.state.up = None
 app.state.disable_tasks = False
+app.state.tg_transport = None  # httpx-транспорт для проверки токенов и ботов компаний (подменяется в тестах)
 
 
 @app.exception_handler(HTTPException)
@@ -65,11 +75,16 @@ async def validation_error(_: Request, e: RequestValidationError):
     return JSONResponse({"error": {"code": "invalid_request", "message": "Некорректные параметры запроса"}}, status_code=422)
 
 
-def jobs(request: Request) -> Jobs:
-    """Рассылки для Telegram: без токена бота — 503."""
-    if not request.app.state.bot:
-        raise HTTPException(503, {"code": "bot_not_configured", "message": "Telegram-бот не настроен: не задан TELEGRAM_BOT_TOKEN"})
+def jobs(request: Request, cid: str) -> Jobs:
+    """Рассылки для Telegram: у компании нет ни своего бота, ни общего — 503."""
+    if request.app.state.jobs.bot_for(cid) is None:
+        raise HTTPException(503, {"code": "bot_not_configured", "message": "Telegram-бот не настроен: директор вводит токен своего бота в «Настройки → Интеграции» (или администратор платформы задаёт TELEGRAM_BOT_TOKEN)"})
     return request.app.state.jobs
+
+
+def bot_username(request: Request, cid: str) -> str:
+    """Имя бота, которым ведётся компания: собственный или общий."""
+    return request.app.state.bots.username(cid) or request.app.state.username
 
 
 def any_jobs(request: Request) -> Jobs:
@@ -83,7 +98,7 @@ def live():
 
 
 def chat_json(c: dict) -> dict:
-    return {"chat_id": c["chat_id"], "kind": c["kind"], "title": c["title"], "linked_at": c["linked_at"], "department_id": c.get("department_id")}
+    return {"chat_id": c["chat_id"], "kind": c["kind"], "title": c["title"], "linked_at": c["linked_at"], "department_id": c.get("department_id"), "via": c.get("via", "shared")}
 
 
 def prefs_json(p: dict) -> dict:
@@ -93,7 +108,9 @@ def prefs_json(p: dict) -> dict:
 @app.get(CO)
 def status(cid: str, request: Request):
     s: Store = request.app.state.store
-    return {"configured": request.app.state.bot is not None, "advisor": bool(config.hermes_url()), "bot_username": request.app.state.username,
+    own = cid in request.app.state.jobs.own
+    return {"configured": request.app.state.jobs.bot_for(cid) is not None, "bot_kind": "own" if own else ("shared" if request.app.state.bot else "none"),
+            "advisor": bool(config.hermes_url()), "bot_username": bot_username(request, cid),
             "chats": [chat_json(c) for c in s.chats(cid)], "prefs": prefs_json(s.prefs(cid))}
 
 
@@ -111,12 +128,60 @@ class WebRoleBody(BaseModel):
 def link(cid: str, request: Request, body: LinkBody | None = None, x_actor: str = Header(default="")):
     """Одноразовая ссылка привязки. Код действует 15 минут и сгорает при первом использовании.
     Роль в боте выводится из веб-роли того, кто выпустил ссылку (её передаёт BFF)."""
-    jobs(request)
+    jobs(request, cid)
     if body and body.web_role and body.web_role not in request.app.state.store.WEB_TO_TG:
         raise HTTPException(422, {"code": "invalid_role", "message": "Неизвестная роль"})
     code = request.app.state.store.new_link_code(cid, (body and body.web_user_id) or x_actor, (body and body.web_role) or "")
-    u = request.app.state.username
+    u = bot_username(request, cid)
     return {"code": code, "expires_in": config.LINK_TTL, "link": f"https://t.me/{u}?start={code}", "group_link": f"https://t.me/{u}?startgroup={code}"}
+
+
+# ---------- собственный бот компании ----------
+TOKEN_RE = _re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,50}$")
+
+
+class VerifyBody(BaseModel):
+    token: str | None = None
+
+
+@app.post("/internal/v1/companies/{cid}/telegram/verify")
+async def verify_bot(cid: str, request: Request, body: VerifyBody | None = None):
+    """getMe для токена бота компании: `{token}` — проверка нового токена перед сохранением, пусто — проверка сохранённого (токен берётся из
+    ledger). Не больше 10 проверок в минуту на компанию (429). Ответ: {ok, bot_username, bot_id}; токен нигде не повторяется."""
+    st = request.app.state
+    if not st.bots.limiter.allow(cid):
+        raise HTTPException(429, {"code": "rate_limited", "message": "Не больше 10 проверок бота в минуту: подождите немного"})
+    token = ((body and body.token) or "").strip()
+    items = await st.up.bot_tokens()
+    if token:
+        if not TOKEN_RE.match(token):
+            raise HTTPException(422, {"code": "invalid_bot_token", "message": "Токен бота: формат 123456789:AA… (его выдаёт @BotFather командой /newbot)"})
+        # один токен — одна компания (два опроса одного бота мешают друг другу и смешивают данные)
+        if any(i["company_id"] != cid and fingerprint(i["token"]) == fingerprint(token) for i in items or []) or (config.bot_token() and token == config.bot_token()):
+            raise HTTPException(409, {"code": "telegram_token_in_use", "message": "Этот бот уже подключён другой компанией или является общим ботом платформы: создайте своего у @BotFather"})
+    else:
+        mine = next((i for i in items or [] if i["company_id"] == cid), None)
+        if items is None:
+            raise HTTPException(503, {"code": "ledger_unavailable", "message": "Хранилище подключений недоступно, попробуйте позже"})
+        if not mine:
+            raise HTTPException(409, {"code": "telegram_not_connected", "message": "Свой бот не подключён: введите токен"})
+        token = mine["token"]
+    try:
+        me = await st.bots.verify(cid, token)
+    except TelegramError as e:
+        if e.code in (401, 404):
+            raise HTTPException(422, {"code": "telegram_token_invalid", "message": "Telegram не принял токен: проверьте, что он скопирован целиком и не отозван (@BotFather → /mybots → API Token)"})
+        if e.code == 429:
+            raise HTTPException(429, {"code": "rate_limited", "message": "Telegram просит подождать: повторите проверку через минуту"})
+        hint = " Если Telegram заблокирован в сети сервера, администратору нужно задать TELEGRAM_PROXY." if e.code == 503 else ""
+        raise HTTPException(503, {"code": "telegram_unreachable", "message": scrub(f"Не удалось связаться с Telegram ({e.description or e.code}).{hint}")})
+    return {"ok": True, **me}
+
+
+@app.post("/internal/v1/telegram/sync")
+async def sync_bots(request: Request):
+    """Немедленно сверить боты компаний с токенами в ledger (api вызывает после сохранения и отключения токена)."""
+    return await request.app.state.bots.sync()
 
 
 class PrefsBody(BaseModel):
@@ -171,8 +236,8 @@ def unlink(cid: str, chat_id: int, request: Request):
 
 @app.post(CO + "/test")
 async def test_message(cid: str, request: Request):
-    j = jobs(request)
-    n = await j.broadcast(cid, lambda c: j.bot.send(c, "✅ Тестовое уведомление: бот подключён и может писать в этот чат."))
+    j = jobs(request, cid)
+    n = await j.broadcast(cid, lambda c: j.bot_for(cid).send(c, "✅ Тестовое уведомление: бот подключён и может писать в этот чат."))
     return {"delivered": n}
 
 
@@ -180,7 +245,7 @@ async def test_message(cid: str, request: Request):
 async def send_now(cid: str, kind: str, request: Request):
     """Ручной запуск рассылки (для проверки и кнопки «Отправить сейчас» в настройках): в Telegram и на почту."""
     j = any_jobs(request)
-    has_chats = request.app.state.bot is not None and request.app.state.store.chats(cid)
+    has_chats = j.bot_for(cid) is not None and request.app.state.store.chats(cid)
     if not has_chats and not await j.up.mail_recipients(cid, kind):
         raise HTTPException(409, {"code": "no_chats", "message": "Некому отправить: нет подключённых чатов и подписчиков на почту"})
     try:

@@ -4,6 +4,7 @@
 mod admin;
 mod counterparties;
 mod integrations;
+mod integrations_tg;
 mod settings;
 mod db;
 mod members;
@@ -77,5 +78,9 @@ pub fn build(st: AppState) -> Router {
         .route(&format!("{co}/integrations/onec"), axum::routing::put(integrations::put_onec).delete(integrations::delete_onec))
         .route(&format!("{co}/integrations/onec/status"), axum::routing::put(integrations::put_status))
         .route(&format!("{co}/integrations/onec/credentials"), get(integrations::credentials))
+        // бот Telegram компании: токен шифруется так же; расшифрованные токены — только для notifier
+        .route(&format!("{co}/integrations/telegram"), axum::routing::put(integrations_tg::put_telegram).delete(integrations_tg::delete_telegram))
+        .route(&format!("{co}/integrations/telegram/status"), axum::routing::put(integrations_tg::put_status))
+        .route("/internal/v1/integrations/telegram/credentials", get(integrations_tg::credentials))
         .with_state(st)
 }

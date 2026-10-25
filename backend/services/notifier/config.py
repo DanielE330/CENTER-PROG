@@ -16,6 +16,21 @@ def bot_token() -> str:
     return env("TELEGRAM_BOT_TOKEN")
 
 
+def telegram_proxy() -> str:
+    """Прокси для запросов к api.telegram.org (Telegram в России часто заблокирован): http://host:port или socks5h://host:port. Пусто — напрямую."""
+    return env("TELEGRAM_PROXY").strip()
+
+
+def telegram_api() -> str:
+    """Базовый адрес Bot API; пусто — https://api.telegram.org. Задаёт только оператор (локальный сервер Bot API, проверки без сети)."""
+    return env("TELEGRAM_API_URL").strip().rstrip("/")
+
+
+def bots_sync_every() -> float:
+    """Как часто подтягиваем токены ботов компаний из ledger (секунды)."""
+    return float(env("TELEGRAM_BOTS_SYNC", "60"))
+
+
 def forecast_url() -> str:
     return env("FORECAST_URL", "http://127.0.0.1:3003")
 

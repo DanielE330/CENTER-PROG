@@ -105,9 +105,12 @@
 | `POST /api/v1/companies/{cid}/expected-events/tax-calendar` | edit | |
 | `POST /api/v1/companies/{cid}/integrations/sync` | edit | |
 | `POST /api/v1/companies/{cid}/integrations/fns/sync` | edit | налоговые события на год из ФНС (docs/fns.md) |
-| `GET /api/v1/companies/{cid}/integrations` | read | статусы подключений; адрес и логин 1С в ответе только у manage, пароля нет ни у кого |
+| `GET /api/v1/companies/{cid}/integrations` | read | статусы подключений (1С, Telegram); адрес и логин 1С, имя бота и маска токена в ответе только у manage, пароля и токена нет ни у кого |
 | `PUT\|DELETE /api/v1/companies/{cid}/integrations/onec` | manage | подключить (с проверкой) и отключить 1С компании (docs/integrator.md) |
 | `POST /api/v1/companies/{cid}/integrations/onec/test` | manage | проверка подключения (не больше 10 в минуту на компанию) |
+| `PUT /api/v1/companies/{cid}/integrations/telegram` | manage | токен СВОЕГО Telegram-бота: сначала `getMe` через notifier, затем шифрованное сохранение в ledger; ответ без токена (docs/notifications.md) |
+| `POST /api/v1/companies/{cid}/integrations/telegram/test` | manage | повторная проверка сохранённого токена (не больше 10 проверок в минуту на компанию) |
+| `DELETE /api/v1/companies/{cid}/integrations/telegram` | manage | отключить своего бота: токен удаляется, компания снова на общем боте платформы |
 | `GET /api/v1/companies/{cid}/fns/ens`, `/fns/counterparties` | read | ЕНС и проверка контрагентов |
 | `POST /api/v1/companies/{cid}/fns/ens/import` | edit | загрузка справки о состоянии расчётов (XML КНД 1160080 или CSV) |
 | `GET /api/v1/companies/{cid}/fns/settings` | read | настройки сведений ФНС: источники, признаки риска, учёт в прогнозе |

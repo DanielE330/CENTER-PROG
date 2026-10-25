@@ -1,13 +1,46 @@
 """Тонкий клиент Telegram Bot API. Токен нигде не попадает в сообщения об ошибках и логи."""
 import asyncio
+import logging
+import re
 
 import httpx
 
-API = "https://api.telegram.org"
+from . import config
+
+API = "https://api.telegram.org"  # адрес фиксирован; TELEGRAM_API_URL (оператор, не пользователь) нужен для локального Bot API сервера и живых проверок
+TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_-]{30,}")
+
+
+def scrub(text: str) -> str:
+    """Вырезает из текста всё, что похоже на токен бота (в адресе запроса к Telegram он есть): сообщения об ошибках и журналы его не повторяют."""
+    return TOKEN_RE.sub("[token]", text)
+
+
+def install_log_scrub() -> None:
+    """Все записи журнала (в том числе httpx/httpcore, которые пишут адрес запроса) проходят через scrub. Безопасно вызывать повторно."""
+    old = logging.getLogRecordFactory()
+    if getattr(old, "_tg_scrub", False):
+        return
+
+    def factory(*a, **kw):
+        r = old(*a, **kw)
+        if isinstance(r.msg, str):
+            r.msg = scrub(r.msg)
+        if isinstance(r.args, tuple):
+            r.args = tuple(scrub(x) if isinstance(x, str) else (scrub(str(x)) if isinstance(x, BaseException) else x) for x in r.args)
+        elif isinstance(r.args, dict):
+            r.args = {k: scrub(v) if isinstance(v, str) else v for k, v in r.args.items()}
+        return r
+
+    factory._tg_scrub = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(factory)
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)  # INFO-запись httpx содержит адрес с токеном
 
 
 class TelegramError(Exception):
     def __init__(self, code: int, description: str = "", retry_after: int = 0, migrate_to: int | None = None):
+        description = scrub(description)
         super().__init__(f"telegram {code}: {description}")
         self.code, self.description, self.retry_after, self.migrate_to = code, description, retry_after, migrate_to
 
@@ -19,19 +52,28 @@ class TelegramError(Exception):
 
 
 class Bot:
-    def __init__(self, token: str, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(self, token: str, transport: httpx.AsyncBaseTransport | None = None, proxy: str | None = None):
         self._token, self.transport = token, transport
+        self.proxy = config.telegram_proxy() if proxy is None else proxy  # TELEGRAM_PROXY: http://… или socks5h://…
+
+    def client(self, timeout: float) -> httpx.AsyncClient:
+        # при подменённом транспорте (тесты) прокси не используется: в httpx он имел бы приоритет над транспортом
+        if self.transport is None and self.proxy:
+            return httpx.AsyncClient(timeout=timeout, proxy=self.proxy)
+        return httpx.AsyncClient(timeout=timeout, transport=self.transport)
 
     async def call(self, method: str, data: dict | None = None, files: dict | None = None, timeout: float = 30) -> dict | list | bool:
-        url = f"{API}/bot{self._token}/{method}"
+        url = f"{config.telegram_api() or API}/bot{self._token}/{method}"
         for attempt in (0, 1):
             try:
-                async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as c:
+                async with self.client(timeout) as c:
                     if files:
                         r = await c.post(url, data={k: v for k, v in (data or {}).items() if v is not None}, files=files)
                     else:
                         r = await c.post(url, json=data or {})
-            except httpx.HTTPError as e:
+            except ImportError:
+                raise TelegramError(503, "ImportError: для socks5h:// нужен пакет httpx[socks]") from None
+            except Exception as e:
                 raise TelegramError(503, type(e).__name__) from None  # без текста исходной ошибки: в нём может быть URL с токеном
             j = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
             if j.get("ok"):

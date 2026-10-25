@@ -26,23 +26,42 @@ def cycle(values: list, cur):
 
 
 class BotApp:
-    def __init__(self, store: Store, bot: Bot, jobs: Jobs, username: str = ""):
-        self.store, self.bot, self.jobs, self.username = store, bot, jobs, username
+    """Диалог одного бота. `scope=None` — общий бот платформы; `scope=<company_id>` — собственный бот компании: он видит и
+    привязывает только чаты этой компании (другие чаты для него «не подключены»), смещение getUpdates хранится отдельно."""
+
+    def __init__(self, store: Store, bot: Bot, jobs: Jobs, username: str = "", scope: str | None = None):
+        self.store, self.bot, self.jobs, self.username, self.scope = store, bot, jobs, username, scope
+        self.via = "own" if scope else "shared"
+
+    def linked(self, chat_id: int) -> dict | None:
+        """Подключённый чат этого бота: чужая компания и чат, привязанный через другого бота, для него не существуют."""
+        link = self.store.chat(chat_id)
+        if not link or link.get("via", "shared") != self.via or (self.scope and link["company_id"] != self.scope):
+            return None
+        return link
+
+    @property
+    def offset_key(self) -> str:
+        return f"offset:{self.scope}" if self.scope else "offset"
 
     # ---------- опрос Telegram ----------
     async def poll_forever(self) -> None:
-        offset = int(self.store.state_get("offset", "0"))
+        offset = int(self.store.state_get(self.offset_key, "0"))
         while True:
             try:
                 for u in await self.bot.get_updates(offset):
                     offset = u["update_id"] + 1
-                    self.store.state_set("offset", str(offset))
+                    self.store.state_set(self.offset_key, str(offset))
                     try:
                         await self.handle(u)
                     except Exception as e:
                         log.warning("update %s: %s", u.get("update_id"), type(e).__name__)
             except TelegramError as e:
-                log.warning("getUpdates: %s", e.code)
+                log.warning("getUpdates %s: %s", self.scope or "shared", e.code)
+                if e.code in (401, 404) and self.scope:
+                    # токен отозван (@BotFather /revoke) или неверен: показываем причину в карточке «Telegram» и перестаём опрашивать
+                    await self.jobs.up.report_bot(self.scope, False, "Telegram отклонил токен бота: он отозван или неверен. Введите новый токен.")
+                    return
                 await asyncio.sleep(5)
             except Exception as e:
                 log.warning("poll: %s", type(e).__name__)
@@ -56,7 +75,7 @@ class BotApp:
         elif "my_chat_member" in u:
             m = u["my_chat_member"]
             if m["new_chat_member"]["status"] in ("left", "kicked"):
-                self.store.unlink_chat(m["chat"]["id"])
+                self.store.unlink_chat(m["chat"]["id"], self.scope, self.via)
 
     # ---------- сообщения ----------
     async def audit(self, cid: str, uid: int, action: str, obj: str = "") -> None:
@@ -88,7 +107,7 @@ class BotApp:
         if cmd == "start":
             await self.cmd_start(chat, uid, arg)
             return
-        link = self.store.chat(chat_id)
+        link = self.linked(chat_id)
         if not link:
             await self.say(chat_id, UNLINKED)
             return
@@ -140,7 +159,7 @@ class BotApp:
         elif cmd == "tz":
             await self.set_tz(chat_id, cid, arg)
         elif cmd == "unlink":
-            self.store.unlink_chat(chat_id)
+            self.store.unlink_chat(chat_id, via=self.via)
             await self.audit(cid, uid, "telegram.unlink", str(chat_id))
             await self.say(chat_id, "Чат отключён. Уведомления больше приходить не будут.")
         else:
@@ -149,6 +168,14 @@ class BotApp:
     async def cmd_start(self, chat: dict, uid: int, code: str) -> None:
         chat_id = chat["id"]
         if code:
+            peek = self.store.peek_link_code(code)
+            if peek and self.scope and peek["company_id"] != self.scope:
+                # код выдан другой компании: бот компании чужие чаты не привязывает (код при этом не расходуется)
+                await self.say(chat_id, "Эта ссылка выдана для другой компании. Создайте новую в «Настройках» своего сервиса.")
+                return
+            if peek and not self.scope and peek["company_id"] in self.jobs.own:
+                await self.say(chat_id, "У этой компании подключён собственный бот. Откройте ссылку из «Настроек → Telegram-уведомления», она ведёт к нему.")
+                return
             row = self.store.use_link_code(code)
             if not row:
                 await self.say(chat_id, "Ссылка устарела или уже использована. Создайте новую в «Настройках» сервиса.")
@@ -158,7 +185,7 @@ class BotApp:
                 await self.say(chat_id, f"⛔ Компания заблокирована оператором платформы: {esc(reason)}. Подключить чат нельзя.")
                 return
             title = chat.get("title") or chat.get("first_name") or ""
-            self.store.link_chat(chat_id, row["company_id"], "private" if chat["type"] == "private" else "group", title, row["user_id"])
+            self.store.link_chat(chat_id, row["company_id"], "private" if chat["type"] == "private" else "group", title, row["user_id"], self.via)
             who = (chat.get("first_name") or chat.get("title") or "")
             if row["web_role"]:
                 self.store.bind_web_member(row["company_id"], uid, who, row["user_id"], row["web_role"])  # роль из веб-роли
@@ -171,7 +198,7 @@ class BotApp:
                            "• алерты о кассовом разрыве за 7, 3 и 1 день;\n• риск-отчёт по понедельникам;\n• итоги недели и план;\n• итоги месяца и план.\n\n"
                            "Расписание меняется командой /settings. Список команд: /help.")
             return
-        if self.store.chat(chat_id):
+        if self.linked(chat_id):
             await self.say(chat_id, "Чат подключён. Команды: /help")
         else:
             await self.say(chat_id, UNLINKED)
@@ -187,7 +214,7 @@ class BotApp:
             await self.say(chat_id, "Нет данных для ответа: загрузите банковскую выписку в сервисе.")
 
     async def on_text(self, chat_id: int, uid: int, text: str) -> None:
-        link = self.store.chat(chat_id)
+        link = self.linked(chat_id)
         if not link:
             return
         if await self.blocked(chat_id, link["company_id"]):
@@ -303,7 +330,7 @@ class BotApp:
         msg = cb.get("message") or {}
         chat = msg.get("chat") or {}
         chat_id, uid, data = chat.get("id"), cb.get("from", {}).get("id", 0), cb.get("data", "")
-        link = self.store.chat(chat_id) if chat_id else None
+        link = self.linked(chat_id) if chat_id else None
         if not link:
             await self.bot.answer_callback(cb["id"], "Чат не подключён")
             return
@@ -373,4 +400,4 @@ class BotApp:
         total = sum(1 for x in self.store.goals(cid, g["week_start"]) if x["status"] != "skipped")
         lines = [f"🔄 <b>План обновлён с учётом ваших оценок</b> (выполнено {done} из {total})", ""]
         lines += [f"{i}. {esc(x['title'])}" for i, x in enumerate(goals, 1)]
-        await self.jobs.broadcast(cid, lambda c: self.bot.send(c, "\n".join(lines)), "week")
+        await self.jobs.broadcast(cid, lambda c: self.jobs.bot_for(cid).send(c, "\n".join(lines)), "week")

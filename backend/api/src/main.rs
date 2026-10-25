@@ -173,6 +173,8 @@ pub fn tenant_routes() -> Router<AppState> {
         .route(&format!("{co}/integrations"), get(integrations::get))
         .route(&format!("{co}/integrations/onec"), axum::routing::put(integrations::put_onec).delete(integrations::delete_onec))
         .route(&format!("{co}/integrations/onec/test"), post(integrations::test_onec))
+        .route(&format!("{co}/integrations/telegram"), axum::routing::put(integrations::put_telegram).delete(integrations::delete_telegram))
+        .route(&format!("{co}/integrations/telegram/test"), post(integrations::test_telegram))
         // сведения ФНС: налоговые события на год, ЕНС, проверка контрагентов (fns.rs)
         .route(&format!("{co}/integrations/fns/sync"), post(fns::sync))
         .route(&format!("{co}/fns/ens"), get(fns::ens))

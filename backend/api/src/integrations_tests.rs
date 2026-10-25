@@ -262,3 +262,150 @@ async fn banned_company_cannot_use_integrations() {
         assert_eq!((s, code(&v)), (StatusCode::FORBIDDEN, "company_banned"));
     }
 }
+
+// ---------- Telegram: свой бот компании ----------
+
+const TG: &str = "123456789:AAExampleExampleExampleExample_abc-xyz";
+
+fn tg_connected(t: &T) {
+    t.f.lock().unwrap().tg = Some(json!({"kind": "telegram", "bot_username": "My_Company_bot", "token_mask": "123…:…xyz", "token_set": true, "status": "ok",
+        "last_check_at": "2026-10-25T09:00:00Z", "last_error": "старая ошибка"}));
+}
+
+fn tg_item(v: &Value) -> &Value {
+    v["items"].as_array().unwrap().iter().find(|i| i["kind"] == "telegram").unwrap()
+}
+
+#[tokio::test]
+async fn telegram_status_is_visible_to_all_but_bot_name_and_mask_only_to_director() {
+    let t = T::new().await;
+    let (cid, toks) = t.team4();
+    let (s, v) = t.call("GET", &base(&cid), &toks[0], None).await;
+    assert_eq!((s, tg_item(&v)["connected"].as_bool(), tg_item(&v)["source"].as_str(), tg_item(&v)["status"].as_str()), (StatusCode::OK, Some(false), Some("shared"), Some("not_connected")));
+    tg_connected(&t);
+    for (i, tok) in toks.iter().enumerate() {
+        let (_, v) = t.call("GET", &base(&cid), tok, None).await;
+        let tg = tg_item(&v);
+        assert_eq!((tg["connected"].as_bool(), tg["source"].as_str(), tg["status"].as_str(), tg["last_check_at"].as_str()), (Some(true), Some("own"), Some("ok"), Some("2026-10-25T09:00:00Z")), "роль {i}");
+        let text = v.to_string();
+        assert!(!text.contains("AAExample") && !text.contains("\"token\""), "роль {i}: {text}");
+        if i == 0 {
+            assert_eq!((tg["bot_username"].as_str(), tg["token_mask"].as_str()), (Some("My_Company_bot"), Some("123…:…xyz")));
+        } else {
+            assert!(!text.contains("My_Company_bot") && !text.contains("123…") && !text.contains("старая ошибка"), "роль {i}: {text}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn telegram_put_checks_getme_first_then_saves_and_never_returns_the_token() {
+    let t = T::new().await;
+    let (cid, [dir, ..]) = t.team();
+    let (s, v) = t.call("PUT", &format!("{}/telegram", base(&cid)), &dir, Some(json!({"token": format!("  {TG} ")}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    {
+        let g = t.f.lock().unwrap();
+        assert_eq!(g.tg_verifies, vec![json!({"token": TG})]);
+        assert_eq!((g.tg_puts[0]["token"].as_str(), g.tg_puts[0]["bot_username"].as_str()), (Some(TG), Some("My_Company_bot")));
+        assert_eq!(g.tg_syncs, 1, "notifier сразу подхватывает токен");
+    }
+    assert!(!v.to_string().contains("AAExample") && !v.to_string().contains(TG), "{v}");
+    assert_eq!((tg_item(&v)["connected"].as_bool(), tg_item(&v)["bot_username"].as_str(), tg_item(&v)["token_mask"].as_str(), v["check"]["ok"].as_bool()), (Some(true), Some("My_Company_bot"), Some("123…:…xyz"), Some(true)));
+    // порядок: проверка у notifier раньше записи в ledger
+    let calls = t.calls();
+    let iv = calls.iter().position(|c| c.ends_with("/telegram/verify")).unwrap();
+    let ip = calls.iter().position(|c| c.starts_with("PUT") && c.ends_with("/integrations/telegram")).unwrap();
+    assert!(iv < ip, "{calls:?}");
+}
+
+#[tokio::test]
+async fn telegram_put_rejects_bad_format_and_failed_getme_without_saving_or_echoing() {
+    let t = T::new().await;
+    let (cid, [dir, ..]) = t.team();
+    let uri = format!("{}/telegram", base(&cid));
+    for b in [json!({}), json!({"token": ""}), json!({"token": "abc"}), json!({"token": 5}), json!({"token": "123456:short"}), json!({"token": format!("{TG}\n")})] {
+        let (s, v) = t.call("PUT", &uri, &dir, Some(b.clone())).await;
+        // перевод строки в конце обрезается как пробел и токен принимается
+        if b["token"].as_str().is_some_and(|x| x.trim() == TG) {
+            assert_eq!(s, StatusCode::OK);
+            t.f.lock().unwrap().tg = None;
+            continue;
+        }
+        assert_eq!((s, code(&v)), (StatusCode::UNPROCESSABLE_ENTITY, "invalid_bot_token"), "{b}");
+    }
+    assert!(t.f.lock().unwrap().tg.is_none());
+    let before = t.f.lock().unwrap().tg_puts.len();
+    t.f.lock().unwrap().tg_verify_fail = Some((StatusCode::UNPROCESSABLE_ENTITY, "telegram_token_invalid".into(), "Telegram не принял токен".into()));
+    let (s, v) = t.call("PUT", &uri, &dir, Some(json!({"token": TG}))).await;
+    assert_eq!((s, code(&v)), (StatusCode::UNPROCESSABLE_ENTITY, "telegram_token_invalid"));
+    assert!(!v.to_string().contains("AAExample"));
+    t.f.lock().unwrap().tg_verify_fail = Some((StatusCode::TOO_MANY_REQUESTS, "rate_limited".into(), "Не больше 10 проверок в минуту".into()));
+    let (s, v) = t.call("PUT", &uri, &dir, Some(json!({"token": TG}))).await;
+    assert_eq!((s, code(&v)), (StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
+    let g = t.f.lock().unwrap();
+    assert_eq!(g.tg_puts.len(), before, "после отказа getMe токен не сохраняется");
+    assert!(g.tg.is_none());
+}
+
+#[tokio::test]
+async fn telegram_put_without_integrations_key_is_503() {
+    let t = T::new().await;
+    let (cid, [dir, ..]) = t.team();
+    t.f.lock().unwrap().integ_key_missing = true;
+    let (s, v) = t.call("PUT", &format!("{}/telegram", base(&cid)), &dir, Some(json!({"token": TG}))).await;
+    assert_eq!((s, code(&v)), (StatusCode::SERVICE_UNAVAILABLE, "integrations_key_missing"));
+    assert!(!v.to_string().contains("AAExample"));
+}
+
+#[tokio::test]
+async fn telegram_test_rechecks_saved_token_and_records_the_result() {
+    let t = T::new().await;
+    let (cid, [dir, ..]) = t.team();
+    let uri = format!("{}/telegram/test", base(&cid));
+    let (s, v) = t.call("POST", &uri, &dir, None).await;
+    assert_eq!((s, code(&v)), (StatusCode::CONFLICT, "telegram_not_connected"));
+    assert!(t.f.lock().unwrap().tg_verifies.is_empty());
+    tg_connected(&t);
+    let (s, v) = t.call("POST", &uri, &dir, None).await;
+    assert_eq!((s, v["check"]["ok"].as_bool(), tg_item(&v)["status"].as_str()), (StatusCode::OK, Some(true), Some("ok")));
+    {
+        let g = t.f.lock().unwrap();
+        assert_eq!(g.tg_verifies, vec![json!({})], "токен в запрос проверки не передаётся, notifier берёт его из ledger");
+        assert_eq!(g.tg_status.last().unwrap()["ok"], true);
+    }
+    t.f.lock().unwrap().tg_verify_fail = Some((StatusCode::UNPROCESSABLE_ENTITY, "telegram_token_invalid".into(), "Telegram не принял токен: он отозван".into()));
+    let (s, v) = t.call("POST", &uri, &dir, None).await;
+    assert_eq!((s, v["check"]["ok"].as_bool(), v["check"]["code"].as_str(), tg_item(&v)["status"].as_str()), (StatusCode::OK, Some(false), Some("telegram_token_invalid"), Some("error")));
+    assert_eq!(t.f.lock().unwrap().tg_status.last().unwrap()["error"], "Telegram не принял токен: он отозван");
+    t.f.lock().unwrap().tg_verify_fail = Some((StatusCode::TOO_MANY_REQUESTS, "rate_limited".into(), "лимит".into()));
+    assert_eq!(t.call("POST", &uri, &dir, None).await.0, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn telegram_delete_removes_the_token_and_non_directors_cannot_touch_it() {
+    let t = T::new().await;
+    let (cid, toks) = t.team4();
+    tg_connected(&t);
+    for tok in &toks[1..] {
+        for (m, u, b) in [("PUT", "telegram", Some(json!({"token": TG}))), ("POST", "telegram/test", None), ("DELETE", "telegram", None)] {
+            let (s, v) = t.call(m, &format!("{}/{u}", base(&cid)), tok, b).await;
+            assert_eq!((s, code(&v)), (StatusCode::FORBIDDEN, "forbidden"), "{m} {u}");
+        }
+    }
+    assert!(t.f.lock().unwrap().tg.is_some() && t.f.lock().unwrap().tg_verifies.is_empty());
+    let (s, _) = t.call("DELETE", &format!("{}/telegram", base(&cid)), &toks[0], None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert!(t.f.lock().unwrap().tg.is_none());
+    assert_eq!(t.f.lock().unwrap().tg_syncs, 1);
+    let (_, v) = t.call("GET", &base(&cid), &toks[0], None).await;
+    assert_eq!((tg_item(&v)["connected"].as_bool(), tg_item(&v)["source"].as_str()), (Some(false), Some("shared")));
+}
+
+#[tokio::test]
+async fn telegram_of_a_foreign_company_is_not_found() {
+    let t = T::new().await;
+    let (_, [dir, ..]) = t.team();
+    let (s, v) = t.call("PUT", &format!("{}/telegram", base("other-company")), &dir, Some(json!({"token": TG}))).await;
+    assert_eq!((s, code(&v)), (StatusCode::NOT_FOUND, "not_found"));
+    assert!(t.f.lock().unwrap().tg_verifies.is_empty());
+}

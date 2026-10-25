@@ -17,6 +17,7 @@ import { formatDateTime } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
 import { useSyncIntegrations } from '../../hooks/queries'
 import type { IntegrationCheck, IntegrationItem, IntegrationsView } from '../../types'
+import { TelegramBotForm } from './TelegramBotForm'
 
 const STATUS_TONE: Record<string, Tone> = { ok: 'success', error: 'danger', unchecked: 'warning', not_connected: 'neutral', sim: 'neutral' }
 // Объекты 1С, которые нужно отметить в составе OData (docs/integrator.md)
@@ -200,10 +201,23 @@ function OnecCard({ item, view }: { item: IntegrationItem; view: IntegrationsVie
   )
 }
 
-function SimulatorCard({ kind }: { kind: 'edo' | 'bank' }) {
+/** Свой Telegram-бот компании: токен вводит директор, без токена работает общий бот платформы. Подробности — в TelegramBotForm. */
+function TelegramCard({ item }: { item: IntegrationItem }) {
   const { t } = useTranslation()
   return (
-    <Section title={t(`integrations.${kind}.title`)} badges={<Badge>{t('integrations.source.sim')}</Badge>}>
+    <Section id="integrations-telegram" title={t('integrations.telegram.title')} badges={null}>
+      <TelegramBotForm item={item} />
+      <p className="text-xs text-muted">
+        <a href="#schedule" className="text-primary underline">{t('integrations.telegram.scheduleLink')}</a>
+      </p>
+    </Section>
+  )
+}
+
+function SimulatorCard({ kind }: { kind: 'edo' }) {
+  const { t } = useTranslation()
+  return (
+    <Section title={t(`integrations.${kind}.title`)} badges={null}>
       <p className="text-[13px] text-muted">{t(`integrations.${kind}.text`)}</p>
     </Section>
   )
@@ -222,6 +236,7 @@ export function IntegrationsPanel() {
     if (loaded && window.location.hash === '#integrations') document.getElementById('integrations')?.scrollIntoView({ block: 'start' })
   }, [loaded])
   const onec = q.data?.items.find((i) => i.kind === 'onec')
+  const telegram = q.data?.items.find((i) => i.kind === 'telegram')
   const onecErr = sync.data?.sources?.onec?.status === 'error' ? sync.data.sources.onec : null
 
   return (
@@ -232,6 +247,7 @@ export function IntegrationsPanel() {
         {q.data && onec && (
           <>
             <OnecCard item={onec} view={q.data} />
+            {telegram && <TelegramCard item={telegram} />}
             <Section title={t('integrations.fns.title')} badges={<Badge>{t('integrations.fns.badge')}</Badge>}>
               <p className="text-[13px] text-muted">
                 {t('integrations.fns.text')}{' '}
@@ -239,7 +255,6 @@ export function IntegrationsPanel() {
               </p>
             </Section>
             <SimulatorCard kind="edo" />
-            <SimulatorCard kind="bank" />
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-3">
                 <Button variant="primary" disabled={sync.isPending || lock.disabled} title={lock.title} onClick={() => sync.mutate('C001')}>

@@ -282,7 +282,12 @@
     "already_verified": "The email is already confirmed",
     "email_not_verified": "Confirm your email first: the link is in the email sent after registration",
     "notify_unavailable": "The notification service is unavailable, try again later",
-    "mail_limited": "Too many invitations this hour, try again later"
+    "mail_limited": "Too many invitations this hour, try again later",
+    "invalid_bot_token": "The bot token looks wrong: format 123456789:AAH… (issued by @BotFather)",
+    "telegram_token_invalid": "Telegram did not accept the token: it is incomplete or revoked",
+    "telegram_unreachable": "Could not reach Telegram. If it is blocked on the server network, the administrator must set TELEGRAM_PROXY",
+    "telegram_not_connected": "Your own bot is not connected: enter a token",
+    "telegram_token_in_use": "This bot is already connected by another company or is the platform's shared bot: create your own at @BotFather"
   },
   "quality": {
     "title": "Data quality",
@@ -783,6 +788,41 @@
       "redirect": "Enter the final application address as it opens in the browser after sign-in.",
       "url_forbidden": "A public address on port 443 or 8443 is required; localhost, internal networks and private IP ranges are not accepted.",
       "bad_response": "The address must lead to the 1C application, without /odata and without the language code."
+    },
+    "telegram": {
+      "title": "Telegram",
+      "sharedText": "Notifications currently come from the platform's shared bot. Enter your own bot token so messages come from your company's bot: creating one at @BotFather is free and takes a minute.",
+      "ownText": "Notifications and chat linking go through your own bot. The platform's shared bot is not used for your company.",
+      "notConnected": "Not connected: the platform's shared bot is used",
+      "connectedAs": "Bot {{name}} is connected",
+      "mask": "Token: {{mask}}",
+      "managerOnly": "Only the company owner can enter or change the bot token.",
+      "token": "Bot token",
+      "tokenPlaceholder": "123456789:AAH…",
+      "tokenHint": "Get it from @BotFather with /newbot. Format: 123456789:AAH… The token is stored encrypted and is never shown after saving.",
+      "tokenKept": "The token is saved. Enter a new one to replace it.",
+      "tokenBad": "The token looks wrong: expected 123456789:AAH… (digits, a colon, then 30–50 characters).",
+      "save": "Check and save",
+      "saving": "Checking…",
+      "recheck": "Check again",
+      "disconnect": "Disconnect",
+      "disconnectConfirm": "Disconnect your bot? Chats linked to it will stop receiving notifications; the platform's shared bot is used again and chats must be linked anew.",
+      "connectedOk": "Bot {{name}} is connected and already running.",
+      "connectedNext": "Open the bot in Telegram and press Start, then link a chat in the \"Telegram notifications\" section below: the Connect button gives you a link.",
+      "openBot": "Open {{name}} in Telegram",
+      "checkedOk": "Bot {{name}} responds.",
+      "howTitle": "How to create a bot and link a chat",
+      "how1": "In Telegram open @BotFather and send /newbot. Pick a name and a username (it must end with \"bot\").",
+      "how2": "BotFather sends a token like 123456789:AAH… Copy all of it into the field above.",
+      "how3": "Press \"Check and save\": the service checks the token with Telegram and starts the bot right away.",
+      "how4": "Open your bot and press Start. To link a chat or a group, press Connect in the \"Telegram notifications\" section and follow the link.",
+      "how5": "Never share the token. If it leaks, revoke it at @BotFather (/revoke) and enter a new one.",
+      "scheduleLink": "Schedule and thresholds are in the \"Telegram notifications\" section",
+      "viaShared": "Linked through the shared bot: to receive notifications from your bot, link the chat again.",
+      "viaOwn": "Linked through your bot: after the bot is disconnected, link the chat again.",
+      "badgeOwn": "Own bot",
+      "badgeShared": "Shared bot",
+      "botLabel": "Bot"
     }
   },
   "sync": {
@@ -1260,7 +1300,7 @@
   "telegram": {
     "title": "Notification schedule (Telegram and email)",
     "subtitle": "The bot sends a cash-gap alert a week ahead, a weekly risk report, and weekly and monthly summaries with a plan. You mark goal results in the bot — they drive the next plan.",
-    "notConfigured": "The bot is not configured: the administrator has not set a Telegram bot token.",
+    "notConfigured": "The bot is not configured: the company owner enters their own Telegram bot token in Settings → Integrations (or the platform administrator sets a shared bot).",
     "connect": "Connect Telegram",
     "connectHint": "The link is valid for 15 minutes and works once.",
     "openPrivate": "Open in Telegram (private chat)",
@@ -1302,7 +1342,11 @@
     "advisorOn": "Hermes advisor is connected: advice arrives in reports.",
     "advisorOff": "Hermes advisor is not connected: reports use rules.",
     "aiConsent": "Hermes advisor: advice in reports and questions in the bot",
-    "aiConsentHint": "Allows sending summary company statistics (amounts, dates, payment names) to the cloud model. Without consent nothing is sent. Ask the bot with /ask or plain text in a private chat."
+    "aiConsentHint": "Allows sending summary company statistics (amounts, dates, payment names) to the cloud model. Without consent nothing is sent. Ask the bot with /ask or plain text in a private chat.",
+    "botTitle": "Bot",
+    "botOwn": "Own bot: {{name}}",
+    "botShared": "Platform shared bot: {{name}}. You can connect your own in Settings → Integrations.",
+    "relink": "Linked through another bot — link again"
   },
   "goals": {
     "title": "Weekly goals",

@@ -7,6 +7,13 @@
 //! - `PUT    /api/v1/companies/{cid}/integrations/onec` — manage: `{url, username, password?}`; сохраняет и сразу проверяет
 //! - `POST   /api/v1/companies/{cid}/integrations/onec/test` — manage: проверка (тело необязательно: `{url?, username?, password?}`)
 //! - `DELETE /api/v1/companies/{cid}/integrations/onec` — manage: отключить, реквизиты удаляются
+//! - `PUT    /api/v1/companies/{cid}/integrations/telegram` — manage: `{token}` токен СВОЕГО бота (@BotFather); сначала getMe через
+//!   notifier, потом сохранение (ledger шифрует токен); не больше 10 проверок в минуту на компанию (`429 rate_limited`)
+//! - `POST   /api/v1/companies/{cid}/integrations/telegram/test` — manage: повторная проверка сохранённого токена
+//! - `DELETE /api/v1/companies/{cid}/integrations/telegram` — manage: отключить, токен удаляется, компания снова на общем боте
+//!
+//! Токен бота принимается только в теле PUT и дальше идёт notifier (getMe) и ledger (шифрование) по внутренней сети; ни один
+//! ответ, журнал или запись аудита его не содержит (в аудите ledger только действие и маска).
 //!
 //! Пароль принимается только в теле PUT/POST и дальше уходит ledger/integrator по внутренней сети; ни один ответ
 //! (и ни одна запись журнала) его не содержит. Без `INTEGRATIONS_KEY` пароль не принимается: `503 integrations_key_missing`.
@@ -60,7 +67,24 @@ pub fn build_view(list: &Value, manage: bool) -> Value {
         }
         None => json!({"kind": "onec", "connected": false, "source": "sim", "status": "not_connected", "last_check_at": null, "last_error": null, "last_sync_at": null}),
     };
-    json!({"can_manage": manage, "key_configured": manage.then(|| list["key_configured"].clone()), "items": [onec, simulator("edo"), simulator("bank")]})
+    json!({"can_manage": manage, "key_configured": manage.then(|| list["key_configured"].clone()), "items": [onec, simulator("edo"), simulator("bank"), telegram_view(list, manage)]})
+}
+
+/// Telegram: `source` = `own` (свой бот компании) или `shared` (общий бот платформы). Имя бота, маска токена и текст ошибки — только manage.
+fn telegram_view(list: &Value, manage: bool) -> Value {
+    let saved = list["items"].as_array().and_then(|a| a.iter().find(|i| i["kind"] == "telegram"));
+    match saved {
+        Some(c) => {
+            let mut o = json!({"kind": "telegram", "connected": true, "source": "own", "status": c["status"], "last_check_at": c["last_check_at"]});
+            if manage {
+                o["bot_username"] = c["bot_username"].clone();
+                o["token_mask"] = c["token_mask"].clone();
+                o["last_error"] = c["last_error"].clone();
+            }
+            o
+        }
+        None => json!({"kind": "telegram", "connected": false, "source": "shared", "status": "not_connected", "last_check_at": null}),
+    }
 }
 
 async fn view_for(st: &AppState, ctx: &Ctx, cid: &str, manage: bool) -> R<Value> {
@@ -159,6 +183,83 @@ pub async fn delete_onec(State(st): State<AppState>, Manager(p): Manager, ctx: C
     authorize(&p, &cid)?;
     let r = st.ledger.json(Method::DELETE, &ledger_path(&cid, "/onec"), &with_actor(&ctx, &p), None).await?;
     if r.status.is_success() { Ok(StatusCode::NO_CONTENT) } else { r.into_result().map(|_| StatusCode::NO_CONTENT) }
+}
+
+// ---------- Telegram: свой бот компании ----------
+
+fn tg_path(cid: &str, tail: &str) -> String {
+    format!("/internal/v1/companies/{cid}/telegram{tail}")
+}
+
+/// Формат токена BotFather: `^\d{6,12}:[A-Za-z0-9_-]{30,50}$` (то же правило в ledger, notifier и форме).
+pub fn valid_token(t: &str) -> bool {
+    let Some((id, secret)) = t.split_once(':') else { return false };
+    (6..=12).contains(&id.len())
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && (30..=50).contains(&secret.len())
+        && secret.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Сервис notifier сразу подхватывает смену токена (иначе он сделает это сам в течение минуты). Сбой не мешает действию.
+async fn notifier_sync(st: &AppState, ctx: &Ctx) {
+    let _ = st.notifier.json(Method::POST, "/internal/v1/telegram/sync", ctx, Some(&json!({}))).await;
+}
+
+/// PUT /api/v1/companies/{cid}/integrations/telegram {token} (manage) -> {..как GET.., check}
+/// Токен проверяется через getMe (notifier: 422 `telegram_token_invalid` / `telegram_unreachable`, 429 `rate_limited`), затем ledger
+/// сохраняет его зашифрованным (503 `integrations_key_missing` без `INTEGRATIONS_KEY`). Токен в ответе не возвращается.
+pub async fn put_telegram(State(st): State<AppState>, Manager(p): Manager, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<Value>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let actx = with_actor(&ctx, &p);
+    let token = b["token"].as_str().map(str::trim).unwrap_or_default().to_string();
+    if !valid_token(&token) {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_bot_token", "Токен бота: формат 123456789:AA… (его выдаёт @BotFather командой /newbot)"));
+    }
+    let check = st.notifier.json(Method::POST, &tg_path(&cid, "/verify"), &actx, Some(&json!({"token": token}))).await?.into_result()?;
+    let username = check["bot_username"].as_str().unwrap_or_default().to_string();
+    st.ledger.json(Method::PUT, &ledger_path(&cid, "/telegram"), &actx, Some(&json!({"token": token, "bot_username": username}))).await?.into_result()?;
+    notifier_sync(&st, &actx).await;
+    let mut out = view_for(&st, &actx, &cid, true).await?;
+    out["check"] = json!({"ok": true, "bot_username": username});
+    Ok(Json(out))
+}
+
+/// POST /api/v1/companies/{cid}/integrations/telegram/test (manage) -> {check, ..как GET..}
+/// Проверяет сохранённый токен (getMe) и записывает результат в статус подключения. 409 `telegram_not_connected`, если токена нет.
+pub async fn test_telegram(State(st): State<AppState>, Manager(p): Manager, ctx: Ctx, Path(cid): Path<String>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let actx = with_actor(&ctx, &p);
+    let list = st.ledger.get(&ledger_path(&cid, ""), &actx).await?;
+    if !list["items"].as_array().is_some_and(|a| a.iter().any(|i| i["kind"] == "telegram")) {
+        return Err(err(StatusCode::CONFLICT, "telegram_not_connected", "Свой бот не подключён: введите токен"));
+    }
+    let r = st.notifier.json(Method::POST, &tg_path(&cid, "/verify"), &actx, Some(&json!({}))).await?;
+    if r.status == StatusCode::TOO_MANY_REQUESTS || r.status.is_server_error() {
+        return r.into_result().map(Json);
+    }
+    let (check, body) = if r.status.is_success() {
+        let c = r.json();
+        let body = json!({"ok": true, "bot_username": c["bot_username"]});
+        (json!({"ok": true, "bot_username": c["bot_username"]}), body)
+    } else {
+        let e = &r.json()["error"];
+        let msg = e["message"].as_str().unwrap_or("Не удалось проверить бота");
+        (json!({"ok": false, "code": e["code"], "message": msg}), json!({"ok": false, "error": msg}))
+    };
+    st.ledger.json(Method::PUT, &ledger_path(&cid, "/telegram/status"), &actx, Some(&body)).await?.into_result()?;
+    notifier_sync(&st, &actx).await;
+    let mut out = view_for(&st, &actx, &cid, true).await?;
+    out["check"] = check;
+    Ok(Json(out))
+}
+
+/// DELETE /api/v1/companies/{cid}/integrations/telegram (manage) -> 204; токен удаляется, чаты остаются, рассылки идут общим ботом.
+pub async fn delete_telegram(State(st): State<AppState>, Manager(p): Manager, ctx: Ctx, Path(cid): Path<String>) -> R<StatusCode> {
+    authorize(&p, &cid)?;
+    let actx = with_actor(&ctx, &p);
+    st.ledger.json(Method::DELETE, &ledger_path(&cid, "/telegram"), &actx, None).await?.into_result().map(|_| ())?;
+    notifier_sync(&st, &actx).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// После синхронизации с подключённой 1С: результат попадает в статус подключения (`last_sync_at`, ошибка).

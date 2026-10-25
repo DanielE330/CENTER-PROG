@@ -158,11 +158,13 @@ fn company_exists(c: &rusqlite::Connection, cid: &str) -> R<()> {
 
 // ---------- обработчики ----------
 
-/// GET integrations -> {key_configured, items:[{kind, url, username, password_set, status, ...}]}; пароля нет.
+/// GET integrations -> {key_configured, items:[{kind, url, username, password_set, status, ...}]}; пароля нет. Подключение Telegram
+/// (`kind = telegram`: bot_username, token_mask, status) идёт в том же списке; токена нет.
 pub async fn list(State(st): State<AppState>, Path(cid): Path<String>) -> R<Json<Value>> {
     let c = lock(&st);
     company_exists(&c, &cid)?;
-    let items: Vec<Value> = load(&c, &cid)?.iter().map(view).collect();
+    let mut items: Vec<Value> = load(&c, &cid)?.iter().map(view).collect();
+    items.extend(crate::integrations_tg::view_of(&c, &cid)?);
     Ok(Json(json!({"key_configured": st.integrations_key.is_some(), "items": items})))
 }
 
