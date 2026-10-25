@@ -190,6 +190,7 @@ pub fn tenant_routes() -> Router<AppState> {
         .route(&format!("{co}/forecasts/latest"), get(http::to_forecast))
         .route(&format!("{co}/forecasts/{{rid}}"), get(http::to_forecast))
         .route(&format!("{co}/backtest"), get(http::to_forecast))
+        .route(&format!("{co}/evaluate"), post(http::to_forecast))
         .route(&format!("{co}/scenarios"), post(http::create_scenario))
         .route(&format!("{co}/forecast-settings"), get(http::forecast_settings).put(http::forecast_settings))
         .route(&format!("{co}/plan-fact"), get(http::to_planfact))

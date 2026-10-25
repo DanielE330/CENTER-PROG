@@ -425,7 +425,13 @@
       "amount": "Amount",
       "occurrences": "Occurrences"
     },
-    "modelLine": "Model {{version}} · {{paths}} paths · seed {{seed}} · data quality: {{level}} ({{days}} d)"
+    "modelLine": "Model {{version}} · {{paths}} paths · seed {{seed}} · data quality: {{level}} ({{days}} d)",
+    "trace": {
+      "title": "How the forecast was built",
+      "subtitle": "Step-by-step calculation log: model {{model}}, {{paths}} paths",
+      "show": "Show steps",
+      "hide": "Hide"
+    }
   },
   "backtest": {
     "title": "Forecast quality",
@@ -440,12 +446,23 @@
       "drift": "“Trend”",
       "beats": "Model beats both",
       "coverage": "Inside 10–90%",
-      "n": "Points"
+      "n": "Points",
+      "rmse": "RMSE",
+      "mse": "MSE, ₽²"
     },
     "origins": "checkpoints",
-    "precision": "alarm precision (P ≥ 50%)",
-    "recall": "recall ({{count}} real gap windows)",
-    "note": "The error is the mean absolute error (MAE) of the balance. With few real gaps, alarm precision and recall are not very informative."
+    "precision": "Precision (alarms)",
+    "recall": "Recall ({{count}} gap windows)",
+    "note": "Balance error: MAE mean absolute, MSE mean squared, RMSE its root. A gap is a negative balance on any of the 30 days after the check date.",
+    "accuracy": "Accuracy",
+    "f1": "F1",
+    "brier": "Brier (0 is perfect)",
+    "matrixTitle": "Confusion matrix: gap alarm (P ≥ {{threshold}}%) vs actual gap in 30 days",
+    "factGap": "Actual: gap",
+    "factNoGap": "Actual: no gap",
+    "predGap": "Predicted: gap",
+    "predNoGap": "Predicted: no gap",
+    "calibration": "Mean predicted gap probability {{p}}, actual share of gap windows {{rate}}."
   },
   "transactions": {
     "title": "Transactions",
@@ -1056,7 +1073,7 @@
     "fileAria": "Statement file",
     "choose": "Choose a statement file",
     "uploading": "Uploading and parsing the file…",
-    "formats": "CSV, XLSX, 1C statement · up to 25 MB",
+    "formats": "CSV, XLSX, 1C statement · up to 25 MB; the dataset file all_operations.csv — any size",
     "doneTitle": "Import finished",
     "doneText_one": "{{count}} transaction added. The forecast was recalculated.",
     "doneText_other": "{{count}} transactions added. The forecast was recalculated.",
@@ -1078,7 +1095,14 @@
     "sample": "First rows of the file",
     "confirm": "Confirm and build the forecast",
     "processing": "Processing…",
-    "another": "Another file"
+    "another": "Another file",
+    "datasetTitle": "Dataset file {{file}}: {{count}} companies",
+    "datasetText": "The file holds several companies. Pick one — only its statement is uploaded, then check and confirm as usual. Select companies.csv too to see names.",
+    "datasetCompany": "Company",
+    "datasetRows": "{{count}} operations",
+    "datasetLoad": "Upload this company",
+    "datasetReading": "Reading the dataset…",
+    "datasetNoOps": "Choose the operations file (all_operations.csv or a statement); companies.csv only together with it"
   },
   "account": {
     "title": "Sign-in methods",
@@ -1577,5 +1601,20 @@
     "checking": "Checking the link…",
     "toApp": "Go to the app",
     "backToLogin": "Back to sign in"
+  },
+  "datasetEval": {
+    "title": "Control dataset evaluation",
+    "subtitle": "Every company of all_operations.csv: rolling-origin backtest, balance and gap metrics",
+    "choose": "Choose all_operations.csv",
+    "running": "{{done}} of {{total}} done",
+    "hint": "Choose the dataset file (optionally with companies.csv). For every company the model sees only the past at each check date, forecasts 30 days and is compared with the actual balance. Nothing is saved to the company.",
+    "notDataset": "Not a dataset file: a company_id column with several companies is required",
+    "summary": "Companies: {{companies}}, evaluated (5+ months of history): {{evaluated}}, check points: {{origins}}.",
+    "brier": "Brier (probability)",
+    "matrix": "Confusion matrix: gap within 30 days, alarm at P ≥ 50%",
+    "calibration": "Mean predicted probability {{p}} vs actual gap rate {{rate}}.",
+    "balance": "Balance forecast error (P50 vs actual), mean over companies",
+    "nmae": "NMAE — MAE as % of the company median weekly turnover.",
+    "csv": "Download per-company metrics (CSV)"
   }
 }

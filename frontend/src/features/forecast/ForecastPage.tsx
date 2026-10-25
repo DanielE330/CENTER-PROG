@@ -20,6 +20,8 @@ import { errorText } from '../../i18n/helpers'
 import type { ForecastDay, Rule } from '../../types'
 import { ForecastChart } from './ForecastChart'
 import { BacktestCard } from './BacktestCard'
+import { TraceCard } from './TraceCard'
+import { DatasetEvalCard } from './DatasetEvalCard'
 import { weeklyFlows } from './model'
 import { categoryLabel } from '../../i18n/categories'
 
@@ -166,7 +168,11 @@ export default function ForecastPage() {
               </div>
             </Card>
 
+            <TraceCard r={r} />
+
             <BacktestCard />
+
+            <DatasetEvalCard />
 
             <Card title={t('forecast.rules.title', { count: r.rules.length })} subtitle={t('forecast.rules.subtitle')}>
               {r.rules.length === 0 ? (

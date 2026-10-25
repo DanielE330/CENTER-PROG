@@ -29,6 +29,7 @@ ALIASES = {
     "inn": ["инн", "инн контрагента", "inn", "counterparty_inn"],
     "purpose": ["назначение платежа", "назначение", "purpose", "description", "описание", "payment_purpose"],
     "source_id": ["operation_id", "id операции", "номер операции"],
+    "company": ["company_id", "код компании"],
     "balance": ["остаток", "остаток на конец дня", "остаток на счете", "balance", "balance_after", "остаток на счёте", "balance_eod"],
 }
 IN_WORDS = {"in", "credit", "приход", "поступление", "кредит", "income", "+", "входящий"}
@@ -133,6 +134,11 @@ def parse_statement(filename: str, data: bytes) -> dict:
     has_amount = "amount" in cols or ("debit" in cols or "credit" in cols)
     if not has_amount:
         raise ValueError("no_amount_column")
+    if "company" in cols:
+        # общий файл датасета (all_operations.csv): выписки разных компаний склеивать нельзя — интерфейс делит его сам
+        ids = {str(r[cols["company"]]).strip() for r in rows[1:] if len(r) > cols["company"] and str(r[cols["company"]]).strip()}
+        if len(ids) > 1:
+            raise ValueError("multiple_companies")
 
     txs, errors = [], []
     for i, row in enumerate(rows[1:], start=2):

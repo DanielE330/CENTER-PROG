@@ -11,6 +11,9 @@ import { loadPrefs } from '../../lib/prefs'
 import { errorText } from '../../i18n/helpers'
 import { usePerms } from '../../app/perms'
 import { categoryLabel } from '../../i18n/categories'
+import { Select } from '../../components/ui/Select'
+import { companyFile, isCompaniesFile, readCompanies, splitByCompany } from '../../lib/datasetSplit'
+import type { SplitDataset } from '../../lib/datasetSplit'
 
 /** Upload -> preview -> confirm. After confirming, the forecast is rebuilt. */
 export function ImportStatement({ onDone }: { onDone?: () => void }) {
@@ -23,18 +26,48 @@ export function ImportStatement({ onDone }: { onDone?: () => void }) {
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [done, setDone] = useState<{ inserted: number; skipped: number } | null>(null)
   const [error, setError] = useState<unknown>(null)
-  const busy = upload.isPending || confirm.isPending || recalc.isPending
+  const [dataset, setDataset] = useState<SplitDataset | null>(null)
+  const [company, setCompany] = useState('')
+  const [splitting, setSplitting] = useState(false)
+  const busy = upload.isPending || confirm.isPending || recalc.isPending || splitting
 
-  async function pick(file?: File) {
-    if (!file) return
-    setError(null)
-    setDone(null)
+  async function send(file: File) {
     try {
       setPreview(await upload.mutateAsync(file))
     } catch (e) {
       setPreview(null)
       setError(e)
     }
+  }
+
+  /** One statement, or the dataset (all_operations.csv, optionally with companies.csv): then a company is chosen first. */
+  async function pick(files?: FileList | null) {
+    const list = [...(files ?? [])]
+    if (list.length === 0) return
+    setError(null)
+    setDone(null)
+    setDataset(null)
+    const names = list.find(isCompaniesFile)
+    const file = list.find((f) => !isCompaniesFile(f))
+    if (!file) {
+      setError(new Error(t('import.datasetNoOps')))
+      return
+    }
+    setSplitting(true)
+    try {
+      const split = await splitByCompany(file, names ? await readCompanies(names) : undefined)
+      if (split) {
+        setDataset(split)
+        setCompany(split.companies[0]?.id ?? '')
+        return
+      }
+    } catch (e) {
+      setError(e)
+      return
+    } finally {
+      setSplitting(false)
+    }
+    await send(file)
   }
 
   async function accept() {
@@ -67,17 +100,37 @@ export function ImportStatement({ onDone }: { onDone?: () => void }) {
         ref={inputRef}
         type="file"
         accept=".csv,.xlsx,.txt,.1c"
+        multiple
         className="sr-only"
         tabIndex={-1}
         aria-label={t('import.fileAria')}
         disabled={busy}
         onChange={(e) => {
-          void pick(e.target.files?.[0])
+          void pick(e.target.files)
           e.target.value = ''
         }}
       />
 
-      {!preview && (
+      {dataset && !preview && (
+        <div className="flex flex-col gap-3 rounded-card border border-primary bg-primary-soft/40 p-4">
+          <p className="text-sm font-semibold">{t('import.datasetTitle', { file: dataset.fileName, count: dataset.companies.length })}</p>
+          <p className="text-[13px] text-muted">{t('import.datasetText')}</p>
+          <Select
+            label={t('import.datasetCompany')}
+            value={company}
+            onChange={setCompany}
+            options={dataset.companies.map((c) => ({ value: c.id, label: `${c.id}${c.name ? ` — ${c.name}` : ''} · ${t('import.datasetRows', { count: c.rows })}` }))}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" disabled={busy || !company} onClick={() => { const d = dataset; setDataset(null); void send(companyFile(d, company)) }}>
+              {t('import.datasetLoad')}
+            </Button>
+            <Button disabled={busy} onClick={() => setDataset(null)}>{t('common.cancel')}</Button>
+          </div>
+        </div>
+      )}
+
+      {!preview && !dataset && (
         <>
           <div className="rounded-control bg-app border border-line p-3 text-[13px] text-muted">
             <p className="font-medium text-ink mb-1">{t('import.dataUsedTitle')}</p>
@@ -89,8 +142,8 @@ export function ImportStatement({ onDone }: { onDone?: () => void }) {
             onClick={() => inputRef.current?.click()}
             className="flex flex-col items-center gap-2 rounded-card border border-dashed border-line px-4 py-6 text-center hover:bg-hover cursor-pointer disabled:opacity-60"
           >
-            {upload.isPending ? <Loader2 size={22} className="spin text-primary" aria-hidden /> : <FileUp size={22} className="text-primary" aria-hidden />}
-            <span className="text-sm font-medium">{upload.isPending ? t('import.uploading') : t('import.choose')}</span>
+            {upload.isPending || splitting ? <Loader2 size={22} className="spin text-primary" aria-hidden /> : <FileUp size={22} className="text-primary" aria-hidden />}
+            <span className="text-sm font-medium">{splitting ? t('import.datasetReading') : upload.isPending ? t('import.uploading') : t('import.choose')}</span>
             <span className="text-xs text-muted">{t('import.formats')}</span>
           </button>
         </>

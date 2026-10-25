@@ -204,6 +204,12 @@ fn save_run(st: &AppState, cid: &str, rev: i64, scenario: Option<&Scenario>, res
         ],
     )
     .map_err(internal)?;
+    // пошаговый журнал расчёта в лог сервиса (docker compose logs forecast)
+    let kind = if scenario.is_some() { "scenario" } else { "forecast" };
+    eprintln!("[{at}] {kind} {id} company={cid} revision={rev} update={}", serde_json::to_string(upd).unwrap_or_default());
+    for t in &res.trace {
+        eprintln!("[{at}] {kind} {id} step {}. {}: {}", t.step, t.title, t.detail);
+    }
     Ok((id, at))
 }
 
@@ -392,4 +398,54 @@ pub async fn put_settings(State(st): State<AppState>, Path(cid): Path<String>, J
         )
         .map_err(internal)?;
     Ok(Json(json!({"update_mode": b.update_mode})))
+}
+
+// ---------- оценка качества на контрольном датасете ----------
+
+#[derive(Deserialize)]
+pub struct EvalRow {
+    date: NaiveDate,
+    /// подписанная сумма, коп.
+    amount: i64,
+    #[serde(default)]
+    counterparty: String,
+    #[serde(default)]
+    inn: String,
+    #[serde(default)]
+    purpose: String,
+    /// остаток на конец дня, коп.
+    balance: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct EvalBody {
+    company: String,
+    rows: Vec<EvalRow>,
+}
+
+const MAX_EVAL_ROWS: usize = 50_000;
+
+/// POST evaluate {company, rows} -> бэктест одной компании контрольного датасета, без сохранения в базу.
+/// Те же параметры и разметка, что в `eval` (forecast/src/bin/eval.rs): итог по всем компаниям собирает интерфейс.
+pub async fn evaluate(Json(b): Json<EvalBody>) -> R<Json<Value>> {
+    if b.rows.is_empty() || b.rows.len() > MAX_EVAL_ROWS {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_rows", "Нужно от 1 до 50 000 операций компании"));
+    }
+    let company = b.company.chars().take(64).collect::<String>();
+    let ops = b.rows.len();
+    let r = tokio::task::spawn_blocking(move || {
+        let rows: Vec<(Tx, Option<i64>)> = b
+            .rows
+            .into_iter()
+            .map(|r| (Tx { date: r.date, amount: r.amount, counterparty: r.counterparty, inn: r.inn, purpose: r.purpose, category: "x".into() }, r.balance))
+            .collect();
+        let balances = model::daily_balances(&rows);
+        let txs: Vec<Tx> = rows.into_iter().map(|r| r.0).collect();
+        model::backtest(&txs, &balances, 14)
+    })
+    .await
+    .map_err(internal)?;
+    let mut v = json!({"company": company, "operations": ops, "backtest": r});
+    stringify_money(&mut v);
+    Ok(Json(v))
 }

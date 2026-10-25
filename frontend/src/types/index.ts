@@ -184,6 +184,8 @@ export interface ForecastResult {
   seed: number
   n_paths: number
   quality: { level: QualityLevel | string; history_days: number; notes: string[] }
+  /** Step-by-step calculation log (absent in runs made before it existed). */
+  trace?: Array<{ step: number; title: string; detail: string }>
   days: ForecastDay[]
   risk: Risk
   rules: Rule[]
@@ -238,6 +240,11 @@ export interface BacktestMetric {
   mae_drift: Kop
   model_beats_baselines_share: number
   band_coverage?: number
+  /** MSE, ₽² */
+  mse_model_rub2?: number
+  rmse_model?: Kop
+  /** MAE as % of the company's median weekly turnover */
+  mae_pct_turnover?: number
   n: number
 }
 
@@ -246,6 +253,17 @@ export interface Backtest {
   alarm_precision: number | null
   alarm_recall: number | null
   actual_gap_windows: number
+  /** confusion matrix of the gap alarm (P ≥ alarm_threshold) against an actual gap in 30 days */
+  alarm_tp?: number
+  alarm_fp?: number
+  alarm_fn?: number
+  alarm_tn?: number
+  alarm_accuracy?: number | null
+  alarm_f1?: number | null
+  brier?: number | null
+  mean_probability?: number | null
+  gap_rate?: number | null
+  alarm_threshold?: number
   metrics: BacktestMetric[]
   series_14?: Array<{ date: string; predicted: Kop; actual: Kop }>
   note?: string

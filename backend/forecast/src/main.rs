@@ -54,6 +54,7 @@ async fn main() {
         .route(&format!("{co}/forecasts/{{rid}}"), get(routes::get_forecast))
         .route(&format!("{co}/scenarios"), post(routes::create_scenario))
         .route(&format!("{co}/backtest"), get(routes::run_backtest))
+        .route(&format!("{co}/evaluate"), post(routes::evaluate))
         .route(&format!("{co}/summary"), get(routes::summary))
         .route(&format!("{co}/rules"), get(routes::rules))
         .route(&format!("{co}/forecast-settings"), get(routes::get_settings).put(routes::put_settings))

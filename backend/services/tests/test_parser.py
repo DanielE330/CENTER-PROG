@@ -253,3 +253,13 @@ def test_running_balance_mode_detected():
     s = r["stats"]
     assert s["balance_mode"] == "running" and s["balance_checked"] == 2 and s["balance_mismatches"] == 0
     assert s["opening_balance_kop"] == "100000"
+
+
+def test_multi_company_file_is_rejected():
+    from parser.statement import parse_statement
+    head = "company_id;operation_id;operation_date;amount;direction;counterparty_inn;counterparty_name;payment_purpose;balance_eod\n"
+    one = head + "C001;C001-1;2024-10-01;990.00;Списание;1;Банк;Комиссия;1000.00\n"
+    assert len(parse_statement("a.csv", one.encode())["transactions"]) == 1
+    two = one + "C002;C002-1;2024-10-01;10.00;Поступление;2;ООО;Оплата;10.00\n"
+    with pytest.raises(ValueError, match="multiple_companies"):
+        parse_statement("all_operations.csv", two.encode())

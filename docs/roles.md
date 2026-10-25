@@ -128,6 +128,7 @@
 | `GET /api/v1/gov/key-rate` | read | |
 | `POST /api/v1/companies/{cid}/forecasts`, `/scenarios` | read | вычисляющие POST |
 | `GET /api/v1/companies/{cid}/forecasts/latest`, `/forecasts/{rid}`, `/backtest`, `/plan-fact` | read | |
+| `POST /api/v1/companies/{cid}/evaluate` | read | бэктест одной компании контрольного датасета без сохранения (оценка качества на всём датасете собирается в интерфейсе) |
 | `GET /api/v1/companies/{cid}/forecast-settings` | read | режим обновления прогноза |
 | `PUT /api/v1/companies/{cid}/forecast-settings` | admin | полный пересчёт или «Обновлять по новым данным» |
 | `GET /api/ext/v1/company`, `/forecast`, `/transactions`, `/expected-events`, `/plan-fact`; `POST /api/ext/v1/forecast` | токен, read | права по роли владельца |

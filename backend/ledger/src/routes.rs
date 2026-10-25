@@ -317,6 +317,7 @@ pub async fn upload_import(State(st): State<AppState>, ctx: Ctx, Path(cid): Path
             "too_many_rows" => "Слишком много строк (максимум 200 000)",
             "file_too_large" => "Файл больше 25 МБ",
             "bad_encoding" => "Не удалось определить кодировку файла",
+            "multiple_companies" => "В файле операции нескольких компаний: выберите компанию при загрузке",
             _ => "Не удалось разобрать файл",
         };
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "parse_failed", format!("{msg} ({code})")));
