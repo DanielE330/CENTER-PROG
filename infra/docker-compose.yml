@@ -221,6 +221,10 @@ services:
       API_SERVER_KEY: ${HERMES_AGENT_KEY:-}
       ADVISOR_MCP_TOKEN: ${ADVISOR_MCP_TOKEN:-}
       HERMES_MODEL: ${HERMES_AGENT_MODEL:-gpt-6.1-sol}
+      HTTPS_PROXY: ${HERMES_PROXY:-}
+      HTTP_PROXY: ${HERMES_PROXY:-}
+      ALL_PROXY: ${HERMES_PROXY:-}
+      NO_PROXY: advisor,ledger,forecast,planfact,auth,api,web-api,localhost,127.0.0.1
     tmpfs: ["/tmp", "/home/hermes:uid=1000,gid=1000,mode=0700"]
     depends_on:
       advisor: {condition: service_healthy}
@@ -235,6 +239,12 @@ services:
     # вход в подписку ChatGPT/Codex по коду устройства: `docker compose --profile hermes run --rm hermes-login`
     profiles: [hermes]
     entrypoint: ["hermes", "auth", "add", "openai-codex"]
+    # Если сервер в России, OpenAI отвечает 403: задайте HERMES_PROXY (например http://192.168.1.101:1081, общий VPN-прокси контейнера bots)
+    environment:
+      HTTPS_PROXY: ${HERMES_PROXY:-}
+      HTTP_PROXY: ${HERMES_PROXY:-}
+      ALL_PROXY: ${HERMES_PROXY:-}
+      NO_PROXY: advisor,ledger,forecast,planfact,auth,api,web-api,localhost,127.0.0.1
     volumes: ["${HERMES_DATA:-hermes-data}:/data"]
     networks: [edge]
 
