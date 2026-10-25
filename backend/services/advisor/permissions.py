@@ -4,7 +4,7 @@
 
 # право -> инструменты; needs_edit — право записи, доступно только ролям с правом edit
 PERMISSIONS: dict[str, dict] = {
-    "read_forecast": {"tools": ["get_forecast_risk", "get_upcoming_payments"], "needs_edit": False},
+    "read_forecast": {"tools": ["get_forecast_risk", "get_upcoming_payments", "get_goals"], "needs_edit": False},
     "read_operations": {"tools": ["get_transactions_by_category", "get_plan_fact"], "needs_edit": False},
     "read_counterparties": {"tools": ["get_counterparty_risks"], "needs_edit": False},
     "run_scenarios": {"tools": ["run_scenario"], "needs_edit": False},

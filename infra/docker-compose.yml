@@ -203,6 +203,7 @@ services:
       LEDGER_URL: http://ledger:3002
       FORECAST_URL: http://forecast:3003
       PLANFACT_URL: http://planfact:3004
+      NOTIFIER_URL: http://notifier:8009
     # чаты консультанта и стратегии «Плана и факта»
     volumes: [advisor-data:/data]
     networks: [internal]

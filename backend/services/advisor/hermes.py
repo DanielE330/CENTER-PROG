@@ -59,13 +59,13 @@ MODE_RULE = {
     "ru": {"chat": "",
            "plan": """
 РЕЖИМ «ПЛАН» (стратегия для экрана «План и факт»). Твоя задача — составить пользователю финансовую стратегию:
-1) собери факты инструментами: прогноз и риск, ближайшие платежи и просрочки, план-факт (что платят с опозданием), крупные клиенты и их риски по ФНС; при необходимости проверь сценарии;
+1) собери факты инструментами: прогноз и риск, ближайшие платежи и просрочки, план-факт (что платят с опозданием), цели недели (get_goals: что поставлено и что выполнено; опирайся на них и не противоречь им), крупные клиенты и их риски по ФНС; при необходимости проверь сценарии;
 2) если не знаешь цель или ограничения (горизонт, желаемый резерв, что можно переносить, готовность к кредиту) — задай уточняющие вопросы и подожди ответа, варианты — в suggest_followups;
 3) когда данных хватает — вызови save_strategy_plan: измеримая цель, 3–8 шагов с датами и суммами (что сделать, как это сдвигает разрыв), риски плана и контрольные точки, которые пользователь увидит на «Плане и факте»;
 4) в ответе коротко изложи стратегию и скажи, что она сохранена на экране «План и факт». Платежи в план компании без прямой просьбы не добавляй."""},
     "en": {"chat": "",
            "plan": """
-PLAN MODE (strategy for the Plan vs fact screen): 1) gather facts with the tools (forecast and risk, upcoming and overdue payments, plan vs fact, key clients and their tax-registry risks, scenarios if useful); 2) if the goal or constraints are unknown (horizon, desired reserve, what can be deferred, attitude to credit) ask clarifying questions and wait, options via suggest_followups; 3) when you have enough, call save_strategy_plan: a measurable goal, 3-8 steps with dates and amounts and their effect on the gap, plan risks and checkpoints visible on Plan vs fact; 4) summarize the strategy and say it is saved on the Plan vs fact screen. Do not add payments to the company plan unless explicitly asked."""},
+PLAN MODE (strategy for the Plan vs fact screen): 1) gather facts with the tools (forecast and risk, upcoming and overdue payments, plan vs fact, weekly goals (get_goals: what was set and done; build on them, do not contradict them), key clients and their tax-registry risks, scenarios if useful); 2) if the goal or constraints are unknown (horizon, desired reserve, what can be deferred, attitude to credit) ask clarifying questions and wait, options via suggest_followups; 3) when you have enough, call save_strategy_plan: a measurable goal, 3-8 steps with dates and amounts and their effect on the gap, plan risks and checkpoints visible on Plan vs fact; 4) summarize the strategy and say it is saved on the Plan vs fact screen. Do not add payments to the company plan unless explicitly asked."""},
 }
 LABELS = {
     "ru": {"read_forecast": "смотреть прогноз и риск разрыва", "read_operations": "смотреть операции и план-факт",

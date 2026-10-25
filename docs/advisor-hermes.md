@@ -33,7 +33,7 @@ SPA ── api (права, роль) ── advisor ──/v1/chat/completions�
 
 | Право | Инструменты | Запись |
 |---|---|---|
-| `read_forecast` | `get_forecast_risk`, `get_upcoming_payments` | нет |
+| `read_forecast` | `get_forecast_risk`, `get_upcoming_payments`, `get_goals` (цели недели из notifier) | нет |
 | `read_operations` | `get_transactions_by_category`, `get_plan_fact` | нет |
 | `read_counterparties` | `get_counterparty_risks` (флаги выгружены из ФНС) | нет |
 | `run_scenarios` | `run_scenario` (без сохранения) | нет |

@@ -41,6 +41,7 @@ class Services:
             "forecast": env("FORECAST_URL", "http://127.0.0.1:3003").rstrip("/"),
             "ledger": env("LEDGER_URL", "http://127.0.0.1:3002").rstrip("/"),
             "planfact": env("PLANFACT_URL", "http://127.0.0.1:3004").rstrip("/"),
+            "notifier": env("NOTIFIER_URL", "http://127.0.0.1:8009").rstrip("/"),
         }
 
     async def call(self, service: str, method: str, path: str, **kw) -> Any:
@@ -121,6 +122,11 @@ TOOL_SPECS: list[dict] = [
         "description": "План-факт: сколько платежей оплачено в срок, с отклонением, пропущено; крупнейшие отклонения и пропуски.",
         "parameters": {"type": "object", "properties": {
             "days": {"type": "integer", "minimum": 14, "maximum": 365, "description": "Период в днях, по умолчанию 90"}}}}},
+    {"type": "function", "function": {
+        "name": "get_goals",
+        "description": "Цели недели компании (их ставят в боте и на странице «Цели»): цели текущей недели со статусом (open, done, skipped), "
+                       "цели прошлой недели, доля выполненных (velocity) и итог ретро. target_rub — измеримая сумма цели, если задана.",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "run_scenario",
         "description": "Сценарий «что если» без сохранения решения: задержка оплат клиента, падение выручки, рост постоянных расходов, "
@@ -313,6 +319,17 @@ class Toolbox:
         return {"as_of": pf.get("as_of"), "days": pf.get("days"), "counts": dict(counts), "missed": missed,
                 "largest_deviations": [row(i) for i in dev], "recent_weeks": weeks, "note": pf.get("note")}
 
+    async def _t_get_goals(self) -> dict:
+        d = await self.svc.call("notifier", "GET", "notifications/sprint")
+
+        def g(x):
+            return {"title": x.get("title"), "status": x.get("status"), "due": x.get("due"),
+                    "target_rub": rub(x.get("target_kop")) if x.get("target_kop") is not None else None}
+
+        return {"today": d.get("today"), "sprint_week_start": d.get("sprint"), "goals": [g(x) for x in (d.get("goals") or [])][:20],
+                "prev_week_start": d.get("prev_sprint"), "prev_goals": [g(x) for x in (d.get("prev_goals") or [])][:20],
+                "velocity": d.get("velocity"), "retro": d.get("retro")}
+
     async def _t_run_scenario(self, **a) -> dict:
         sc: dict[str, Any] = {}
         for k, lo, hi, conv in (("delay_days", 0, 90, int), ("revenue_drop_pct", 0, 100, float), ("fixed_cost_growth_pct", 0, 300, float)):
@@ -499,7 +516,7 @@ class _State:
 
 
 # инструменты старого агента (llm_gateway): только чтение, сценарии и предложения
-LEGACY_TOOLS = {"get_forecast_risk", "get_upcoming_payments", "get_plan_fact", "run_scenario", "get_transactions_by_category",
+LEGACY_TOOLS = {"get_goals", "get_forecast_risk", "get_upcoming_payments", "get_plan_fact", "run_scenario", "get_transactions_by_category",
                 "propose_expected_payment", "get_counterparty_risks", "suggest_followups", "get_app_guide"}
 
 

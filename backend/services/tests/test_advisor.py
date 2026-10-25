@@ -71,6 +71,10 @@ class World:
                 {"date": "2026-09-01", "title": "Аренда", "source": "recurring", "plan": "-15000000", "fact": "-15000000", "diff": "0", "status": "paid"},
                 {"date": "2026-09-05", "title": "Интернет", "source": "recurring", "plan": "-100000", "fact": None, "diff": None, "status": "missed"},
                 {"date": "2026-09-07", "title": "Зарплата", "source": "recurring", "plan": "-5000000", "fact": "-6000000", "diff": "-1000000", "status": "deviation"}]})
+        if host == "notifier" and path.endswith("/notifications/sprint"):
+            return httpx.Response(200, json={"today": "2026-09-29", "sprint": "2026-09-28", "velocity": 0.5, "retro": None, "prev_sprint": "2026-09-21",
+                                             "goals": [{"title": "Собрать 300 000 ₽", "status": "open", "due": "2026-10-02", "target_kop": 30000000}],
+                                             "prev_goals": [{"title": "Закрыть аренду", "status": "done", "due": None, "target_kop": None}]})
         if host == "llm-gateway":
             if self.llm is None:
                 return httpx.Response(503, json={"error": {"code": "provider_not_configured", "message": "нет ключа"}})
@@ -82,7 +86,7 @@ class World:
 
 @pytest.fixture
 def world(monkeypatch):
-    for k, v in (("FORECAST_URL", "http://forecast"), ("LEDGER_URL", "http://ledger"), ("PLANFACT_URL", "http://planfact"), ("LLM_GATEWAY_URL", "http://llm-gateway")):
+    for k, v in (("FORECAST_URL", "http://forecast"), ("LEDGER_URL", "http://ledger"), ("PLANFACT_URL", "http://planfact"), ("NOTIFIER_URL", "http://notifier"), ("LLM_GATEWAY_URL", "http://llm-gateway")):
         monkeypatch.setenv(k, v)
     monkeypatch.setattr(tl, "today", lambda: TODAY)
     w = World()
@@ -308,3 +312,18 @@ def test_end_to_end_with_real_gateway_masks_names(client, world, monkeypatch, tm
     assert j["answer"].startswith("Главный клиент ООО «")  # токен раскрыт обратно
     wire = "\n".join(to_provider)
     assert "Ромашка" not in wire and "Вектор" not in wire
+
+
+def test_get_goals_tool_reads_weekly_goals(client, world):
+    def llm(p):
+        tool_msgs = [m for m in p["messages"] if m["role"] == "tool"]
+        if not tool_msgs:
+            return llm_reply("", [("get_goals", {})])
+        g = json.loads(tool_msgs[0]["content"])
+        assert g["goals"] == [{"title": "Собрать 300 000 ₽", "status": "open", "due": "2026-10-02", "target_rub": 300000}]
+        assert g["prev_goals"][0]["status"] == "done" and g["velocity"] == 0.5
+        return llm_reply("Цель недели: собрать 300 000 ₽.")
+
+    world.llm = llm
+    j = ask(client).json()
+    assert j["tools_used"] == ["get_goals"] and "300 000" in j["answer"]
