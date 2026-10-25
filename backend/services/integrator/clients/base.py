@@ -16,7 +16,7 @@ def env(name: str, default: str) -> str:
 
 
 def make_http(base_url: str, transport: httpx.BaseTransport | None = None, **kw) -> httpx.Client:
-    timeout = float(env("INTEGRATOR_TIMEOUT", "5"))
+    timeout = kw.pop("timeout", None) or float(env("INTEGRATOR_TIMEOUT", "5"))
     return httpx.Client(base_url=base_url, timeout=timeout, transport=transport, **kw)
 
 

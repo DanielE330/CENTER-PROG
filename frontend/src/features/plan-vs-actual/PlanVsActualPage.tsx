@@ -21,6 +21,7 @@ import { isNoData } from '../../lib/errors'
 import { errorText } from '../../i18n/helpers'
 import { useTheme } from '../../lib/theme'
 import type { Backtest, Kop, PlanFact, PlanFactItem } from '../../types'
+import { StrategyCard } from './StrategyCard'
 
 /** Direction matters: for receipts a shortfall is bad, for payments an overrun is bad. All math in BigInt kopecks. */
 function Variance({ planned, actual, kind }: { planned: Kop; actual: Kop; kind: 'in' | 'out' }) {
@@ -61,6 +62,7 @@ export default function PlanVsActualPage() {
           </div>
         }
       />
+      <StrategyCard />
       {q.isPending && <div className="card"><LoadingState height={360} /></div>}
       {q.isError && !isNoData(q.error) && <div className="card"><ErrorState message={errorText(t, q.error)} onRetry={() => void q.refetch()} /></div>}
       {q.isError && isNoData(q.error) && <NoData />}

@@ -195,6 +195,7 @@ pub async fn join_member(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
             }
             c.execute("DELETE FROM company_members WHERE company_id=?", [&old]).map_err(internal)?;
             c.execute("DELETE FROM tenant_rules WHERE company_id=?", [&old]).map_err(internal)?;
+            c.execute("DELETE FROM integration_connections WHERE company_id=?", [&old]).map_err(internal)?;
             c.execute("DELETE FROM companies WHERE id=?", [&old]).map_err(internal)?;
         }
         let n: i64 = c.query_row("SELECT COUNT(*) FROM company_members WHERE company_id=?", [&cid], |r| r.get(0)).map_err(internal)?;

@@ -9,6 +9,9 @@ mod fns;
 #[cfg(test)]
 mod fns_tests;
 mod http;
+mod integrations;
+#[cfg(test)]
+mod integrations_tests;
 mod legacy;
 mod mail;
 #[cfg(test)]
@@ -59,7 +62,8 @@ async fn main() {
         forecast: Upstream::new("forecast", "Сервис прогноза", &env("FORECAST_URL", "http://127.0.0.1:3003"), 80),
         planfact: Upstream::new("planfact", "Сервис план-факта", &env("PLANFACT_URL", "http://127.0.0.1:3004"), 60),
         integrator: Upstream::new("integrator", "Сервис интеграций", &env("INTEGRATOR_URL", "http://127.0.0.1:8008"), 30),
-        advisor: Upstream::new("advisor", "Сервис консультанта", &env("ADVISOR_URL", "http://127.0.0.1:8011"), 85),
+        // ответ Hermes с глубоким размышлением идёт до 5 минут (advisor: deadline_for)
+        advisor: Upstream::new("advisor", "Сервис консультанта", &env("ADVISOR_URL", "http://127.0.0.1:8011"), 320),
         notifier: Upstream::new("notifier", "Сервис уведомлений", &env("NOTIFIER_URL", "http://127.0.0.1:8009"), 60),
         backoffice: Upstream::new("backoffice", "Сервис оператора", &env("BACKOFFICE_URL", "http://127.0.0.1:8013"), 60),
         notify: Upstream::new("notify", "Почтовый сервис", &env("NOTIFY_URL", "http://127.0.0.1:8014"), 30),
@@ -165,22 +169,38 @@ pub fn tenant_routes() -> Router<AppState> {
         .route(&format!("{co}/expected-events/tax-calendar"), post(http::tax_calendar))
         .route(&format!("{co}/expected-events/{{eid}}"), delete(http::to_ledger))
         .route(&format!("{co}/integrations/sync"), post(http::integrations_sync))
+        // подключение интеграций пользователем: статусы (read), 1С — реквизиты, проверка, отключение (manage); integrations.rs
+        .route(&format!("{co}/integrations"), get(integrations::get))
+        .route(&format!("{co}/integrations/onec"), axum::routing::put(integrations::put_onec).delete(integrations::delete_onec))
+        .route(&format!("{co}/integrations/onec/test"), post(integrations::test_onec))
         // сведения ФНС: налоговые события на год, ЕНС, проверка контрагентов (fns.rs)
         .route(&format!("{co}/integrations/fns/sync"), post(fns::sync))
         .route(&format!("{co}/fns/ens"), get(fns::ens))
         .route(&format!("{co}/fns/ens/import"), post(fns::ens_import))
         .route(&format!("{co}/fns/counterparties"), get(fns::counterparties))
+        .route(&format!("{co}/fns/settings"), get(fns::get_settings).put(fns::put_settings))
         .route(&format!("{co}/advisor/ask"), post(advisor::ask))
         .route(&format!("{co}/advisor/suggestions/apply"), post(advisor::apply))
+        .route(&format!("{co}/advisor/settings"), get(advisor::get_settings).put(advisor::put_settings))
+        .route(&format!("{co}/advisor/prompts"), get(advisor::prompts))
+        .route(&format!("{co}/advisor/models"), get(advisor::chats_relay))
+        .route(&format!("{co}/advisor/chats"), get(advisor::chats_relay).post(advisor::chats_relay))
+        .route(&format!("{co}/advisor/chats/{{chat}}"), get(advisor::chats_relay).patch(advisor::chats_relay).delete(advisor::chats_relay))
+        .route(&format!("{co}/advisor/chats/{{chat}}/messages"), post(advisor::chat_send))
+        .route(&format!("{co}/advisor/plans/active"), get(advisor::chats_relay))
+        .route(&format!("{co}/advisor/plans/{{plan}}"), axum::routing::delete(advisor::plan_delete))
         // демо «Прошла неделя»: только для демо-пользователя при DEMO_FEED_ENABLED=1
         .route(&format!("{co}/demo/status"), get(demo::status))
         .route(&format!("{co}/demo/advance-week"), post(demo::advance_week))
+        .route(&format!("{co}/demo/rewind-week"), post(demo::rewind_week))
         .route("/api/v1/gov/key-rate", get(http::gov_key_rate))
         .route(&format!("{co}/forecasts"), post(http::create_forecast))
         .route(&format!("{co}/forecasts/latest"), get(http::to_forecast))
         .route(&format!("{co}/forecasts/{{rid}}"), get(http::to_forecast))
         .route(&format!("{co}/backtest"), get(http::to_forecast))
+        .route(&format!("{co}/evaluate"), post(http::to_forecast))
         .route(&format!("{co}/scenarios"), post(http::create_scenario))
+        .route(&format!("{co}/forecast-settings"), get(http::forecast_settings).put(http::forecast_settings))
         .route(&format!("{co}/plan-fact"), get(http::to_planfact))
         // Telegram-уведомления, цели недели и ретро: сервис notifier (привязка чата, расписание, agile-цикл)
         .route(&format!("{co}/notifications"), get(http::to_notifier))

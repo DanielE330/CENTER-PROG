@@ -28,6 +28,10 @@ import { TelegramNotifications } from './TelegramNotifications'
 import { TeamPolicies } from './TeamPolicies'
 import { LeaveTeam, TeamInvites } from './TeamInvites'
 import { NotificationSettings } from './NotificationSettings'
+import { ForecastUpdateSettings } from './ForecastUpdateSettings'
+import { FnsSettingsCard } from './FnsSettingsCard'
+import { IntegrationsPanel } from './IntegrationsPanel'
+import { AdvisorSettingsCard } from './AdvisorSettingsCard'
 import { MembersPanel } from '../account/MembersPanel'
 import { canEdit } from '../../lib/roles'
 
@@ -118,6 +122,14 @@ export default function SettingsPage() {
           {manage && <AccountMethods />}
 
           <ApiTokens />
+
+          <ForecastUpdateSettings />
+
+          <IntegrationsPanel />
+
+          <FnsSettingsCard />
+
+          <AdvisorSettingsCard />
 
           <Card title={t('settings.prefs.title')} subtitle={t('settings.prefs.subtitle')}>
             <div className="px-5 pb-5 flex flex-col gap-4">

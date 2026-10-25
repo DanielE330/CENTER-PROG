@@ -10,11 +10,6 @@ def env(name: str, default: str = "") -> str:
     return default if v is None or v == "" else v
 
 
-def mode() -> str:
-    m = env("FNS_MODE", "sim").lower()
-    return m if m in ("sim", "live") else "sim"
-
-
 def cache_ttl() -> float:
     try:
         return float(env("FNS_CACHE_TTL", "86400"))
@@ -29,14 +24,6 @@ def db_path() -> Path:
 
 def gov_url() -> str:
     return env("GOV_URL", "http://127.0.0.1:8003").rstrip("/")
-
-
-def sim_url() -> str:
-    return env("FNS_SIM_URL", "http://127.0.0.1:8016").rstrip("/")
-
-
-def sim_token() -> str:
-    return env("FNS_SIM_TOKEN", "fns-sim-demo")
 
 
 def contact() -> str:

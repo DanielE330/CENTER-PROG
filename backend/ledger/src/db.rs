@@ -46,7 +46,16 @@ pub fn open(path: &str) -> Db {
             company_id TEXT NOT NULL REFERENCES companies(id), inn TEXT NOT NULL,
             risk_level TEXT NOT NULL, status TEXT NOT NULL, tax_debt_kop INTEGER NOT NULL DEFAULT 0,
             bankruptcy_flag INTEGER NOT NULL DEFAULT 0, checked_at TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY(company_id, inn));",
+            PRIMARY KEY(company_id, inn));
+        CREATE TABLE IF NOT EXISTS company_settings(
+            company_id TEXT NOT NULL REFERENCES companies(id), key TEXT NOT NULL, value TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY(company_id, key));
+        CREATE TABLE IF NOT EXISTS integration_connections(
+            company_id TEXT NOT NULL REFERENCES companies(id), kind TEXT NOT NULL,
+            url TEXT NOT NULL, username TEXT NOT NULL, password_enc TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unchecked', last_check_at TEXT, last_error TEXT, last_sync_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(company_id, kind));",
     )
     .expect("migrate");
     // реквизиты компании (из сертификата ЭЦП) добавлены позже
@@ -70,6 +79,22 @@ pub fn open(path: &str) -> Db {
         if !tx_cols.iter().any(|c| c == col) {
             conn.execute(&format!("ALTER TABLE transactions ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"), []).expect("add column");
         }
+    }
+    // ревизия, в которой операция появилась, и ревизия последней правки операций (для дописывания прогноза по дельте)
+    if !tx_cols.iter().any(|c| c == "rev") {
+        conn.execute("ALTER TABLE transactions ADD COLUMN rev INTEGER NOT NULL DEFAULT 0", []).expect("add column");
+    }
+    if !cols.iter().any(|c| c == "tx_reset_rev") {
+        conn.execute("ALTER TABLE companies ADD COLUMN tx_reset_rev INTEGER NOT NULL DEFAULT 0", []).expect("add column");
+    }
+    // ИНН контрагента ожидаемого события (счета из 1С): по нему контрагент проверяется в ФНС, как и по выписке
+    let ev_cols: Vec<String> = {
+        let mut q = conn.prepare("PRAGMA table_info(expected_events)").expect("table_info");
+        let rows = q.query_map([], |r| r.get::<_, String>(1)).expect("table_info");
+        rows.collect::<Result<_, _>>().expect("table_info")
+    };
+    if !ev_cols.iter().any(|c| c == "inn") {
+        conn.execute("ALTER TABLE expected_events ADD COLUMN inn TEXT NOT NULL DEFAULT ''", []).expect("add column");
     }
     // блокировка компании оператором платформы (метаданные; данные компании не затрагиваются)
     for col in ["banned_at", "ban_reason"] {

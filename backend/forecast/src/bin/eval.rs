@@ -3,6 +3,7 @@
 //! Запуск из корня репозитория:
 //!   cargo run --release --bin eval -- [--limit 30] [--step 14] [--mode block|weekday_mean|ewma]
 //!                                      [--damp TAU_DAYS] [--compare] [--csv] [--data data/dataset]
+//!                                      [--incremental K]  (режим «Обновлять по новым данным»: обучение за K дней до точки)
 //!
 //! Нормировка: ошибки каждой компании делятся на медианный недельный оборот
 //! (медиана по неделям суммы |операций|), т.е. MAE выражен в «недельных оборотах» компании.
@@ -41,7 +42,29 @@ fn parse_kop(s: &str) -> Option<i64> {
 }
 
 fn load_company(path: &std::path::Path) -> Option<Company> {
-    let raw = std::fs::read_to_string(path).ok()?;
+    parse_company(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Контрольный датасет без папки statements: общий all_operations.csv делится по company_id (первая колонка).
+fn split_all_operations(path: &str) -> Vec<String> {
+    let raw = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let raw = raw.trim_start_matches('\u{feff}');
+    let mut lines = raw.lines();
+    let header = lines.next().unwrap_or("").to_string();
+    let mut by: BTreeMap<String, String> = BTreeMap::new();
+    for l in lines {
+        let id = l.split(';').next().unwrap_or("").to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let e = by.entry(id).or_insert_with(|| format!("{header}\n"));
+        e.push_str(l);
+        e.push('\n');
+    }
+    by.into_values().collect()
+}
+
+fn parse_company(raw: &str) -> Option<Company> {
     let raw = raw.trim_start_matches('\u{feff}');
     let mut rows: Vec<(Tx, Option<i64>)> = vec![];
     let mut id = String::new();
@@ -91,7 +114,8 @@ struct CompanyResult {
     bt: Option<Backtest>,
 }
 
-fn run_variant(companies: &[Company], params: &Params, step: i64, threads: usize) -> Vec<CompanyResult> {
+/// `lag`: Some(K) — прогноз в режиме «Обновлять по новым данным» (модель обучена за K дней до точки, дальше `advance`).
+fn run_variant(companies: &[Company], params: &Params, step: i64, threads: usize, lag: Option<i64>) -> Vec<CompanyResult> {
     let next = Arc::new(AtomicUsize::new(0));
     let out: Arc<Mutex<Vec<Option<CompanyResult>>>> = Arc::new(Mutex::new(vec![None; companies.len()]));
     std::thread::scope(|sc| {
@@ -104,7 +128,10 @@ fn run_variant(companies: &[Company], params: &Params, step: i64, threads: usize
                     break;
                 }
                 let c = &companies[i];
-                let bt = forecast::backtest_with(&c.txs, &c.balances, step, params);
+                let bt = match lag {
+                    Some(k) => forecast::backtest_incremental(&c.txs, &c.balances, step, params, k),
+                    None => forecast::backtest_with(&c.txs, &c.balances, step, params),
+                };
                 out.lock().unwrap()[i] = Some(CompanyResult { id: c.id.clone(), scale: c.scale, bt });
             });
         }
@@ -137,6 +164,10 @@ struct HAgg {
     beat_origin: f64,
     beat_company: f64,
     coverage: f64,
+    /// средние по компаниям, в рублях: MAE, MSE (₽²), RMSE
+    mae_rub: f64,
+    mse_rub2: f64,
+    rmse_rub: f64,
 }
 
 struct Agg {
@@ -149,7 +180,9 @@ struct Agg {
     tp: usize,
     fp: usize,
     fnn: usize,
+    tn: usize,
     gaps: usize,
+    origins: usize,
     /// разметка разрывов с учётом «спасательных» поступлений владельца: (tp, fp, fn, окон с разрывом)
     adj: (usize, usize, usize, usize),
     /// (порог, precision, recall) для разных порогов вероятности
@@ -166,6 +199,7 @@ fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
         let mut m = vec![];
         let mut l = vec![];
         let mut d = vec![];
+        let (mut mae_r, mut mse_r, mut rmse_r) = (vec![], vec![], vec![]);
         let (mut beats, mut n_tot, mut cov, mut bc, mut nc) = (0.0, 0usize, 0.0, 0usize, 0usize);
         for r in res {
             let Some(bt) = &r.bt else { continue };
@@ -173,6 +207,9 @@ fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
             m.push(hm.mae_model as f64 / r.scale * 100.0);
             l.push(hm.mae_last_value as f64 / r.scale * 100.0);
             d.push(hm.mae_drift as f64 / r.scale * 100.0);
+            mae_r.push(hm.mae_model as f64 / 100.0);
+            mse_r.push(hm.mse_model_rub2);
+            rmse_r.push(hm.rmse_model as f64 / 100.0);
             beats += hm.model_beats_baselines_share * hm.n as f64;
             cov += hm.band_coverage * hm.n as f64;
             n_tot += hm.n;
@@ -195,9 +232,12 @@ fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
             beat_origin: if n_tot > 0 { beats / n_tot as f64 } else { f64::NAN },
             beat_company: if nc > 0 { bc as f64 / nc as f64 } else { f64::NAN },
             coverage: if n_tot > 0 { cov / n_tot as f64 } else { f64::NAN },
+            mae_rub: mean(&mae_r),
+            mse_rub2: mean(&mse_r),
+            rmse_rub: mean(&rmse_r),
         });
     }
-    let (mut tp, mut fp, mut fnn, mut gaps) = (0, 0, 0, 0);
+    let (mut tp, mut fp, mut fnn, mut gaps, mut tn, mut origins) = (0, 0, 0, 0, 0, 0);
     let mut adj = (0, 0, 0, 0);
     for r in res {
         if let Some(bt) = &r.bt {
@@ -205,6 +245,8 @@ fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
             tp += bt.alarm_tp;
             fp += bt.alarm_fp;
             fnn += bt.alarm_fn;
+            tn += bt.alarm_tn;
+            origins += bt.origins;
             gaps += bt.actual_gap_windows;
         }
     }
@@ -241,7 +283,9 @@ fn aggregate(name: &str, res: &[CompanyResult]) -> Agg {
         tp,
         fp,
         fnn,
+        tn,
         gaps,
+        origins,
         adj,
     }
 }
@@ -271,6 +315,40 @@ fn print_agg(a: &Agg) {
         "same alarm, gaps labelled with owner's rescue inflows removed: precision {} recall {} (tp {} fp {} fn {}); actual gap windows {} (hidden by the owner: {})",
         f(ratio(tpa, tpa + fpa)), f(ratio(tpa, tpa + fna)), tpa, fpa, fna, ga, ga.saturating_sub(a.gaps)
     );
+    print_report(a);
+}
+
+/// Итоговый отчёт для жюри: метрики, которые просили на финальном чек-поинте.
+fn print_report(a: &Agg) {
+    let pct = |x: Option<f64>| x.map_or("н/д".to_string(), |v| format!("{:.1}%", v * 100.0));
+    let ratio = |n: usize, d: usize| if d > 0 { Some(n as f64 / d as f64) } else { None };
+    let (tp, fp, fnn, tn) = (a.tp, a.fp, a.fnn, a.tn);
+    let n = tp + fp + fnn + tn;
+    let f1 = ratio(2 * tp, 2 * tp + fp + fnn);
+    println!("\n================ ИТОГОВЫЙ ОТЧЁТ ================");
+    println!("Компаний: {} (с бэктестом {}), контрольных точек: {}", a.companies_total, a.companies_bt, a.origins);
+    println!("Схема: rolling-origin — в каждой точке модель видит только прошлое, прогноз на 30 дн. сравнивается с фактическим остатком.");
+    println!("\n1) Прогноз остатка (медиана P50 против факта), средние по компаниям:");
+    println!("{:>9} | {:>14} | {:>18} | {:>14} | {:>12} | {:>16}", "горизонт", "MAE, ₽", "MSE, ₽²", "RMSE, ₽", "NMAE, %", "попадание P10–P90");
+    for h in &a.h {
+        println!("{:>6} дн | {:>14.0} | {:>18.3e} | {:>14.0} | {:>12.1} | {:>15.1}%", h.h, h.mae_rub, h.mse_rub2, h.rmse_rub, h.mean_model, h.coverage * 100.0);
+    }
+    println!("   NMAE — MAE в процентах медианного недельного оборота компании (сравнимо между компаниями).");
+    println!("\n2) Кассовый разрыв в ближайшие 30 дней (классификация, предупреждение при P ≥ 0.5):");
+    println!("   Матрица ошибок            | факт: разрыв | факт: нет разрыва");
+    println!("   прогноз: разрыв            | {:>12} | {:>17}", tp, fp);
+    println!("   прогноз: нет разрыва       | {:>12} | {:>17}", fnn, tn);
+    println!(
+        "   Accuracy {} | Precision {} | Recall {} | F1 {} | всего окон {n}, с разрывом {}",
+        pct(ratio(tp + tn, n)), pct(ratio(tp, tp + fp)), pct(ratio(tp, tp + fnn)), pct(f1), a.gaps
+    );
+    if let Some(m) = &a.risk_m {
+        println!("\n3) Вероятность разрыва:");
+        print_metrics("   калиброванная P(разрыв за 30 дн.)", m);
+    }
+    let c: Vec<String> = a.curve.iter().map(|(t, p, r)| format!("P≥{t}: precision {:.0}% recall {:.0}%", p * 100.0, r * 100.0)).collect();
+    println!("   Другие пороги: {}", c.join(" | "));
+    println!("=================================================");
 }
 
 fn write_csv(dir: &std::path::Path, name: &str, res: &[CompanyResult]) {
@@ -302,14 +380,23 @@ fn main() {
     let threads: usize = get("--threads").and_then(|v| v.parse().ok()).unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
     let paths: usize = get("--paths").and_then(|v| v.parse().ok()).unwrap_or(200);
 
-    let mut files: Vec<_> = std::fs::read_dir(format!("{data}/statements"))
-        .expect("statements dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().map_or(false, |e| e == "csv"))
-        .collect();
-    files.sort();
-    files.truncate(limit);
-    let companies: Vec<Company> = files.iter().filter_map(|p| load_company(p)).collect();
+    let only = get("--company");
+    let mut companies: Vec<Company> = if std::path::Path::new(&format!("{data}/statements")).is_dir() {
+        let mut files: Vec<_> = std::fs::read_dir(format!("{data}/statements"))
+            .expect("statements dir")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().map_or(false, |e| e == "csv"))
+            .collect();
+        files.sort();
+        files.iter().filter_map(|p| load_company(p)).collect()
+    } else {
+        // контрольный датасет может прийти только общим файлом
+        split_all_operations(&format!("{data}/all_operations.csv")).iter().filter_map(|r| parse_company(r)).collect()
+    };
+    if let Some(id) = &only {
+        companies.retain(|c| &c.id == id);
+    }
+    companies.truncate(limit);
     println!("loaded {} companies, step {} days, {} paths, {} threads", companies.len(), step, paths, threads);
 
     if let Some(id) = get("--debug") {
@@ -336,6 +423,19 @@ fn main() {
         let t0 = std::time::Instant::now();
         let r = forecast::forecast(&txs, &bal, &[], &forecast::Scenario::default(), &Params::default());
         println!("perf: {} ops, forecast (1000 paths, 30d) = {:.3}s, ok={}", txs.len(), t0.elapsed().as_secs_f64(), r.is_ok());
+        // режим «Обновлять по новым данным»: обучение без последнего дня, затем дописать день и пересчитать траектории
+        let last = txs.last().unwrap().date;
+        let (old, day): (Vec<Tx>, Vec<Tx>) = txs.iter().cloned().partition(|t| t.date < last);
+        let t0 = std::time::Instant::now();
+        let mut f = forecast::fit(&old, &bal).expect("fit");
+        let t_fit = t0.elapsed().as_secs_f64();
+        let t0 = std::time::Instant::now();
+        f.advance(&day, &bal).expect("advance");
+        let t_adv = t0.elapsed().as_secs_f64();
+        let t0 = std::time::Instant::now();
+        let r = forecast::simulate(&f, &[], &forecast::Scenario::default(), &Params::default());
+        let t_sim = t0.elapsed().as_secs_f64();
+        println!("perf: fit {t_fit:.3}s | advance (+{} ops of {last}) {:.4}s | simulate {t_sim:.3}s, ok={} -> incremental update {:.3}s", day.len(), t_adv, r.is_ok(), t_adv + t_sim);
         return;
     }
     let mk = |mode: ResidualMode, keep: f64, tau: f64, shape: f64, rev: f64| Params { revert: rev, horizon: 30, seed: 1, n_paths: paths, residual: mode, drift_keep: keep, drift_tau: tau, shape_keep: shape, calibrate: true, km_delays: !has("--no-km"), today: None };
@@ -379,7 +479,9 @@ fn main() {
     let mut aggs = vec![];
     for (name, p) in &variants {
         let t0 = std::time::Instant::now();
-        let res = run_variant(&companies, p, step, threads);
+        let lag: Option<i64> = get("--incremental").and_then(|v| v.parse().ok());
+        let res = run_variant(&companies, p, step, threads, lag);
+        let name = &lag.map_or(name.clone(), |k| format!("{name}+incremental{k}"));
         let a = aggregate(name, &res);
         print_agg(&a);
         println!("({:.1}s)", t0.elapsed().as_secs_f64());
@@ -588,7 +690,7 @@ fn print_metrics(name: &str, m: &Metrics) {
 
 fn calibration_study(companies: &[Company], step: i64, paths: usize, threads: usize) {
     let params = Params { calibrate: false, horizon: 30, seed: 1, n_paths: paths, ..Default::default() };
-    let res = run_variant(companies, &params, step, threads);
+    let res = run_variant(companies, &params, step, threads, None);
     let mut samples: Vec<Sample> = vec![];
     for (ci, r) in res.iter().enumerate() {
         let Some(bt) = &r.bt else { continue };

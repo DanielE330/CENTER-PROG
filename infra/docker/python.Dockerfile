@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Build context: repo root. Targets: auth, parser, gov, ecp, onec, edo, bank, integrator, notifier, demo_feed, llm_gateway, advisor, backoffice, notify, fns, fns_sim, test.
+# Build context: repo root. Targets: auth, parser, gov, ecp, onec, edo, bank, integrator, notifier, demo_feed, llm_gateway, advisor, backoffice, notify, fns, test.
 ARG SVC=auth
 FROM python:3.12-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
@@ -92,16 +92,11 @@ EXPOSE 8014
 CMD ["uvicorn", "notify.app:app", "--host", "0.0.0.0", "--port", "8014"]
 
 FROM base AS fns
-# сведения ФНС: ЕНС, налоговый календарь, проверка контрагентов; по умолчанию режим sim (имитатор), live — только флагом
+# сведения ФНС: ЕНС (из справки), налоговый календарь, проверка контрагентов по открытым реестрам
 ENV FNS_DB=/data/fns.db
 USER app
 EXPOSE 8015
 CMD ["uvicorn", "fns.app:app", "--host", "0.0.0.0", "--port", "8015"]
-
-FROM base AS fns_sim
-USER app
-EXPOSE 8016
-CMD ["uvicorn", "fns_sim.app:app", "--host", "0.0.0.0", "--port", "8016"]
 
 FROM base AS test
 RUN uv sync --frozen

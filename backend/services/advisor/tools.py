@@ -55,7 +55,12 @@ class Services:
                 raise ToolError(err.get("code", "upstream_error"), err.get("message", ""))
             except (ValueError, KeyError, TypeError):
                 raise ToolError("upstream_error", f"{service} вернул HTTP {r.status_code}") from None
-        return r.json()
+        if not r.content:  # 201/204 без тела (например, запись в журнал)
+            return {}
+        try:
+            return r.json()
+        except ValueError:
+            raise ToolError("upstream_error", f"{service} вернул не JSON") from None
 
     async def latest_forecast(self) -> dict:
         return await self.call("forecast", "GET", "forecasts/latest")
@@ -69,6 +74,8 @@ def summarize_forecast(run: dict) -> dict:
     r = run["result"]
     risk = r["risk"]
     days = r.get("days") or []
+    # уровень none — разрыва в горизонте не ждём: дату пересечения нуля и нехватку не показываем, иначе модель видит противоречие
+    calm = risk.get("level") == "none"
     out: dict = {
         "as_of": r.get("as_of"),
         "horizon_days": r.get("horizon"),
@@ -77,9 +84,9 @@ def summarize_forecast(run: dict) -> dict:
         "risk": {
             "level": risk.get("level"),
             "shortfall_probability_pct": round((risk.get("shortfall_probability") or 0) * 100),
-            "first_break_date": risk.get("first_break_date"),
-            "possible_break_date": risk.get("possible_break_date"),
-            "typical_deficit_rub": rub(risk.get("deficit_given_break_median")),
+            "first_break_date": None if calm else risk.get("first_break_date"),
+            "possible_break_date": None if calm else risk.get("possible_break_date"),
+            "typical_deficit_rub": None if calm else rub(risk.get("deficit_given_break_median")),
             "max_deficit_p90_rub": rub(risk.get("max_deficit_p90")),
         },
         "warnings": [
@@ -133,6 +140,58 @@ TOOL_SPECS: list[dict] = [
             "days": {"type": "integer", "minimum": 7, "maximum": 365, "description": "Период в днях от последней операции, по умолчанию 90"},
             "category": {"type": "string"}, "direction": {"type": "string", "enum": ["in", "out"]}}}}},
     {"type": "function", "function": {
+        "name": "get_counterparty_risks",
+        "description": "Крупнейшие клиенты и поставщики (выписка и счета 1С) с флагами риска, выгруженными из ФНС: статус в ЕГРЮЛ, "
+                       "долг перед бюджетом, уровень риска. Суммы в рублях.",
+        "parameters": {"type": "object", "properties": {
+            "limit": {"type": "integer", "minimum": 1, "maximum": 30, "description": "Сколько контрагентов, по умолчанию 10"},
+            "direction": {"type": "string", "enum": ["in", "out"], "description": "in — клиенты, out — поставщики"}}}}},
+    {"type": "function", "function": {
+        "name": "add_expected_payment",
+        "description": "Добавить ожидаемый платёж или поступление в план компании сразу (право на запись выдано). "
+                       "Используй, только если пользователь прямо попросил добавить; иначе propose_expected_payment.",
+        "parameters": {"type": "object", "required": ["direction", "amount_rub", "date", "title"], "properties": {
+            "direction": {"type": "string", "enum": ["in", "out"]},
+            "amount_rub": {"type": "number", "exclusiveMinimum": 0},
+            "date": {"type": "string", "description": "YYYY-MM-DD"},
+            "title": {"type": "string", "maxLength": 200},
+            "counterparty": {"type": "string", "maxLength": 200}}}}},
+    {"type": "function", "function": {
+        "name": "recalc_forecast",
+        "description": "Пересчитать прогноз по текущим данным (после добавления платежей). Возвращает новый риск разрыва.",
+        "parameters": {"type": "object", "properties": {
+            "horizon_days": {"type": "integer", "minimum": 7, "maximum": 90}}}}},
+    {"type": "function", "function": {
+        "name": "suggest_followups",
+        "description": "В конце ответа: 2–3 коротких следующих вопроса, которые пользователь может задать (кнопки под чатом). "
+                       "Только вопросы, на которые ты сможешь ответить своими инструментами.",
+        "parameters": {"type": "object", "required": ["questions"], "properties": {
+            "questions": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 120}}}}}},
+    {"type": "function", "function": {
+        "name": "get_app_guide",
+        "description": "Гид по приложению: экраны (как подписаны в меню), что на них и как сделать типичные действия. "
+                       "Вызывай, когда спрашивают «где/как в приложении…».",
+        "parameters": {"type": "object", "properties": {
+            "topic": {"type": "string", "description": "Экран или действие: прогноз, выписка, 1С, ФНС, план и факт… Пусто — все экраны"}}}}},
+    {"type": "function", "function": {
+        "name": "save_strategy_plan",
+        "description": "Сохранить стратегию для экрана «План и факт» (режим «План»): цель, шаги с датами и суммами, риски. "
+                       "Сохраняется одна активная стратегия компании; данные компании (платежи) не меняет.",
+        "parameters": {"type": "object", "required": ["title", "summary", "steps"], "properties": {
+            "title": {"type": "string", "maxLength": 120},
+            "summary": {"type": "string", "maxLength": 1200, "description": "Суть плана простыми словами: цель и почему так"},
+            "goal": {"type": "string", "maxLength": 300, "description": "Измеримая цель: например, не уйти в минус до 30.11 и держать резерв 300 000 ₽"},
+            "horizon_days": {"type": "integer", "minimum": 7, "maximum": 365},
+            "steps": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "object", "required": ["title"], "properties": {
+                "title": {"type": "string", "maxLength": 160},
+                "detail": {"type": "string", "maxLength": 600, "description": "Что сделать и как это влияет на разрыв"},
+                "due_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "amount_rub": {"type": "number", "description": "Сумма эффекта: плюс — деньги приходят/остаются, минус — уходят"},
+                "kind": {"type": "string", "enum": ["income", "expense", "reserve", "negotiation", "tax", "financing", "control"]}}}},
+            "risks": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 300}},
+            "checkpoints": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 200},
+                            "description": "Что смотреть на «Плане и факте», чтобы понять, что план работает"}}}}},
+    {"type": "function", "function": {
         "name": "propose_expected_payment",
         "description": "Предложить пользователю добавить ожидаемый платёж или поступление. Ничего не записывает: пользователь увидит карточку и решит сам.",
         "parameters": {"type": "object", "required": ["direction", "amount_rub", "date", "title"], "properties": {
@@ -168,21 +227,38 @@ def validate_payment(args: dict) -> dict:
     return {"direction": direction, "amount_kop": str(amount), "date": d.isoformat(), "title": title, "counterparty": cp}
 
 
-def suggestion_title(params: dict, lang: str = "ru") -> str:
+def suggestion_title(params: dict, lang: str = "ru", done: bool = False) -> str:
+    """Заголовок карточки: предложение («Добавить …») или сделанное консультантом действие («Добавлен … в план»)."""
     sign = "+" if params["direction"] == "in" else "−"
     amt = f"{round(int(params['amount_kop']) / 100):,}".replace(",", " ")
     d = dt.date.fromisoformat(params["date"])
     if lang == "en":
-        return f"Add expected {'income' if params['direction'] == 'in' else 'payment'}: {params['title']}, {sign}{amt} RUB, {d.isoformat()}"
-    return f"Добавить ожидаемый {'приход' if params['direction'] == 'in' else 'платёж'}: {params['title']}, {sign}{amt} ₽, {d.strftime('%d.%m.%Y')}"
+        return f"{'Added' if done else 'Add'} expected {'income' if params['direction'] == 'in' else 'payment'}: {params['title']}, {sign}{amt} RUB, {d.isoformat()}"
+    return f"{'Добавлен' if done else 'Добавить'} ожидаемый {'приход' if params['direction'] == 'in' else 'платёж'}{' в план' if done else ''}: {params['title']}, {sign}{amt} ₽, {d.strftime('%d.%m.%Y')}"
 
 
 class Toolbox:
-    def __init__(self, svc: Services, lang: str = "ru"):
-        self.svc, self.lang = svc, lang
-        self.proposals: list[dict] = []
-        self.counterparties: set[str] = set()
-        self.used: list[str] = []
+    """Инструменты одной компании. `allowed` — инструменты по правам консультанта (None — все, кроме записи: старый
+    агент через llm_gateway). Состояние ответа (предложения, сделанные действия, подсказки) можно разделить с пропуском Hermes."""
+
+    def __init__(self, svc: Services, lang: str = "ru", allowed: set[str] | None = None, state=None):
+        self.svc, self.lang, self.allowed = svc, lang, allowed
+        st = state if state is not None else _State()
+        self.proposals: list[dict] = st.proposals
+        self.counterparties: set[str] = st.counterparties
+        self.used: list[str] = st.used
+        self.actions: list[dict] = st.actions
+        self.followups: list[str] = st.followups
+        self.plan: dict = st.plan
+
+    def specs(self) -> list[dict]:
+        """Спецификации инструментов, доступных по правам."""
+        return [s for s in TOOL_SPECS if self._ok(s["function"]["name"])]
+
+    def _ok(self, name: str) -> bool:
+        if self.allowed is None:
+            return name in LEGACY_TOOLS
+        return name in self.allowed
 
     def _remember(self, *names: Any) -> None:
         for n in names:
@@ -195,6 +271,8 @@ class Toolbox:
         fn = getattr(self, f"_t_{name}", None)
         if fn is None or name not in {s["function"]["name"] for s in TOOL_SPECS}:
             return {"error": "unknown_tool"}
+        if not self._ok(name):
+            return {"error": "permission_denied", "message": "Это действие консультанту не разрешено в настройках компании"}
         try:
             return await fn(**{k: v for k, v in (args or {}).items() if v is not None}) if isinstance(args, dict) else {"error": "invalid_arguments"}
         except ToolError as e:
@@ -314,6 +392,89 @@ class Toolbox:
                          "count": c["count"], "top_counterparties": [{"name": n, "turnover_rub": rub(v)} for n, v in top if n]})
         return {"period_to": last.isoformat(), "days": days, "operations": len(rows), "categories": cats}
 
+    async def _t_get_counterparty_risks(self, limit: int = 10, direction: str = "") -> dict:
+        limit = max(1, min(int(limit), 30))
+        params: dict[str, Any] = {"limit": limit}
+        if direction in ("in", "out"):
+            params["direction"] = direction
+        data = await self.svc.call("ledger", "GET", "counterparties/top", params=params)
+        out = []
+        for r in data.get("items") or []:
+            risk = r.get("risk") or {}
+            self._remember(r.get("name"))
+            out.append({"name": r.get("name"), "inn": r.get("inn"), "income_rub": rub(r.get("income_kop")), "expense_rub": rub(r.get("expense_kop")),
+                        "expected_in_rub": rub(r.get("expected_in_kop")), "expected_out_rub": rub(r.get("expected_out_kop")),
+                        "income_share_pct": round((r.get("income_share") or 0) * 100), "from": r.get("origin") or ["statement"],
+                        "fns": {"risk_level": risk.get("risk_level", "not_checked"), "status": risk.get("status"),
+                                "tax_debt_rub": rub(risk.get("tax_debt_kop")), "bankruptcy": risk.get("bankruptcy_flag"),
+                                "checked_at": risk.get("checked_at")} if risk else {"risk_level": "not_checked"}})
+        return {"counterparties": out, "source": "Флаги выгружены из открытых реестров ФНС (ЕГРЮЛ, открытые данные ФНС)"}
+
+    async def _t_add_expected_payment(self, **a) -> dict:
+        if len(self.actions) >= MAX_PROPOSALS:
+            raise ToolError("too_many_actions", f"Не больше {MAX_PROPOSALS} записей за ответ")
+        params = validate_payment(a)
+        title = ("ИИ-консультант: " + params["title"])[:200]
+        ev = await self.svc.call("ledger", "POST", "expected-events", json={
+            "date": params["date"], "amount_kop": params["amount_kop"], "direction": params["direction"], "title": title,
+            "counterparty": params["counterparty"], "source": "manual", "confidence": 0.8})
+        eid = ev.get("id", "")
+        try:  # след в журнале компании: кто и что записал от имени консультанта
+            await self.svc.call("ledger", "POST", "audit", json={"action": "advisor.add_payment", "object_id": eid, "outcome": "ok"})
+        except ToolError:
+            pass
+        self.actions.append({"type": "add_expected_payment", "id": eid, "params": params | {"title": title},
+                             "title": suggestion_title(params, self.lang, done=True)})
+        self._remember(params["counterparty"])
+        return {"status": "added", "id": eid, "note": "Платёж добавлен в план. Прогноз пересчитается при следующем расчёте (recalc_forecast)."}
+
+    async def _t_recalc_forecast(self, horizon_days: int | None = None) -> dict:
+        if horizon_days is None:
+            try:
+                horizon_days = int((await self.svc.latest_forecast())["result"]["horizon"])
+            except (ToolError, KeyError, TypeError, ValueError):
+                horizon_days = 30
+        run = await self.svc.call("forecast", "POST", "forecasts", json={"horizon_days": max(7, min(int(horizon_days), 90))})
+        self.actions.append({"type": "recalc_forecast", "id": run.get("run_id") or run.get("id", ""), "title": "Прогноз пересчитан" if self.lang == "ru" else "Forecast recalculated"})
+        return summarize_forecast(run)
+
+    async def _t_get_app_guide(self, topic: str = "") -> dict:
+        from .guide import guide
+        return guide(str(topic)[:80])
+
+    async def _t_save_strategy_plan(self, title: str, summary: str, steps: list, goal: str = "", horizon_days: int | None = None,
+                                    risks: list | None = None, checkpoints: list | None = None) -> dict:
+        def s(v, n):
+            return str(v or "").strip()[:n]
+        clean = []
+        for st in (steps or [])[:10]:
+            if not isinstance(st, dict) or not s(st.get("title"), 160):
+                continue
+            row = {"title": s(st.get("title"), 160), "detail": s(st.get("detail"), 600), "kind": st.get("kind") if st.get("kind") in
+                   ("income", "expense", "reserve", "negotiation", "tax", "financing", "control") else "control"}
+            try:
+                row["due_date"] = dt.date.fromisoformat(str(st["due_date"])).isoformat() if st.get("due_date") else None
+            except ValueError:
+                row["due_date"] = None
+            try:
+                row["amount_rub"] = round(float(st["amount_rub"])) if st.get("amount_rub") not in (None, "") else None
+            except (TypeError, ValueError):
+                row["amount_rub"] = None
+            clean.append(row)
+        if not s(title, 120) or not clean:
+            raise ToolError("invalid_plan", "Нужны название и хотя бы один шаг")
+        self.plan.clear()
+        self.plan.update({"title": s(title, 120), "summary": s(summary, 1200), "goal": s(goal, 300),
+                          "horizon_days": max(7, min(int(horizon_days), 365)) if horizon_days else None, "steps": clean,
+                          "risks": [s(r, 300) for r in (risks or [])[:6] if s(r, 300)],
+                          "checkpoints": [s(c, 200) for c in (checkpoints or [])[:6] if s(c, 200)]})
+        return {"status": "saved", "note": "Стратегия появится на экране «План и факт»."}
+
+    async def _t_suggest_followups(self, questions: list | None = None) -> dict:
+        qs = [str(q).strip()[:120] for q in (questions or []) if str(q).strip()][:3]
+        self.followups[:] = qs
+        return {"status": "ok"}
+
     async def _t_propose_expected_payment(self, **a) -> dict:
         if len(self.proposals) >= MAX_PROPOSALS:
             raise ToolError("too_many_proposals", f"Не больше {MAX_PROPOSALS} предложений за ответ")
@@ -325,6 +486,21 @@ class Toolbox:
                                "title": suggestion_title(params, self.lang)})
         self._remember(params["counterparty"])
         return {"status": "proposed", "note": "Пользователь увидит карточку и решит сам; в план ничего не записано."}
+
+
+class _State:
+    def __init__(self):
+        self.proposals: list[dict] = []
+        self.counterparties: set[str] = set()
+        self.used: list[str] = []
+        self.actions: list[dict] = []
+        self.followups: list[str] = []
+        self.plan: dict = {}
+
+
+# инструменты старого агента (llm_gateway): только чтение, сценарии и предложения
+LEGACY_TOOLS = {"get_forecast_risk", "get_upcoming_payments", "get_plan_fact", "run_scenario", "get_transactions_by_category",
+                "propose_expected_payment", "get_counterparty_risks", "suggest_followups", "get_app_guide"}
 
 
 def dumps(data: Any, limit: int = 8000) -> str:

@@ -2,6 +2,7 @@
 //! (снимок, bulk событий с идемпотентностью по external_id, топ контрагентов, флаги), сервис fns — отдельный подставной сервер
 //! на эфемерном порту с ответами по контракту из docs/fns-integration-plan.md.
 
+use crate::fns::FnsSettings;
 use crate::roles_tests::{T, code};
 use axum::{
     Router,
@@ -57,7 +58,7 @@ async fn spawn_fns(fake: Fns) -> String {
 }
 
 fn obligations() -> Value {
-    json!({"source": "fns_sim", "mode": "sim", "items": [
+    json!({"source": "rules", "items": [
         {"kind": "enp", "date": "2026-10-28", "title": "ЕНП за сентябрь"},
         {"kind": "enp", "date": "2026-11-30"},
         {"kind": "usn_advance", "date": "2027-04-28", "amount_kop": 9_000_000},
@@ -66,7 +67,7 @@ fn obligations() -> Value {
 }
 
 fn ens_with_debt() -> Value {
-    json!({"source": "fns_sim", "mode": "sim", "balance_kop": -2_500_000, "debt_kop": 2_500_000, "checked_at": "2026-10-24T09:00:00Z",
+    json!({"source": "import", "balance_kop": -2_500_000, "debt_kop": 2_500_000, "checked_at": "2026-10-24T09:00:00Z",
         "upcoming": [{"kind": "enp", "date": "2026-10-28", "amount_kop": 1_200_000}]})
 }
 
@@ -146,7 +147,7 @@ async fn sync_creates_tax_events_idempotently_with_source_and_amounts() {
     assert_eq!(s, StatusCode::OK, "{v}");
     // 3 срока позже конца выписки (28.09) + недоимка ЕНС; прошедший срок пропущен
     assert_eq!((v["created"].as_u64(), v["skipped"].as_u64(), v["estimated"].as_u64(), v["no_amount"].as_u64()), (Some(4), Some(0), Some(1), Some(0)), "{v}");
-    assert_eq!((v["source"].as_str(), v["source_label"].as_str(), v["mode"].as_str(), v["year"].as_i64(), v["regime"].as_str(), v["regime_source"].as_str()), (Some("fns_sim"), Some("ФНС"), Some("sim"), Some(2026), Some("usn_income"), Some("request")));
+    assert_eq!((v["source"].as_str(), v["source_label"].as_str(), v.get("mode"), v["year"].as_i64(), v["regime"].as_str(), v["regime_source"].as_str()), (Some("rules"), Some("ФНС"), None, Some(2026), Some("usn_income"), Some("request")));
     assert_eq!(v["debt_kop"], "2500000");
     assert!(v["fetched_at"].as_str().is_some());
 
@@ -163,10 +164,10 @@ async fn sync_creates_tax_events_idempotently_with_source_and_amounts() {
     assert_eq!(by_id("fns:ens_debt:2500000")["date"], "2026-09-29");
     for ev in &bulk {
         assert_eq!((ev["source"].as_str(), ev["counterparty"].as_str()), (Some("tax"), Some("ФНС России")));
-        assert!(ev["title"].as_str().unwrap().contains("ФНС (имитация)"), "{ev}");
+        assert!(ev["title"].as_str().unwrap().contains("· ФНС") && !ev["title"].as_str().unwrap().contains("имитац"), "{ev}");
     }
     assert!(bulk.iter().all(|x| x["external_id"] != "fns:enp:2026-09-28"));
-    assert_eq!(by_id("fns:enp:2026-10-28")["title"], "ЕНП за сентябрь · ФНС (имитация)", "название из ФНС сохраняется, источник и режим дописываются");
+    assert_eq!(by_id("fns:enp:2026-10-28")["title"], "ЕНП за сентябрь · ФНС", "название из ФНС сохраняется, источник дописывается");
 
     // запрос к fns: ИНН компании, режим и год
     let first = e.fns_calls().into_iter().find(|c| c.1.starts_with("/internal/v1/fns/obligations")).unwrap();
@@ -193,17 +194,17 @@ async fn sync_validates_year_and_regime_and_defaults_to_the_statement_year() {
 }
 
 #[tokio::test]
-async fn sync_works_without_ens_and_with_live_mode_titles() {
+async fn sync_works_without_ens() {
     let e = env_with(Some(INN)).await;
     {
         let mut g = e.fns.lock().unwrap();
-        g.obligations = json!({"source": "egrul", "mode": "live", "items": [{"kind": "enp", "date": "2026-11-30"}]});
+        g.obligations = json!({"source": "rules", "items": [{"kind": "enp", "date": "2026-11-30"}]});
         g.ens = json!({"error": {"code": "fns_source_unavailable", "message": "нет"}});
     }
     // ЕНС недоступен: ответ fns на /ens — 200 с «ошибкой» в теле не ошибка транспорта, поэтому сумму берём по оценке, недоимки нет
     let (s, v) = e.t.call("POST", &e.uri("integrations/fns/sync"), &e.toks[0], Some(json!({}))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!((v["mode"].as_str(), v["created"].as_u64(), v["estimated"].as_u64()), (Some("live"), Some(1), Some(1)));
+    assert_eq!((v["source"].as_str(), v["created"].as_u64(), v["estimated"].as_u64()), (Some("rules"), Some(1), Some(1)));
     assert_eq!(v["debt_kop"], Value::Null);
     let b = e.bulk();
     assert_eq!(b.len(), 1);
@@ -249,7 +250,7 @@ async fn ens_returns_balance_debt_upcoming_and_source() {
     let (s, v) = e.t.call("GET", &e.uri("fns/ens"), &e.toks[2], None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!((v["balance_kop"].as_str(), v["debt_kop"].as_str(), v["has_debt"].as_bool()), (Some("-2500000"), Some("2500000"), Some(true)));
-    assert_eq!((v["source"].as_str(), v["source_label"].as_str(), v["mode"].as_str(), v["checked_at"].as_str()), (Some("fns_sim"), Some("ФНС"), Some("sim"), Some("2026-10-24T09:00:00Z")));
+    assert_eq!((v["source"].as_str(), v["source_label"].as_str(), v.get("mode"), v["checked_at"].as_str()), (Some("import"), Some("ФНС"), None, Some("2026-10-24T09:00:00Z")));
     assert_eq!((v["upcoming"][0]["date"].as_str(), v["upcoming"][0]["amount_kop"].as_str()), (Some("2026-10-28"), Some("1200000")));
     assert_eq!(e.fns_calls()[0].1, format!("/internal/v1/fns/ens?inn={INN}"));
     // чужая компания — 404 раньше обращения к fns
@@ -262,7 +263,7 @@ async fn ens_returns_balance_debt_upcoming_and_source() {
 #[tokio::test]
 async fn ens_import_passes_the_file_to_fns_and_returns_the_snapshot_with_the_import_label() {
     let e = env_with(Some(INN)).await;
-    e.fns.lock().unwrap().import = json!({"source": "import", "mode": "live", "format": "knd_1160080", "warnings": ["в файле нет КНД"],
+    e.fns.lock().unwrap().import = json!({"source": "import", "format": "knd_1160080", "warnings": ["в файле нет КНД"],
         "balance_kop": -4_500_000, "debt_kop": 4_500_000, "as_of": "2026-10-21", "checked_at": "2026-10-24T10:00:00Z", "upcoming": []});
     let body = json!({"filename": "spravka.xml", "content_b64": "PHg+"});
     // наблюдатель не загружает справки, отказ раньше обращения к fns
@@ -271,7 +272,7 @@ async fn ens_import_passes_the_file_to_fns_and_returns_the_snapshot_with_the_imp
     assert!(e.fns_calls().is_empty());
     let (s, v) = e.t.call("POST", &e.uri("fns/ens/import"), &e.toks[1], Some(body)).await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!((v["debt_kop"].as_str(), v["format"].as_str(), v["source"].as_str(), v["mode"].as_str()), (Some("4500000"), Some("knd_1160080"), Some("import"), Some("live")));
+    assert_eq!((v["debt_kop"].as_str(), v["format"].as_str(), v["source"].as_str()), (Some("4500000"), Some("knd_1160080"), Some("import")));
     assert_eq!(v["warnings"][0], "в файле нет КНД");
     let call = &e.fns_calls()[0];
     assert_eq!(call.1, format!("/internal/v1/fns/ens/import?inn={INN}"));
@@ -301,12 +302,13 @@ fn top_rows() -> Value {
 }
 
 fn batch_reply() -> Value {
-    json!({"source": "fns_sim", "mode": "sim", "items": [
+    json!({"items": [
         {"inn": "7702000000", "status": "Ликвидируется", "registered_at": "2015-03-02", "mass_address": false, "unreliable": false,
          "tax_debt": {"has": true, "amount_kop": 4_500_000}, "disqualified": false, "bankruptcy": {"flag": false, "source": null},
-         "risk_level": "high", "checked_at": "2026-10-24T08:00:00Z", "source": "fns_sim"},
+         "risk_level": "high", "risk_reasons": ["liquidating", "tax_debt"], "checked_at": "2026-10-24T08:00:00Z", "source": "egrul",
+         "sources": {"egrul": "ok", "data_nalog": "ok", "fedresurs": "unavailable:credentials_required"}},
         {"inn": "7703000000", "status": "Действует", "tax_debt": {"has": false, "amount_kop": 0}, "bankruptcy": {"flag": false},
-         "risk_level": "low", "checked_at": "2026-10-24T08:00:00Z", "source": "fns_sim"},
+         "risk_level": "low", "checked_at": "2026-10-24T08:00:00Z", "source": "egrul"},
     ]})
 }
 
@@ -321,13 +323,16 @@ async fn counterparties_are_checked_in_a_batch_saved_to_ledger_and_returned_with
     let call = e.fns_calls().into_iter().find(|c| c.1 == "/internal/v1/fns/counterparties/batch").unwrap();
     assert_eq!(call.0, "POST");
     assert_eq!(call.2["inns"], json!(["7702000000", "7703000000", "7704000000"]));
-    assert_eq!((v["source"].as_str(), v["source_label"].as_str(), v["mode"].as_str(), v["saved"].as_bool()), (Some("fns_sim"), Some("ФНС"), Some("sim"), Some(true)));
+    assert_eq!((v["source"].as_str(), v["source_label"].as_str(), v["exported_from"].as_str(), v["saved"].as_bool()), (Some("egrul"), Some("ФНС"), Some("fns"), Some(true)));
+    // настройки по умолчанию переданы в fns вместе с ИНН
+    assert_eq!((call.2["settings"]["risk"]["not_in_registry"].as_bool(), call.2["settings"]["sources"]["egrul"].as_bool()), (Some(false), Some(true)));
     assert!(v["checked_at"].as_str().is_some());
     let items = v["items"].as_array().unwrap();
     assert_eq!(items.len(), 4);
     let big = &items[0];
     assert_eq!((big["name"].as_str(), big["status"].as_str(), big["risk_level"].as_str(), big["tax_debt_kop"].as_str(), big["has_tax_debt"].as_bool(), big["checked"].as_bool()), (Some("ООО Большой клиент"), Some("liquidating"), Some("high"), Some("4500000"), Some(true), Some(true)));
-    assert_eq!((big["turnover_kop"].as_str(), big["income_share"].as_f64(), big["checked_at"].as_str(), big["source"].as_str()), (Some("15000000"), Some(0.75), Some("2026-10-24T08:00:00Z"), Some("fns_sim")));
+    assert_eq!((big["turnover_kop"].as_str(), big["income_share"].as_f64(), big["checked_at"].as_str(), big["source"].as_str()), (Some("15000000"), Some(0.75), Some("2026-10-24T08:00:00Z"), Some("egrul")));
+    assert_eq!((big["risk_reasons"].clone(), big["sources"]["fedresurs"].clone()), (json!(["liquidating", "tax_debt"]), json!("unavailable:credentials_required")));
     assert_eq!((items[1]["risk_level"].as_str(), items[1]["status"].as_str(), items[1]["has_tax_debt"].as_bool()), (Some("low"), Some("active"), Some(false)));
     assert_eq!((items[2]["checked"].as_bool(), items[2]["risk_level"].as_str(), items[2]["status"].as_str()), (Some(false), Some("unknown"), Some("unknown")));
     // флаги ушли в ledger: от них зависит прогноз
@@ -335,7 +340,7 @@ async fn counterparties_are_checked_in_a_batch_saved_to_ledger_and_returned_with
     assert_eq!(puts.len(), 1);
     let flags = puts[0]["items"].as_array().unwrap();
     assert_eq!(flags.len(), 2);
-    assert_eq!((flags[0]["inn"].as_str(), flags[0]["risk_level"].as_str(), flags[0]["status"].as_str(), flags[0]["tax_debt_kop"].as_i64(), flags[0]["bankruptcy_flag"].as_bool(), flags[0]["source"].as_str()), (Some("7702000000"), Some("high"), Some("liquidating"), Some(4_500_000), Some(false), Some("fns_sim")));
+    assert_eq!((flags[0]["inn"].as_str(), flags[0]["risk_level"].as_str(), flags[0]["status"].as_str(), flags[0]["tax_debt_kop"].as_i64(), flags[0]["bankruptcy_flag"].as_bool(), flags[0]["source"].as_str()), (Some("7702000000"), Some("high"), Some("liquidating"), Some(4_500_000), Some(false), Some("egrul")));
 }
 
 #[tokio::test]
@@ -364,7 +369,7 @@ async fn external_api_exposes_ens_and_counterparties_read_only_by_token() {
     let viewer = e.t.uid_by_role(&e.cid, "viewer");
     let tok = e.t.token_of(&viewer);
     let (s, v) = e.t.send("GET", "/api/ext/v1/fns/ens", None, Some(&tok), None).await;
-    assert_eq!((s, v["debt_kop"].as_str(), v["source"].as_str()), (StatusCode::OK, Some("2500000"), Some("fns_sim")), "{v}");
+    assert_eq!((s, v["debt_kop"].as_str(), v["source"].as_str()), (StatusCode::OK, Some("2500000"), Some("import")), "{v}");
     let (s, v) = e.t.send("GET", "/api/ext/v1/fns/counterparties?top=3", None, Some(&tok), None).await;
     assert_eq!((s, v["items"][0]["risk_level"].as_str()), (StatusCode::OK, Some("high")), "{v}");
     // без токена и с неверным токеном — 401
@@ -381,4 +386,30 @@ async fn external_api_without_inn_says_inn_required() {
     let tok = e.t.token_of(&dir);
     let (s, v) = e.t.send("GET", "/api/ext/v1/fns/ens", None, Some(&tok), None).await;
     assert_eq!((s, code(&v)), (StatusCode::UNPROCESSABLE_ENTITY, "inn_required"));
+}
+
+#[tokio::test]
+async fn settings_are_saved_by_admin_and_change_checks_and_forecast_flags() {
+    let e = env_with(Some(INN)).await;
+    e.t.f.lock().unwrap().top = Some(top_rows());
+    e.fns.lock().unwrap().batch = batch_reply();
+    let (s, v) = e.t.call("GET", &e.uri("fns/settings"), &e.toks[2], None).await;
+    assert_eq!((s, v["settings"].clone(), v["defaults"]["risk"]["large_debt_kop"].as_i64()), (StatusCode::OK, json!(FnsSettings::default()), Some(50_000_000)));
+    let body = json!({"risk": {"not_in_registry": true, "tax_debt": false}, "sources": {"fedresurs": false}, "use_in_forecast": false, "top": 3});
+    // editor и viewer менять не могут
+    for tok in &e.toks[1..] {
+        assert_eq!(e.t.call("PUT", &e.uri("fns/settings"), tok, Some(body.clone())).await.0, StatusCode::FORBIDDEN);
+    }
+    let (s, v) = e.t.call("PUT", &e.uri("fns/settings"), &e.toks[0], Some(body)).await;
+    assert_eq!((s, v["settings"]["top"].as_u64(), v["settings"]["risk"]["tax_debt"].as_bool()), (StatusCode::OK, Some(3), Some(false)), "{v}");
+    // сохранение сразу перепроверяет контрагентов: настройки ушли в fns, флаги в ledger нейтральные (риск не в прогнозе)
+    let call = e.fns_calls().into_iter().rfind(|c| c.1 == "/internal/v1/fns/counterparties/batch").unwrap();
+    assert_eq!((call.2["settings"]["risk"]["not_in_registry"].as_bool(), call.2["settings"]["sources"]["fedresurs"].as_bool(), call.2["inns"].as_array().map(Vec::len)), (Some(true), Some(false), Some(3)));
+    let flags = e.t.f.lock().unwrap().risk_puts.last().cloned().unwrap();
+    assert!(flags["items"].as_array().unwrap().iter().all(|f| f["risk_level"] == "low" && f["tax_debt_kop"] == 0), "{flags}");
+    // неверные настройки
+    for bad in [json!({"top": 0}), json!({"risk": {"bogus": 1}}), json!({"show_statement": false, "show_expected": false})] {
+        let (s, v) = e.t.call("PUT", &e.uri("fns/settings"), &e.toks[0], Some(bad)).await;
+        assert_eq!((s, code(&v)), (StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings"));
+    }
 }

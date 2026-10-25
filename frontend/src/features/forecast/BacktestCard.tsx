@@ -23,6 +23,8 @@ export function BacktestCard() {
     { key: 'model', header: t('backtest.col.model'), numeric: true, render: (m) => formatKop(m.mae_model) },
     { key: 'last', header: t('backtest.col.lastValue'), numeric: true, render: (m) => formatKop(m.mae_last_value) },
     { key: 'drift', header: t('backtest.col.drift'), numeric: true, render: (m) => formatKop(m.mae_drift) },
+    { key: 'rmse', header: t('backtest.col.rmse'), numeric: true, render: (m) => (m.rmse_model == null ? '—' : formatKop(m.rmse_model)) },
+    { key: 'mse', header: t('backtest.col.mse'), numeric: true, render: (m) => (m.mse_model_rub2 == null ? '—' : m.mse_model_rub2.toExponential(2)) },
     { key: 'beats', header: t('backtest.col.beats'), numeric: true, render: (m) => formatPercent(m.model_beats_baselines_share) },
     ...(hasCoverage
       ? [{ key: 'cov', header: t('backtest.col.coverage'), numeric: true, render: (m: BacktestMetric) => (m.band_coverage == null ? '—' : formatPercent(m.band_coverage)) }]
@@ -48,11 +50,43 @@ export function BacktestCard() {
             <div className="-mx-5 border-y border-line">
               <DataTable columns={columns} rows={bt.metrics} getRowKey={(m) => String(m.horizon)} />
             </div>
-            <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
               <Stat label={t('backtest.origins')} value={String(bt.origins)} />
-              <Stat label={t('backtest.precision')} value={bt.alarm_precision == null ? '—' : formatPercent(bt.alarm_precision)} />
-              <Stat label={t('backtest.recall', { count: bt.actual_gap_windows })} value={bt.alarm_recall == null ? '—' : formatPercent(bt.alarm_recall)} />
+              <Stat label={t('backtest.accuracy')} value={pct(bt.alarm_accuracy)} />
+              <Stat label={t('backtest.precision')} value={pct(bt.alarm_precision)} />
+              <Stat label={t('backtest.recall', { count: bt.actual_gap_windows })} value={pct(bt.alarm_recall)} />
+              <Stat label={t('backtest.f1')} value={pct(bt.alarm_f1)} />
+              <Stat label={t('backtest.brier')} value={bt.brier == null ? '—' : bt.brier.toFixed(3)} />
             </dl>
+            {bt.alarm_tn != null && (
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-semibold">{t('backtest.matrixTitle', { threshold: Math.round((bt.alarm_threshold ?? 0.5) * 100) })}</p>
+                <table className="text-sm border border-line rounded-control w-full max-w-lg" aria-label={t('backtest.matrixTitle', { threshold: 50 })}>
+                  <thead>
+                    <tr className="bg-app">
+                      <th className="p-2 text-left font-medium text-muted" />
+                      <th className="p-2 text-right font-medium">{t('backtest.factGap')}</th>
+                      <th className="p-2 text-right font-medium">{t('backtest.factNoGap')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="tnum">
+                    <tr className="border-t border-line">
+                      <th className="p-2 text-left font-medium">{t('backtest.predGap')}</th>
+                      <td className="p-2 text-right text-primary font-semibold">{bt.alarm_tp} <span className="text-xs text-muted font-normal">TP</span></td>
+                      <td className="p-2 text-right text-danger">{bt.alarm_fp} <span className="text-xs text-muted">FP</span></td>
+                    </tr>
+                    <tr className="border-t border-line">
+                      <th className="p-2 text-left font-medium">{t('backtest.predNoGap')}</th>
+                      <td className="p-2 text-right text-danger">{bt.alarm_fn} <span className="text-xs text-muted">FN</span></td>
+                      <td className="p-2 text-right text-primary font-semibold">{bt.alarm_tn} <span className="text-xs text-muted font-normal">TN</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+                {bt.mean_probability != null && bt.gap_rate != null && (
+                  <p className="text-xs text-muted">{t('backtest.calibration', { p: formatPercent(bt.mean_probability), rate: formatPercent(bt.gap_rate) })}</p>
+                )}
+              </div>
+            )}
             <p className="text-xs text-muted">{t('backtest.note')}</p>
           </>
         )}
@@ -60,6 +94,8 @@ export function BacktestCard() {
     </Card>
   )
 }
+
+const pct = (x: number | null | undefined) => (x == null ? '—' : `${(x * 100).toFixed(1).replace('.', ',')} %`)
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (

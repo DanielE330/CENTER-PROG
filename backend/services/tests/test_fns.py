@@ -1,6 +1,10 @@
-"""Сервис fns: календарь правилами, ЕНС (имитатор и загруженная справка), проверка контрагентов, контракты HTTP.
-Без сети: имитатор fns_sim подключён через транспорт в памяти, gov недоступен (учитываются только выходные)."""
+"""Сервис fns: календарь правилами, ЕНС из загруженной справки, проверка контрагентов по открытым реестрам, контракты HTTP.
+Без сети: ЕГРЮЛ, открытые данные ФНС (debtam) и ЕФРСБ подменены транспортом в памяти, gov недоступен (только выходные)."""
 import base64
+import gzip
+import io
+import json
+import zipfile
 from datetime import date
 
 import httpx
@@ -8,15 +12,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 import fns.app as fns_app
-from fns import config, counterparty, ens_import, rules
+from fns import counterparty, ens_import
 from fns.deps import Deps
 from fns.store import Store
-import fns_sim.app as sim_app
-import fns_sim.universe as universe
 
 
 def make_inn(prefix: str, n: int = 10) -> str:
-    """ИНН с верным контрольным числом (для режима live)."""
+    """ИНН с верным контрольным числом."""
     d = [int(c) for c in prefix]
     if n == 10:
         w = [2, 4, 10, 3, 5, 9, 4, 6, 8]
@@ -29,23 +31,73 @@ def make_inn(prefix: str, n: int = 10) -> str:
     return "".join(map(str, d))
 
 
-OK_INN, DEBT_INN, BANKRUPT_INN, LIQ_INN = (make_inn(p) for p in ("7701", "7702", "7703", "7704"))
+OK_INN, DEBT_INN, SMALL_DEBT_INN, LIQ_INN, BANKRUPT_INN, MISSING_INN = (make_inn(p) for p in ("7701", "7702", "7705", "7704", "7703", "7790"))
+DEBT_URL = "https://file.nalog.ru/opendata/7707329152-debtam/data-20260925-structure-20181201.zip"
+DEBTS = {DEBT_INN: "4969978.38", SMALL_DEBT_INN: "49835.55"}
+
+
+def debt_zip() -> bytes:
+    docs = "".join(
+        f'<Документ ИдДок="{i}" ДатаДок="25.09.2026" ДатаСост="01.09.2026"><СведНП НаимОрг="ООО" ИННЮЛ="{inn}"/>'
+        f'<СведНедоим НаимНалог="НДС" СумНедНалог="{amt}" СумПени="0" СумШтраф="0" ОбщСумНедоим="{amt}"/></Документ>'
+        for i, (inn, amt) in enumerate(DEBTS.items()))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("VO_debt_0001.xml", f"<Файл>{docs}</Файл>")
+    return buf.getvalue()
+
+
+class Registries:
+    """Открытые реестры в памяти: robots.txt нет, ЕГРЮЛ (ответы gzip), набор debtam, ЕФРСБ с авторизацией."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+        self.tokens: dict[str, str] = {}
+        self.down = False
+        self.zip = debt_zip()
+
+    def handler(self, req: httpx.Request):
+        self.calls.append(f"{req.method} {req.url.host}{req.url.path}")
+        if self.down:
+            return httpx.Response(503)
+        if req.url.path == "/robots.txt":
+            return httpx.Response(404)
+        if req.url.host == "egrul.nalog.ru" and req.method == "POST":
+            q = dict(httpx.QueryParams(req.content.decode()))
+            t = f"res{len(self.tokens):08d}"  # токен результата непрозрачный, как у ЕГРЮЛ: ИНН в адресе нет
+            self.tokens[t] = q.get("query", "")
+            body = gzip.compress(json.dumps({"t": t, "captchaRequired": False}).encode())
+            return httpx.Response(200, content=body, headers={"content-encoding": "gzip", "content-type": "application/json"})
+        if req.url.host == "egrul.nalog.ru":
+            inn = self.tokens.get(req.url.path.rsplit("/", 1)[-1], "")
+            if inn == MISSING_INN:
+                return httpx.Response(200, json={"rows": []})
+            return httpx.Response(200, json={"rows": [{"i": inn, "k": "ul", "r": "07.11.2003", "e": "01.08.2026" if inn == LIQ_INN else ""}]})
+        if req.url.path.endswith(".zip"):
+            return httpx.Response(200, content=self.zip)
+        if "fedresurs" in req.url.host and req.url.path == "/v1/auth":
+            return httpx.Response(200, json={"jwt": "jwt"})
+        if "fedresurs" in req.url.host:
+            return httpx.Response(200, json={"total": 1 if req.url.params.get("inn") == BANKRUPT_INN else 0})
+        return httpx.Response(404)
 
 
 @pytest.fixture
-def deps(tmp_path, monkeypatch):
-    monkeypatch.setenv("FNS_MODE", "sim")
+def reg():
+    return Registries()
+
+
+@pytest.fixture
+def deps(tmp_path, monkeypatch, reg):
     monkeypatch.setenv("FNS_MIN_INTERVAL", "0")
-    monkeypatch.setenv("FNS_SIM_PROBLEM_INNS", f"{OK_INN}=ok,{DEBT_INN}=tax_debt,{BANKRUPT_INN}=bankrupt,{LIQ_INN}=liquidating")
-    universe.reset_cache()
-    sim = TestClient(sim_app.app)
-
-    def to_sim(req: httpx.Request):
-        r = sim.request(req.method, req.url.path, params=dict(req.url.params), headers=dict(req.headers), content=req.content)
-        return httpx.Response(r.status_code, content=r.content, headers={"content-type": "application/json"})
-
+    monkeypatch.setenv("FNS_DEBT_URL", DEBT_URL)
+    monkeypatch.delenv("FEDRESURS_LOGIN", raising=False)
+    monkeypatch.delenv("FEDRESURS_PASSWORD", raising=False)
+    counterparty.fedresurs._tok.update(jwt=None, until=0.0)
     gov_down = httpx.MockTransport(lambda req: httpx.Response(503, json={}))
-    return Deps(store=Store(tmp_path / "fns.db"), sim_transport=httpx.MockTransport(to_sim), gov_transport=gov_down)
+    d = Deps(store=Store(tmp_path / "fns.db"), public_transport=httpx.MockTransport(reg.handler), gov_transport=gov_down)
+    d.debt.ensure(block=True)
+    return d
 
 
 @pytest.fixture
@@ -55,13 +107,18 @@ def client(deps):
     fns_app.app.state.deps = None
 
 
+def one(client, inn, **settings):
+    body = {"inns": [inn]} | ({"settings": settings} if settings else {})
+    return client.post("/internal/v1/fns/counterparties/batch", json=body).json()["items"][0]
+
+
 # --- календарь ---
 
 def test_obligations_usn_year_has_advances_and_enp_dates_are_workdays(client):
     r = client.get("/internal/v1/fns/obligations", params={"inn": OK_INN, "regime": "usn_income", "year": 2026, "check": "false"})
     assert r.status_code == 200
     body = r.json()
-    assert body["mode"] == "sim" and body["source"] == "rules"
+    assert body["source"] == "rules"
     kinds = [e["kind"] for e in body["events"]]
     assert kinds.count("enp") == 12 and kinds.count("usn_advance") == 3 and "usn_annual" in kinds
     assert all(date.fromisoformat(e["date"]).weekday() < 5 for e in body["events"])
@@ -87,70 +144,92 @@ def test_obligations_bad_params(client, params):
     assert r.status_code == 422 and r.json()["detail"]["code"] in ("invalid_params", "invalid_inn")
 
 
-# --- контрагенты ---
+# --- контрагенты: только открытые реестры, сведения помечены как выгруженные из ФНС ---
 
-def test_counterparty_scenarios_from_sim(client):
+def test_debt_index_built_from_open_data(deps):
+    st = deps.debt.state()
+    assert st["state"] == "ready" and st["as_of"] == "2026-09-01" and st["records"] == 2
+
+
+def test_counterparty_from_registries_is_marked_as_fns_export(client, reg):
     ok = client.get("/internal/v1/fns/counterparty", params={"inn": OK_INN}).json()
-    assert ok["status"] == "active" and ok["risk_level"] == "low" and ok["source"] == "fns_sim" and ok["mode"] == "sim"
-    debt = client.get("/internal/v1/fns/counterparty", params={"inn": DEBT_INN}).json()
-    assert debt["tax_debt"]["has"] and debt["tax_debt"]["amount_kop"] > 0 and "tax_debt" in debt["risk_reasons"][0]
-    bk = client.get("/internal/v1/fns/counterparty", params={"inn": BANKRUPT_INN}).json()
-    assert bk["bankruptcy"]["flag"] and bk["risk_level"] == "high"
-    liq = client.get("/internal/v1/fns/counterparty", params={"inn": LIQ_INN}).json()
-    assert liq["status"] == "liquidating" and liq["risk_level"] == "high"
+    assert (ok["status"], ok["risk_level"], ok["source"], ok["exported_from"]) == ("active", "low", "egrul", "fns")
+    assert ok["registered_at"] == "2003-11-07" and ok["tax_debt"] == {"has": False, "amount_kop": 0, "as_of": "2026-09-01"}
+    assert "mode" not in ok and not any("sim" in c for c in reg.calls)
+    debt = one(client, DEBT_INN)
+    assert debt["tax_debt"] == {"has": True, "amount_kop": 496997838, "as_of": "2026-09-01"}
+    assert (debt["risk_level"], debt["risk_reasons"]) == ("medium", ["tax_debt_large"])
+    assert one(client, SMALL_DEBT_INN)["risk_reasons"] == ["tax_debt"]
+    liq = one(client, LIQ_INN)
+    assert liq["status"] == "liquidated" and liq["risk_level"] == "high"
 
 
-def test_counterparty_cache_and_stale_when_source_down(deps, client):
+def test_not_in_registry_counts_as_risk_only_when_enabled(client):
+    off = one(client, MISSING_INN)
+    assert off["status"] == "not_found" and off["risk_level"] == "low" and off["risk_reasons"] == []
+    on = one(client, MISSING_INN, risk={"not_in_registry": True})
+    assert on["risk_level"] == "medium" and on["risk_reasons"] == ["not_in_registry"]
+
+
+def test_settings_switch_off_reasons_and_threshold(client):
+    assert one(client, DEBT_INN, risk={"tax_debt": False})["risk_level"] == "low"
+    assert one(client, LIQ_INN, risk={"liquidation": False})["risk_level"] == "low"
+    # порог крупного долга выше суммы: долг обычный, вес 1
+    assert one(client, DEBT_INN, risk={"large_debt_kop": 10**12})["risk_reasons"] == ["tax_debt"]
+
+
+def test_disabled_source_is_not_requested(client, reg):
+    rec = one(client, OK_INN, sources={"egrul": False})
+    assert not any(c.startswith("POST egrul") for c in reg.calls)
+    assert rec["sources"]["egrul"] == "off" and rec["status"] == "unknown" and rec["source"] == "data_nalog"
+    assert "reason" not in rec
+
+
+def test_fedresurs_needs_operator_credentials_then_flags_bankruptcy(client, monkeypatch):
+    rec = one(client, BANKRUPT_INN)
+    assert rec["sources"]["fedresurs"] == "unavailable:credentials_required" and rec["bankruptcy"]["flag"] is None
+    monkeypatch.setenv("FEDRESURS_LOGIN", "op")
+    monkeypatch.setenv("FEDRESURS_PASSWORD", "pw")
+    rec = client.post("/internal/v1/fns/counterparties/batch", json={"inns": [BANKRUPT_INN], "force": True}).json()["items"][0]
+    assert rec["bankruptcy"] == {"flag": True, "source": "fedresurs"} and rec["risk_level"] == "high"
+    assert one(client, BANKRUPT_INN, risk={"bankruptcy": False})["risk_level"] == "low"
+
+
+def test_counterparty_cache_and_stale_when_source_down(client, reg, monkeypatch):
     first = client.get("/internal/v1/fns/counterparty", params={"inn": OK_INN}).json()
     assert first["cached"] is False
-    assert client.get("/internal/v1/fns/counterparty", params={"inn": OK_INN}).json()["cached"] is True
-    # источник упал, кэш протух: отдаём просроченный кэш с пометкой, а не ошибку
-    deps.sim_transport = httpx.MockTransport(lambda req: httpx.Response(503, json={}))
-    monkey_ttl = pytest.MonkeyPatch()
-    monkey_ttl.setenv("FNS_CACHE_TTL", "0")
-    try:
-        out = client.get("/internal/v1/fns/counterparty", params={"inn": OK_INN}).json()
-    finally:
-        monkey_ttl.undo()
+    assert client.get("/internal/v1/fns/counterparty", params={"inn": OK_INN}).json()["sources"]["egrul"] == "ok"
+    reg.down = True
+    monkeypatch.setenv("FNS_CACHE_TTL", "0")
+    out = client.get("/internal/v1/fns/counterparty", params={"inn": OK_INN}).json()
     assert out["stale"] is True and out["status"] == "active"
 
 
-def test_counterparty_unavailable_without_cache_is_reported_not_guessed(deps, client):
-    deps.sim_transport = httpx.MockTransport(lambda req: httpx.Response(503, json={}))
-    out = client.get("/internal/v1/fns/counterparty", params={"inn": make_inn("7790")}).json()
-    assert out["source"] == "unavailable" and out["risk_level"] == "unknown" and out["reason"].startswith("http_")
+def test_counterparty_unavailable_without_cache_is_reported_not_guessed(tmp_path, monkeypatch):
+    monkeypatch.setenv("FNS_MIN_INTERVAL", "0")
+    down = httpx.MockTransport(lambda req: httpx.Response(503))
+    d = Deps(store=Store(tmp_path / "x.db"), public_transport=down, gov_transport=down)
+    out = counterparty.check(d, make_inn("7791"))
+    assert out["source"] == "unavailable" and out["risk_level"] == "unknown" and out["reason"]
 
 
-def test_batch_dedup_limit_and_invalid(client):
-    r = client.post("/internal/v1/fns/counterparties/batch", json={"inns": [OK_INN, OK_INN, DEBT_INN]})
-    body = r.json()
+def test_batch_dedup_limit_invalid_and_settings_echo(client):
+    body = client.post("/internal/v1/fns/counterparties/batch", json={"inns": [OK_INN, OK_INN, DEBT_INN], "settings": {"risk": {"tax_debt": False, "nope": 1}}}).json()
     assert body["requested"] == 2 and len(body["items"]) == 2 and not body["partial"]
+    assert body["settings"]["risk"]["tax_debt"] is False and "nope" not in body["settings"]["risk"]
     assert client.post("/internal/v1/fns/counterparties/batch", json={"inns": ["abc"]}).status_code == 422
     assert client.post("/internal/v1/fns/counterparties/batch", json={"inns": [OK_INN] * 51}).status_code == 422
 
 
-def test_live_mode_rejects_bad_checksum_without_network(deps, client, monkeypatch):
-    monkeypatch.setenv("FNS_MODE", "live")
+def test_bad_checksum_rejected_without_network(client, reg):
+    reg.calls.clear()
     out = client.get("/internal/v1/fns/counterparty", params={"inn": "7701234567"}).json()
-    assert out["status"] == "invalid_inn" and out["reason"] == "inn_checksum_invalid"
+    assert out["status"] == "invalid_inn" and out["reason"] == "inn_checksum_invalid" and reg.calls == []
 
 
-# --- ЕНС ---
+# --- ЕНС: только из загруженной справки ---
 
-def test_ens_sim_requires_known_taxpayer(client):
-    r = client.get("/internal/v1/fns/ens", params={"inn": make_inn("9999")})
-    assert r.status_code == 404 and r.json()["detail"]["code"] == "fns_unknown_taxpayer"
-
-
-@pytest.mark.skipif(not universe.world().companies, reason="нужен датасет (MOCK_DATASET_DIR)")
-def test_ens_sim_for_dataset_company(client):
-    inn = next(iter(universe.world().companies))
-    body = client.get("/internal/v1/fns/ens", params={"inn": inn}).json()
-    assert body["source"] == "fns_sim" and body["upcoming"] and body["debt_kop"] == max(0, -body["balance_kop"])
-
-
-def test_ens_live_without_import_is_404_with_hint(client, monkeypatch):
-    monkeypatch.setenv("FNS_MODE", "live")
+def test_ens_without_import_is_404_with_hint(client):
     r = client.get("/internal/v1/fns/ens", params={"inn": OK_INN})
     assert r.status_code == 404 and r.json()["detail"]["code"] == "fns_ens_not_imported"
 
@@ -162,7 +241,7 @@ def b64(s: str | bytes) -> str:
 CSV = "as_of;balance;debt;penalty;due_date;due_amount\n2026-10-20;-12 500,50;12500,50;300;2026-10-28;85000\n;;;;2026-11-28;90000,00\n"
 
 
-def test_import_csv_then_ens_uses_snapshot_over_sim(client):
+def test_import_csv_then_ens_uses_snapshot(client):
     r = client.post("/internal/v1/fns/ens/import", params={"inn": OK_INN}, json={"filename": "ens.csv", "content_b64": b64(CSV)})
     assert r.status_code == 200, r.text
     out = r.json()
@@ -216,4 +295,13 @@ def test_logs_do_not_contain_inn(client, caplog):
 
 def test_info_and_live(client):
     assert client.get("/live").json()["status"] == "ok"
-    assert client.get("/internal/v1/fns/info").json()["mode"] == config.mode()
+    info = client.get("/internal/v1/fns/info").json()
+    assert info["ens"] == "import" and info["debt_index"]["state"] == "ready" and info["fedresurs_configured"] is False
+
+
+def test_polite_http_streams_and_decodes_gzip_once():
+    from fns.http import PoliteHttp
+    t = httpx.MockTransport(lambda req: httpx.Response(200, content=gzip.compress(b'{"ok": true}'), headers={"content-encoding": "gzip"})
+                            if req.url.path != "/robots.txt" else httpx.Response(404))
+    r = PoliteHttp(transport=t, min_interval=0).request("GET", "https://example.ru/x")
+    assert r.status_code == 200 and r.json() == {"ok": True}

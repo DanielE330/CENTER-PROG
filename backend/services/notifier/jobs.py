@@ -1,6 +1,7 @@
-"""Рассылки и расписание: алерт разрыва, риск-отчёт, недельный и месячный отчёты, ретро-напоминание.
+"""Рассылки и расписание: алерт разрыва, пропущенные платежи, риск-отчёт, недельный и месячный отчёты, ретро-напоминание.
 Два канала: Telegram (если задан токен бота) и почта через notify (участникам, у которых она включена)."""
 import asyncio
+import hashlib
 import logging
 import re
 import time
@@ -111,6 +112,28 @@ class Jobs:
                 await self.mail(cid, "gap_resolved", f"{active}:{today.isoformat()}", text, "/forecast")
                 return "recovered"
         return "none"
+
+    # ---------- пропущенные платежи ----------
+    async def check_missed(self, cid: str) -> str:
+        """Новые пропуски план-факта (оплата не пришла, плановое списание не прошло) одним сообщением; о каждом платеже —
+        один раз. Возвращает 'sent' | 'none' | 'dup'."""
+        prefs = self.store.prefs(cid)
+        items = an.missed_items(await self.up.plan_fact(cid, 30), prefs["missed_min_kop"])
+        if not items:
+            return "none"
+        new = [i for i in items if self.store.claim(cid, "missed", i["key"])]
+        if not new:
+            return "dup"
+        text = reports.missed_text(await self._company(cid), new)
+        btn = reports.web_button("/plan-vs-actual")
+        tg = await self.broadcast(cid, lambda c: self.bot.send(c, text, [btn] if btn else None), "missed")
+        key = hashlib.sha1(",".join(i["key"] for i in new).encode()).hexdigest()[:16]
+        mailed = await self.mail(cid, "missed", key, text, "/plan-vs-actual")
+        if not tg and not mailed:
+            for i in new:
+                self.store.release(cid, "missed", i["key"])  # никто не получил — повторим в следующую проверку
+            return "none"
+        return "sent"
 
     async def _advise(self, cid: str, b: Bundle, kind: str) -> None:
         """Совет Hermes кэшируется на день по виду отчёта: повторный запрос отчёта не гоняет модель заново."""
@@ -277,6 +300,12 @@ class Jobs:
         if p["gap_enabled"] and local.hour in GAP_HOURS and time.time() - float(self.store.kv_get(cid, "gap_checked") or 0) >= GAP_CHECK_EVERY:
             self.store.kv_set(cid, "gap_checked", str(time.time()))
             await self.check_gap(cid)
+        if p["missed_enabled"] and local.hour in GAP_HOURS and time.time() - float(self.store.kv_get(cid, "missed_checked") or 0) >= GAP_CHECK_EVERY:
+            self.store.kv_set(cid, "missed_checked", str(time.time()))
+            try:
+                await self.check_missed(cid)
+            except UpstreamError as e:  # нет выписки или план-факт недоступен: проверим в следующий раз
+                log.info("missed %s: %s", cid, e)
         await self.retro_nudge(cid, local)
 
     async def retro_nudge(self, cid: str, local: datetime) -> None:

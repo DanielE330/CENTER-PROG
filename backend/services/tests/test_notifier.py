@@ -304,7 +304,7 @@ def test_tick_monthly_on_chosen_day(core, at_10):
 
 def test_tick_failure_is_retried(core, at_10):
     store, jobs, bot, w = core
-    store.set_prefs(CID, {"risk_time": "09:00", "week_enabled": 0, "month_enabled": 0, "gap_enabled": 0})
+    store.set_prefs(CID, {"risk_time": "09:00", "week_enabled": 0, "month_enabled": 0, "gap_enabled": 0, "missed_enabled": 0})
     w.forecast = {"broken": True}
     run(jobs.tick())
     assert not w.sent
@@ -753,7 +753,7 @@ class MailWorld(World):
             if p.endswith("/broadcast"):
                 b = json.loads(req.content)
                 self.mails.append(b)
-                n = self.subs["alerts" if b["kind"].startswith("gap") else "reports"]
+                n = self.subs["alerts" if b["kind"].startswith("gap") or b["kind"] == "missed" else "reports"]
                 return httpx.Response(200, json={"queued": n, "recipients": n})
             if p.endswith("/subscribers"):
                 return httpx.Response(200, json=self.subs)
@@ -852,6 +852,89 @@ def test_send_now_without_bot_goes_to_mail(mail_client):
     w.subs = {"alerts": 0, "reports": 0}
     r = c.post(f"/internal/v1/companies/{CID}/notifications/send/week")
     assert r.status_code == 409 and r.json()["error"]["code"] == "no_chats"
+
+
+# ---------- пропущенные платежи ----------
+def missed(date_, title, plan, status="missed"):
+    return {"date": date_, "title": title, "source": "recurring", "plan": str(plan), "fact": None, "status": status}
+
+
+def test_missed_payments_one_message_each_payment_once(core):
+    store, jobs, _, w = core
+    w.plan_fact = {"as_of": "2026-10-02", "items": [
+        missed("2026-09-25", "АО «БЦ Северная Звезда»", 68_000_000),
+        missed("2026-09-30", "Аренда", -9_000_000),
+        missed("2026-09-30", "Связь", -490_000),                    # меньше порога 10 000 ₽
+        missed("2026-08-20", "Старый клиент", 50_000_000),          # старше 21 дня до последней операции
+        missed("2026-09-29", "Поставщик", -28_000_000, status="paid")]}
+    assert run(jobs.check_missed(CID)) == "sent"
+    text = w.texts()[-1]
+    assert "Пропущенные платежи: 2" in text
+    assert f"Не поступила оплата: <b>АО «БЦ Северная Звезда»</b> — {reports.rub(68_000_000)}, ожидали 25 сентября" in text
+    assert f"Не прошло плановое списание: <b>Аренда</b> — {reports.rub(9_000_000)}" in text
+    assert "Связь" not in text and "Старый клиент" not in text and "Поставщик" not in text
+    assert "напомнить клиенту" in text and "пени" in text
+    assert run(jobs.check_missed(CID)) == "dup"                     # те же платежи второй раз не приходят
+    w.plan_fact["items"].append(missed("2026-10-01", "ООО «ТЦ Галерея Юг»", 54_000_000))
+    assert run(jobs.check_missed(CID)) == "sent"
+    text = w.texts()[-1]
+    assert "Пропущенные платежи: 1" in text and "Галерея" in text and "Аренда" not in text
+    assert "напомнить клиенту" in text and "пени" not in text           # только поступление — только его советы
+
+
+def test_missed_threshold_is_configurable_and_many_are_folded(core):
+    store, jobs, _, w = core
+    store.set_prefs(CID, {"missed_min_kop": 0})
+    w.plan_fact = {"as_of": "2026-10-02", "items": [missed(f"2026-09-{20 + i}", f"Клиент {i}", 100_000 * (i + 1)) for i in range(7)]}
+    assert run(jobs.check_missed(CID)) == "sent"
+    text = w.texts()[-1]
+    assert "Пропущенные платежи: 7" in text and "…и ещё 2" in text and text.count("Не поступила оплата") == 5
+    w.plan_fact = {"as_of": "2026-10-02", "items": []}
+    assert run(jobs.check_missed(CID)) == "none"
+
+
+def test_missed_released_when_nobody_received_and_department_policy(core):
+    store, jobs, _, w = core
+    w.fail_telegram = (503, "unavailable")
+    assert run(jobs.check_missed(CID)) == "none"
+    w.fail_telegram = None
+    assert run(jobs.check_missed(CID)) == "sent"                    # ключ не сгорел
+    # отдел без вида рассылки «missed» сообщений о пропусках не получает
+    w.plan_fact["items"].append(missed("2026-10-01", "Клиент Б", 20_000_000))
+    did = store.add_department(CID, "Склад", ["risk"], True, "viewer")
+    store.set_chat_department(CID, 111, did)
+    n = len(w.texts())
+    assert run(jobs.check_missed(CID)) == "none" and len(w.texts()) == n
+
+
+def test_missed_check_runs_in_schedule_and_can_be_disabled(core, at_10):
+    store, jobs, _, w = core
+    run(jobs.tick())
+    assert any("Пропущенные платежи" in t for t in w.texts())
+    store.kv_set(CID, "missed_checked", None)
+    store.set_prefs(CID, {"missed_enabled": 0})
+    w.plan_fact["items"].append(missed("2026-10-01", "Клиент Б", 20_000_000))
+    run(jobs.tick())
+    assert not any("Клиент Б" in t for t in w.texts())
+
+
+def test_missed_reaches_mail_subscribers_and_send_now(mail_client):
+    c, w = mail_client
+    r = c.post(f"/internal/v1/companies/{CID}/notifications/send/missed")
+    assert r.status_code == 200 and r.json()["result"] == "sent", r.text
+    m = w.mails[-1]
+    assert m["kind"] == "missed" and m["path"] == "/plan-vs-actual" and m["subject"] == "🔔 Пропущенные платежи: 1"
+    assert c.post(f"/internal/v1/companies/{CID}/notifications/send/missed").json()["result"] == "dup"
+    w.subs = {"alerts": 0, "reports": 1}                            # подписка на отчёты не даёт писем о пропусках
+    r = c.post(f"/internal/v1/companies/{CID}/notifications/send/missed")
+    assert r.status_code == 409
+
+
+def test_missed_prefs_validation(mail_client):
+    c, _ = mail_client
+    r = c.put(f"/internal/v1/companies/{CID}/notifications/prefs", json={"missed_enabled": False, "missed_min_kop": 5_000_000})
+    assert r.status_code == 200 and r.json()["missed_enabled"] == 0 and r.json()["missed_min_kop"] == 5_000_000
+    assert c.put(f"/internal/v1/companies/{CID}/notifications/prefs", json={"missed_min_kop": -1}).status_code == 422
 
 
 # ---------- маскирование перед облаком ----------

@@ -13,7 +13,7 @@
 | forecast | Rust, 3003 | Расчёт прогноза остатка, риска разрыва, сценариев и backtest; авто-пересчёт устаревшего базового прогноза | `forecast.db` (`forecast_runs`) |
 | planfact | Rust, 3004 | Сравнение плана и факта (история и события из ledger, регулярные платежи из forecast) | — |
 | gov | Python, 8003 | Получение публичных данных госсайтов: ключевая ставка ЦБ, календари, налоговый календарь ФНС | кэш |
-| integrator | Python, 8008 | Забор счетов, договоров и документов из 1С, ЭДО и банка и приведение к ожидаемым событиям | — |
+| integrator | Python, 8008 | Забор счетов, договоров и документов из 1С, ЭДО и банка и приведение к ожидаемым событиям; проверка подключения 1С, введённого пользователем (защита от SSRF, лимит проверок). Реквизиты компании берёт у ledger по запросу, сам ничего не хранит | — |
 | llm_gateway | Python, 8010 | Единственный выход к облачным LLM (Anthropic, OpenAI, Gemini, OpenRouter через httpx): маскирование ИНН/счетов/карт/контрагентов/ФИО перед отправкой и обратная подстановка в ответе, суточный бюджет токенов на пользователя, аудит обращений без содержимого, таймауты | `llm_gateway.db` (расход токенов, аудит) |
 | advisor | Python, 8011 | Консультант: агентный цикл с инструментами (прогноз и риск, ближайшие платежи и просрочки, план-факт, сценарий «что если», операции по категориям) поверх forecast/ledger/planfact и llm_gateway; только предлагает действия; без провайдера отвечает шаблоном из прогноза | — |
 | demo_feed | Python, 8012 | Лента демо «Прошла неделя»: по курсору (дате последней операции) отдаёт операции следующей недели демо-компании из датасета | — |
@@ -21,6 +21,8 @@
 | onec | Python, 8004 | Имитация 1С (OData) | — |
 | edo | Python, 8005 | Имитация ЭДО | — |
 | bank | Python, 8006 | Имитация банковского API выписок | — |
+
+Подключения интеграций компаний (адрес, логин и зашифрованный пароль 1С, таблица `integration_connections`) хранит ledger (ключ `INTEGRATIONS_KEY`); расшифрованные реквизиты отдаёт только integrator'у (`x-actor: svc:integrator`). Маршруты — в docs/integrator.md и docs/roles.md.
 
 Принципы: сервис не читает чужую БД; общие структуры данных (операция, событие) лежат в общем крейте/схеме, а не копируются; каждый сервис имеет `/live`, свои тесты, свой Dockerfile target и запись в `infra/docker-compose.yml`.
 
@@ -30,7 +32,7 @@ Cargo workspace в `backend/` (общие `Cargo.lock`, `rust-toolchain.toml`): 
 
 | Сервис | Env (по умолчанию) | Эндпоинты `/internal/v1/...` |
 |---|---|---|
-| ledger :3002 | `INTERNAL_ADDR=127.0.0.1:3002`, `DB_PATH=data/run/ledger.db`, `PARSER_URL` | `companies/ensure`, `members/by-user/{uid}`, `companies/{cid}/members` (GET, POST), `.../members/{uid}` (PATCH, DELETE), `admin/companies` (GET), `admin/companies/{cid}` (GET), `.../ban`, `.../unban`, `admin/stats`, `companies/{cid}` (GET, PATCH), `companies/{cid}/snapshot`, `.../imports` (GET, POST multipart), `.../imports/{iid}` (+`/confirm`), `.../transactions`, `.../transactions/{id}/category`, `.../expected-events` (GET, POST), `.../expected-events/{eid}` (DELETE), `.../expected-events/bulk` (идемпотентно по `external_id`), `.../audit`, `health`, `/live` |
+| ledger :3002 | `INTERNAL_ADDR=127.0.0.1:3002`, `DB_PATH=data/run/ledger.db`, `PARSER_URL`, `INTEGRATIONS_KEY` | `companies/ensure`, `members/by-user/{uid}`, `companies/{cid}/members` (GET, POST), `.../members/{uid}` (PATCH, DELETE), `admin/companies` (GET), `admin/companies/{cid}` (GET), `.../ban`, `.../unban`, `admin/stats`, `companies/{cid}` (GET, PATCH), `companies/{cid}/snapshot`, `.../imports` (GET, POST multipart), `.../imports/{iid}` (+`/confirm`), `.../transactions`, `.../transactions/{id}/category`, `.../expected-events` (GET, POST), `.../expected-events/{eid}` (DELETE), `.../expected-events/bulk` (идемпотентно по `external_id`), `.../audit`, `.../integrations` (GET), `.../integrations/onec` (PUT, DELETE), `.../integrations/onec/status` (PUT), `.../integrations/onec/credentials` (GET, только integrator), `health`, `/live` |
 | forecast :3003 | `INTERNAL_ADDR=127.0.0.1:3003`, `DB_PATH=data/run/forecast.db`, `LEDGER_URL` | `companies/{cid}/forecasts` (POST), `.../forecasts/latest`, `.../forecasts/{rid}`, `.../scenarios`, `.../backtest`, `.../summary`, `.../rules?as_of=` |
 | planfact :3004 | `INTERNAL_ADDR=127.0.0.1:3004`, `LEDGER_URL`, `FORECAST_URL` | `companies/{cid}/plan-fact?days=` |
 | api :3000/:3100 | `PUBLIC_ADDR`, `INTERNAL_ADDR`, `AUTH_URL`, `BACKOFFICE_URL`, `ECP_URL`, `GOV_URL`, `LEDGER_URL`, `FORECAST_URL`, `PLANFACT_URL`, `INTEGRATOR_URL`, `WEB_DIR`, `COOKIE_SECURE` | публичные `/api/v1/...` (контракт для SPA не менялся), операторские `/api/admin/v1/...` (`admin.rs`, cookie `op_session`); внутренний :3100: `health`, `companies/{cid}/summary` |
@@ -39,7 +41,11 @@ Cargo workspace в `backend/` (общие `Cargo.lock`, `rust-toolchain.toml`): 
 
 Запуск: `infra/scripts/dev.sh` (собирает workspace, поднимает всё; `dev.sh stop`). Проверка: `cd backend && cargo test`, `infra/scripts/smoke.sh`. Docker: `make -C infra up`; образы — `infra/docker/rust.Dockerfile` (targets `ledger`, `forecast`, `planfact`, `api`) и `infra/docker/python.Dockerfile` (`auth`, `parser`, `gov`, `ecp`, `onec`, `edo`, `bank`, `integrator`, `demo_feed`, `llm_gateway`, `advisor`, `backoffice`). Сеть `edge` у gateway, api, gov и llm_gateway (выход к провайдерам); имитаторы, integrator и все Rust-сервисы кроме api — только `internal`.
 
-`POST /api/v1/companies/{cid}/integrations/sync` `{"external_company":"C001"}`: api запрашивает у integrator `GET /internal/v1/obligations?company=...` (`INTEGRATOR_URL`, `http://127.0.0.1:8008`), превращает обязательства в ожидаемые события (`source`: `contract` для kind=contract, иначе `invoice`) и записывает их в ledger через `expected-events/bulk`; ключ идемпотентности — уникальный индекс `(company_id, external_id)`. Ответ `{created, skipped, sources}`.
+`POST /api/v1/companies/{cid}/integrations/sync` `{"external_company":"C001"}`: api запрашивает у integrator `GET /internal/v1/obligations?company=...&tenant={cid}` (если компания подключила свою 1С, данные берутся из неё) (`INTEGRATOR_URL`, `http://127.0.0.1:8008`), превращает обязательства в ожидаемые события (`source`: `contract` для kind=contract, иначе `invoice`) и записывает их в ledger через `expected-events/bulk`; ключ идемпотентности — уникальный индекс `(company_id, external_id)`. Ответ `{created, skipped, sources, onec: sim|live, fns}`.
+
+## Тестовый вход (кнопки демо-аккаунтов)
+
+api (`backend/api/src/demo_login.rs`, env `DEMO_LOGIN`, `DEMO_PASSWORD`; в compose `DEMO_LOGIN` по умолчанию равен `DEMO_SEED`): `GET /api/v1/auth/demo` и `POST /api/v1/auth/demo/login {account}` (контракт и безопасность в `docs/roles.md`). auth: внутренний `POST /internal/v1/demo/trust {email}`. Frontend: `features/auth/DemoLogin.tsx`. Сотрудников `demo-editor@` и `demo-viewer@example.com` заводит `seed_demo.sh`.
 
 ## Тестовый вход (кнопки демо-аккаунтов)
 
@@ -57,6 +63,8 @@ api (`backend/api/src/demo.rs`, `DEMO_FEED_URL`, `DEMO_FEED_ENABLED=1`, `DEMO_EM
 В интерфейсе плашка на «Обзоре» (`DemoWeekCard`) видна только при `demo/status.enabled`; после кнопки обновляются все запросы (TanStack Query), на «Плане и факте» виден новый отрезок. Чтобы пройти демо заново: `./run.sh reset && ./run.sh` (или `DEMO_CUTOFF=none` для выписки целиком). Имитаторы 1С/ЭДО/банка по-прежнему живут на `MOCK_TODAY`.
 
 ## Консультант с ИИ: llm_gateway (:8010) и advisor (:8011)
+
+Основной движок — Hermes Agent по подписке Codex, инструменты по MCP, права задаёт владелец: docs/advisor-hermes.md. Ниже — запасной путь через llm_gateway.
 
 Публичный API (api, `backend/api/src/advisor.rs`, сессия и принадлежность компании проверяет api):
 - `POST /api/v1/companies/{cid}/advisor/ask` `{question, history?:[{role,content}], lang?:"ru"|"en"}` -> `{answer, suggestions:[{id,type,params,title}], provider, model, notice, usage, tools_used}`. `provider:"none"` — ответ по шаблону из прогноза (дата и сумма ближайшего разрыва, причины, три действия); `notice`: `provider_not_configured` | `provider_unavailable` | `budget_exceeded`.

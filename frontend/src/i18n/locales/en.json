@@ -44,16 +44,16 @@
     "or": "or",
     "logout": "Sign out",
     "demo": {
-      "title": "Test sign-in",
+      "title": "Demo: a week has passed",
       "lead": "Open the demo company in one click, no password needed. Pick a role to see what it can do.",
       "listLabel": "Demo accounts",
       "director": {
         "name": "Director",
-        "hint": "Role \u201cOwner\u201d: all data, the team, company settings and sign-in methods."
+        "hint": "Role “Owner”: all data, the team, company settings and sign-in methods."
       },
       "editor": {
         "name": "Editor",
-        "hint": "Role \u201cAnalyst\u201d: view and change data (imports, payments, categories), no team management."
+        "hint": "Role “Analyst”: view and change data (imports, payments, categories), no team management."
       },
       "viewer": {
         "name": "Viewer",
@@ -169,6 +169,7 @@
     "manual": "Manual",
     "invoice": "Invoice",
     "contract": "Contract",
+    "onec": "1C",
     "tax": "Tax calendar",
     "event": "Expected event",
     "scenario": "Scenario"
@@ -195,6 +196,17 @@
     "unknown": "Unknown error"
   },
   "apiErrors": {
+    "integrations_key_missing": "The server has no INTEGRATIONS_KEY encryption key, so 1C cannot be connected yet. Contact the server administrator",
+    "integrations_key_invalid": "The saved 1C password cannot be decrypted (the server key changed): enter the password again",
+    "onec_password_required": "Enter the 1C service user password (a saved password is not reused after the address changes)",
+    "not_configured": "Enter the 1C address and login first",
+    "rate_limited": "Too many connection checks. Wait a minute and try again",
+    "ledger_unavailable": "The data service is unavailable, try again later",
+    "url_forbidden": "This address cannot be used: a public https address of the 1C database is required (port 443 or 8443)",
+    "url_scheme": "The address must start with https://",
+    "url_userinfo": "Do not put the login and password in the address: enter them in the separate fields",
+    "invalid_url": "The 1C database address is malformed",
+    "invalid_username": "Service user login: 1 to 100 characters",
     "inn_required": "Enter the TIN in the company details: tax service data is requested by TIN",
     "fns_unavailable": "The tax service is unavailable right now, try again later",
     "fns_unknown_taxpayer": "The taxpayer was not found in the tax service source",
@@ -295,7 +307,11 @@
     "staleTitle": "The forecast is out of date",
     "staleText": "Data changed after the last calculation, so the figures may be out of date.",
     "recomputedTitle": "Forecast recalculated automatically",
-    "recomputedText": "Reason: the data changed. The forecast horizon is unchanged."
+    "recomputedText": "Reason: the data changed. The forecast horizon is unchanged.",
+    "incrementalTitle": "Forecast updated with new data",
+    "incrementalText": "The model was not retrained: {{count}} operations were appended. Last full recompute: {{date}}.",
+    "incrementalNoOps": "No new operations; only payments and events were recomputed. Last full recompute: {{date}}.",
+    "fullRecalc": "Recompute from scratch"
   },
   "risk": {
     "title": "Cash gap risk",
@@ -420,7 +436,13 @@
       "amount": "Amount",
       "occurrences": "Occurrences"
     },
-    "modelLine": "Model {{version}} · {{paths}} paths · seed {{seed}} · data quality: {{level}} ({{days}} d)"
+    "modelLine": "Model {{version}} · {{paths}} paths · seed {{seed}} · data quality: {{level}} ({{days}} d)",
+    "trace": {
+      "title": "How the forecast was built",
+      "subtitle": "Step-by-step calculation log: model {{model}}, {{paths}} paths",
+      "show": "Show steps",
+      "hide": "Hide"
+    }
   },
   "backtest": {
     "title": "Forecast quality",
@@ -435,12 +457,23 @@
       "drift": "“Trend”",
       "beats": "Model beats both",
       "coverage": "Inside 10–90%",
-      "n": "Points"
+      "n": "Points",
+      "rmse": "RMSE",
+      "mse": "MSE, ₽²"
     },
     "origins": "checkpoints",
-    "precision": "alarm precision (P ≥ 50%)",
-    "recall": "recall ({{count}} real gap windows)",
-    "note": "The error is the mean absolute error (MAE) of the balance. With few real gaps, alarm precision and recall are not very informative."
+    "precision": "Precision (alarms)",
+    "recall": "Recall ({{count}} gap windows)",
+    "note": "Balance error: MAE mean absolute, MSE mean squared, RMSE its root. A gap is a negative balance on any of the 30 days after the check date.",
+    "accuracy": "Accuracy",
+    "f1": "F1",
+    "brier": "Brier (0 is perfect)",
+    "matrixTitle": "Confusion matrix: gap alarm (P ≥ {{threshold}}%) vs actual gap in 30 days",
+    "factGap": "Actual: gap",
+    "factNoGap": "Actual: no gap",
+    "predGap": "Predicted: gap",
+    "predNoGap": "Predicted: no gap",
+    "calibration": "Mean predicted gap probability {{p}}, actual share of gap windows {{rate}}."
   },
   "transactions": {
     "title": "Transactions",
@@ -471,7 +504,6 @@
     }
   },
   "fns": {
-    "modeSim": "simulation",
     "sync": "Update taxes from the Federal Tax Service",
     "importOpen": "Upload the unified account statement",
     "checkedAt": "checked {{at}}",
@@ -482,9 +514,7 @@
     "syncDoneText": "Tax events for {{year}}: {{created}} created, {{skipped}} already existed.",
     "syncEstimated": "For {{count}} payments the amount is estimated from the statement.",
     "syncNoAmount": "For {{count}} payments the amount cannot be estimated (annual taxes, income-based contributions): add it manually.",
-    "syncSim": "Simulated tax service data, not real.",
     "sourceName": {
-      "fns_sim": "Tax service simulator",
       "import": "Tax service statement",
       "egrul": "Business registry",
       "data_nalog": "Tax open data",
@@ -537,11 +567,13 @@
       "taxDebt": "owes the tax office",
       "unreliable": "unreliable registry data",
       "disqualified": "disqualified director",
-      "massAddress": "mass registration address"
+      "massAddress": "mass registration address",
+      "notInRegistry": "not in the business registry",
+      "taxDebtLarge": "large tax debt"
     },
     "cp": {
       "title": "Counterparties and risks",
-      "subtitle": "Largest customers and suppliers in the open tax registries",
+      "subtitle": "Customers and suppliers from the statement and 1C in the open tax registries",
       "name": "Counterparty",
       "share": "Share of receipts",
       "status": "Status",
@@ -552,10 +584,22 @@
       "riskyText": "This customer has signs that may delay or stop its payments:",
       "riskyScenario": "Check the «customer does not pay» scenario",
       "emptyTitle": "No counterparties yet",
-      "emptyText": "They will appear after a statement is uploaded.",
+      "emptyText": "They will appear after a statement is uploaded or 1C is synced.",
       "source": "Source: {{source}}",
       "checked": "checked {{date}}",
-      "notSaved": "risk flags were not saved, the forecast will not use them"
+      "notSaved": "risk flags were not saved, the forecast will not use them",
+      "fromOnec": "from 1C",
+      "expectedIn": "expecting {{amount}}",
+      "expectedOut": "paying {{amount}}",
+      "expectedMark": "exp.",
+      "expectedShareHint": "Share of expected receipts (1C invoices)",
+      "debtAsOf": "as of {{date}}",
+      "inn": "TIN {{inn}}",
+      "exported": "Exported from the tax service",
+      "debtDataAsOf": "debts as of {{date}}",
+      "notInForecast": "risk is not used in the forecast",
+      "configure": "Configure",
+      "egrulOff": "Business registry is turned off in settings"
     }
   },
   "obligations": {
@@ -641,6 +685,106 @@
       "usnIncomeExpenses": "Income minus expenses (15%)"
     }
   },
+  "integrations": {
+    "title": "Integrations",
+    "subtitle": "Where the company gets invoices, contracts and payments from. The owner sets up connections.",
+    "status": {
+      "ok": "Connected",
+      "error": "Error",
+      "unchecked": "Not checked",
+      "not_connected": "Not connected",
+      "sim": "Simulator"
+    },
+    "source": {
+      "sim": "Simulator",
+      "live": "Real 1C"
+    },
+    "lastCheck": "Last check",
+    "lastSync": "Last sync",
+    "lastError": "Error reason",
+    "never": "never",
+    "syncNow": "Sync now",
+    "syncHint": "Invoices and payment orders from connected sources become expected events; repeating does not create duplicates.",
+    "syncSource": {
+      "sim": "1C data: simulator.",
+      "live": "1C data: your connected 1C."
+    },
+    "syncOnecError": "1C returned no data: {{error}}",
+    "onec": {
+      "title": "1C",
+      "simText": "A simulator with demo invoices stands in for 1C right now. Enter the database address and a service user to read your own 1C (for example 1C:Fresh).",
+      "liveText": "Your 1C database is connected. Sync reads posted invoices, contracts, payments and unexecuted payment orders from it; the service cannot write anything to 1C.",
+      "managerOnly": "Only the company owner can see and change the 1C address and password.",
+      "url": "1C database address",
+      "urlHint": "The application address from your browser, without the language code and without /odata. https only.",
+      "username": "Service user login",
+      "password": "Password",
+      "passwordHint": "Stored encrypted and never shown after saving.",
+      "passwordKept": "Password is saved. Leave empty to keep it (after changing the address you must enter it again).",
+      "test": "Check connection",
+      "disconnect": "Disconnect",
+      "disconnectConfirm": "Disconnect 1C? The address and password will be deleted; events already loaded from 1C stay.",
+      "saved": "Saved.",
+      "keyMissingTitle": "Connecting is not available yet",
+      "keyMissing": "The server has no INTEGRATIONS_KEY encryption key for passwords. The server administrator creates it during installation (see docs/integrator.md); then the password can be saved.",
+      "howTitle": "How to enable OData in 1C",
+      "how1": "In 1C open \"Administration → Data synchronization → Standard OData interface settings\".",
+      "how2": "On the \"Authorization\" tab create a separate service user with read-only access.",
+      "how3": "On the \"Composition\" tab tick these objects:",
+      "how4": "Take the address from your browser's address bar while your database is open, without the language code at the end, for example https://msk1.1cfresh.com/a/ea/4269703.",
+      "how5": "Enter the address, login and password above, press \"Check connection\", then \"Save\".",
+      "howSecurity": "The address must be public and use https: the service does not connect to closed or internal networks. No more than 10 checks per minute.",
+      "checkOk": "Connection works",
+      "checkDocs_one": "{{count}} posted invoice found.",
+      "checkDocs_other": "{{count}} posted invoices found.",
+      "checkMore": "That is not all: only the first records are counted.",
+      "optionalMissing": "Optional objects are not published (some payment details will be incomplete without them): {{names}}.",
+      "missing": "Objects missing from the OData composition: {{names}}."
+    },
+    "fns": {
+      "title": "Tax service (FNS)",
+      "badge": "Open registries",
+      "text": "FNS data comes from open registries by tax ID; nothing needs to be connected.",
+      "link": "FNS data settings"
+    },
+    "edo": {
+      "title": "E-document exchange",
+      "text": "Connecting to an e-document operator is not configurable yet: the simulator's demo documents are used."
+    },
+    "bank": {
+      "title": "Bank",
+      "text": "Connecting a bank is not configurable yet: statements are uploaded as a file in \"Import statement\", the balance for reconciliation comes from the simulator."
+    },
+    "codes": {
+      "ok": "Connection works",
+      "bad_credentials": "1C did not accept the login or password",
+      "no_access": "The user has no read access through OData",
+      "odata_not_published": "There is no OData at this address",
+      "no_catalog_access": "Objects are missing from the OData composition",
+      "unreachable": "The 1C server is unreachable at this address",
+      "timeout": "1C did not answer in time",
+      "tls_error": "The 1C server certificate failed verification",
+      "redirect": "1C answers with a redirect to another address",
+      "too_large": "The 1C response is too large",
+      "bad_response": "1C answered in an unexpected format",
+      "url_forbidden": "This address cannot be used",
+      "url_scheme": "The address must start with https://",
+      "url_userinfo": "Do not put the login and password in the address",
+      "invalid_url": "The address is malformed"
+    },
+    "hints": {
+      "bad_credentials": "Check the service user's login and password on the \"Authorization\" tab of the OData settings.",
+      "no_access": "Give the service user read access to the needed objects.",
+      "odata_not_published": "Enable \"Standard OData interface settings\" in 1C and check the address: it must lead to the application, not to a login page.",
+      "no_catalog_access": "Tick the listed objects on the \"Composition\" tab of the OData settings.",
+      "unreachable": "Check the address and that the database is reachable from the internet.",
+      "timeout": "Try the check again later.",
+      "tls_error": "A valid certificate issued by a public certificate authority is required.",
+      "redirect": "Enter the final application address as it opens in the browser after sign-in.",
+      "url_forbidden": "A public address on port 443 or 8443 is required; localhost, internal networks and private IP ranges are not accepted.",
+      "bad_response": "The address must lead to the 1C application, without /odata and without the language code."
+    }
+  },
   "sync": {
     "title": "Integration sync",
     "hint": "Invoices and contracts from 1C, EDO and the bank become expected events. Syncing again does not create duplicates.",
@@ -649,7 +793,9 @@
     "run": "Sync",
     "running": "Syncing…",
     "doneTitle": "Sync finished",
-    "doneText": "Events created: {{created}}, skipped (already present or invalid): {{skipped}}."
+    "doneText": "Events created: {{created}}, skipped (already present or invalid): {{skipped}}.",
+    "fnsChecked": "Counterparties checked with the tax service: {{checked}}, with risk signs: {{flagged}}; the forecast takes them into account.",
+    "fnsNoInn": "Add the company TIN in settings to check counterparties with the tax service."
   },
   "scenarios": {
     "title": "Scenarios",
@@ -759,13 +905,39 @@
       "missed": "Not received",
       "pending": "Pending"
     },
-    "planNote": "The plan for recurring payments follows templates found in the whole history (in-sample); manual events and invoices follow the entered dates."
+    "planNote": "The plan for recurring payments follows templates found in the whole history (in-sample); manual events and invoices follow the entered dates.",
+    "strategy": {
+      "emptyTitle": "Strategy from the AI CFO",
+      "emptyText": "In plan mode the advisor analyses your data and builds a plan: dated steps with amounts, risks and what to watch here.",
+      "make": "Build a plan",
+      "title": "Strategy: {{title}}",
+      "subtitle": "Built by the AI advisor {{date}}",
+      "badge": "Active",
+      "goal": "Goal:",
+      "kind": {
+        "income": "Income",
+        "expense": "Expense",
+        "reserve": "Reserve",
+        "negotiation": "Negotiation",
+        "tax": "Taxes",
+        "financing": "Financing",
+        "control": "Control"
+      },
+      "due": "by {{date}}",
+      "overdue": "{{date}} passed",
+      "checkpoints": "What to watch on Plan vs fact",
+      "risks": "Plan risks",
+      "openChat": "Open chat",
+      "remake": "Rebuild",
+      "remove": "Remove strategy",
+      "showAll": "Show the full strategy: {{count}} steps, risks and checkpoints"
+    }
   },
   "assistant": {
     "title": "AI assistant",
-    "description": "Explains the causes of risk and helps check scenarios.",
+    "description": "AI CFO: cash, taxes, 1C, risks, strategies and app guidance. Chats are saved.",
     "rulesBadge": "Rule-based answers",
-    "welcome": "Hello! I answer from the forecast and your company data: gap risk, upcoming payments, plan vs actual and what-if scenarios. Numbers come from the calculations, nothing is made up. If an AI provider is connected, a model writes the answer (names, tax IDs and accounts are hidden before sending), otherwise I answer by rules. I never write anything myself: you accept suggestions with a button.",
+    "welcome": "Hello! I am the AI CFO: I explain cash flow, taxes, 1C, risks and how to use the app in plain words, and take numbers from the company data. I may ask a clarifying question. What I may do — view, propose or add payments myself — is set by the owner in Settings → AI advisor.",
     "noForecastTitle": "No forecast to analyse",
     "noForecastText": "The assistant answers from the saved forecast. Upload a statement and build a forecast first.",
     "error": "Could not get an answer: {{reason}}",
@@ -775,7 +947,7 @@
     "bot": "Assistant",
     "suggestionsAria": "Quick questions",
     "inputAria": "Question to the assistant",
-    "inputPlaceholder": "Ask a question about the forecast…",
+    "inputPlaceholder": "Ask about cash, taxes, 1C or the app…",
     "send": "Send",
     "source": "Source: forecast as of {{asOfDate}}, run {{id}}.",
     "monthly": "monthly",
@@ -842,7 +1014,51 @@
     "applied": "Added to expected payments",
     "dismissed": "Dismissed",
     "applyError": "Could not add: {{reason}}",
-    "proposalsAria": "Advisor suggestions"
+    "proposalsAria": "Advisor suggestions",
+    "actionsAria": "What the advisor did",
+    "done": "Done:",
+    "followupsAria": "What to ask next",
+    "disabledTitle": "AI advisor is off",
+    "disabledText": "The company owner switched the advisor off; answers come from forecast rules.",
+    "openSettings": "Advisor settings",
+    "chatsAria": "Advisor chats",
+    "newChat": "New chat",
+    "newPlan": "New strategy (plan mode)",
+    "noChats": "No chats yet. Start one — it will be saved.",
+    "modePlan": "Plan",
+    "modeChat": "Consultant",
+    "deleteChat": "Delete chat “{{title}}”",
+    "deleteTitle": "Delete the chat?",
+    "deleteText": "Chat “{{title}}” and its messages will be deleted permanently. A saved strategy on Plan vs fact stays.",
+    "startTitle": "Start a conversation with the AI CFO",
+    "startText": "Chats are saved: you can switch tabs and come back. Each chat keeps its own context.",
+    "newTitle": "New chat",
+    "modeLabel": "Mode",
+    "modeChatHint": "Questions about cash, taxes, 1C, risks and how to use the app.",
+    "modePlanHint": "Builds a strategy from your data and saves it on the Plan vs fact screen. Asks clarifying questions first.",
+    "reasoningLabel": "Reasoning depth",
+    "reasoningHint": "Deeper means a more careful analysis and a longer wait. Set at the start and fixed for the chat.",
+    "effort": {
+      "low": "Fast",
+      "medium": "Normal",
+      "high": "Deep",
+      "xhigh": "Maximum"
+    },
+    "effortHint": {
+      "low": "seconds",
+      "medium": "up to a minute",
+      "high": "1–3 minutes",
+      "xhigh": "up to 5 minutes"
+    },
+    "modelLabel": "Model",
+    "modelDefault": "Default ({{model}})",
+    "start": "Start",
+    "reasoningBadge": "Reasoning: {{level}}",
+    "welcomePlan": "Plan mode. I will gather the company data — forecast, payments, plan vs fact, clients and their risks — and build a strategy with steps, dates and amounts. If inputs are missing (goal, deadline, reserve) I will ask first. The strategy will appear on the Plan vs fact screen.",
+    "planSaved": "Strategy saved — open Plan vs fact",
+    "thinkingPlan": "The advisor is gathering data and building the plan…",
+    "inputPlaceholderPlan": "What is the goal? E.g. stay out of the red until year end",
+    "enterHint": "Enter — send, Shift+Enter — new line"
   },
   "settings": {
     "title": "Settings",
@@ -861,6 +1077,14 @@
       "inn": "TIN (INN)",
       "ogrn": "OGRN"
     },
+    "forecastUpdate": {
+      "title": "Forecast updates",
+      "subtitle": "How to recompute the forecast when new operations and events arrive.",
+      "full": "Full recompute",
+      "fullHint": "The model is retrained on the whole history: most accurate, about 0.6 s even on hundreds of thousands of operations.",
+      "incremental": "Update with new data",
+      "incrementalHint": "The model is not retrained: only new operations are appended, and when events change only the trajectories are recomputed. A full recompute runs every 30 days, after category edits or via \"Recompute from scratch\"."
+    },
     "prefs": {
       "title": "Preferences",
       "subtitle": "Stored in this browser only.",
@@ -878,6 +1102,77 @@
       "uploaded": "Uploaded",
       "confirmed": "Confirmed",
       "preview": "Awaiting confirmation"
+    },
+    "fns": {
+      "title": "Tax service data",
+      "subtitle": "What to check for counterparties and what counts as a risk. All data comes from the open tax registries.",
+      "sources": "Sources",
+      "sourceHint": {
+        "egrul": "Status, liquidation, registration date (egrul.nalog.ru)",
+        "data_nalog": "Debts to the budget (file.nalog.ru, published yearly)",
+        "fedresurs": "Bankruptcy signs"
+      },
+      "debtAsOf": "Debts to the budget, tax service dataset as of {{date}}",
+      "fedresursNoLogin": "Bankruptcy signs. Unavailable now: the bankruptcy registry operator login is not set on the server",
+      "risk": "What counts as a risk",
+      "riskName": {
+        "bankruptcy": "Bankruptcy",
+        "liquidation": "Liquidation",
+        "tax_debt": "Tax debt",
+        "unreliable": "Unreliable registry data",
+        "disqualified": "Disqualified director",
+        "mass_address": "Mass registration address",
+        "not_in_registry": "Not in the business registry"
+      },
+      "notInRegistryHint": "Happens with a typo in the statement TIN, so it is off by default",
+      "largeDebt": "Large debt from, ₽",
+      "largeDebtHint": "A debt from this amount raises the risk more",
+      "show": "Whom to check",
+      "showStatement": "Counterparties from the statement",
+      "showExpected": "Counterparties from 1C and expected payments",
+      "top": "How many largest counterparties to check (1–50)",
+      "use": "How to use",
+      "useInForecast": "Use the risk in the forecast",
+      "useInForecastHint": "Receipts from risky customers are shifted later and treated as less likely",
+      "checkAfterSync": "Check after syncing with 1C",
+      "checkAfterSyncHint": "New counterparties from invoices are checked right away",
+      "reset": "Restore defaults",
+      "saved": "Saved, counterparties rechecked"
+    },
+    "advisor": {
+      "title": "AI advisor",
+      "subtitle": "What the advisor (Hermes) may do in the company. Owners and administrators grant permissions.",
+      "hermesOn": "Hermes answering",
+      "hermesDown": "Hermes unavailable",
+      "gateway": "Cloud model",
+      "enabled": "Advisor enabled",
+      "enabledHint": "When off, the advisor does not answer; the chat answers from forecast rules.",
+      "permissions": "Advisor permissions",
+      "perm": {
+        "read_forecast": "View the forecast and gap risk",
+        "read_operations": "View transactions and plan vs fact",
+        "read_counterparties": "View counterparties and tax registry flags",
+        "run_scenarios": "Run what-if scenarios",
+        "propose_payments": "Propose payments",
+        "add_payments": "Add payments to the plan directly",
+        "recalc_forecast": "Recalculate the forecast",
+        "make_plans": "Build strategies"
+      },
+      "permHint": {
+        "read_forecast": "Balance, dates and size of possible gaps, upcoming payments",
+        "read_operations": "Statement by category, missed and deviating payments",
+        "read_counterparties": "Largest clients and suppliers, data exported from the tax registry",
+        "run_scenarios": "Late payments, revenue drop, cost growth — nothing saved",
+        "propose_payments": "A payment card: the user adds it",
+        "make_plans": "Saves a plan for the Plan vs fact screen; does not change company data."
+      },
+      "writeHint": "Writes company data. Works only for members who can edit; every action is shown in the chat and the audit log.",
+      "showPrompts": "“What to write” prompts",
+      "showPromptsHint": "Under the chat input: questions from company data and next questions from the advisor.",
+      "reset": "Defaults",
+      "saved": "Advisor settings saved",
+      "hermesStarted": "Hermes running",
+      "hermesFailed": "Hermes: last answer failed"
     }
   },
   "import": {
@@ -889,7 +1184,7 @@
     "fileAria": "Statement file",
     "choose": "Choose a statement file",
     "uploading": "Uploading and parsing the file…",
-    "formats": "CSV, XLSX, 1C statement · up to 25 MB",
+    "formats": "CSV, XLSX, 1C statement · up to 25 MB; the dataset file all_operations.csv — any size",
     "doneTitle": "Import finished",
     "doneText_one": "{{count}} transaction added. The forecast was recalculated.",
     "doneText_other": "{{count}} transactions added. The forecast was recalculated.",
@@ -911,7 +1206,14 @@
     "sample": "First rows of the file",
     "confirm": "Confirm and build the forecast",
     "processing": "Processing…",
-    "another": "Another file"
+    "another": "Another file",
+    "datasetTitle": "Dataset file {{file}}: {{count}} companies",
+    "datasetText": "The file holds several companies. Pick one — only its statement is uploaded, then check and confirm as usual. Select companies.csv too to see names.",
+    "datasetCompany": "Company",
+    "datasetRows": "{{count}} operations",
+    "datasetLoad": "Upload this company",
+    "datasetReading": "Reading the dataset…",
+    "datasetNoOps": "Choose the operations file (all_operations.csv or a statement); companies.csv only together with it"
   },
   "account": {
     "title": "Sign-in methods",
@@ -977,12 +1279,15 @@
     "week": "Weekly summary and plan",
     "month": "Monthly summary and plan",
     "gap": "Cash-gap alert",
+    "missed": "Missed payments",
     "day": "Day of week",
     "time": "Time",
     "monthDay": "Day of month",
     "gapDays": "Warn this many days ahead",
     "gapThreshold": "Probability threshold",
     "gapHint": "Reminders also arrive 3 days and 1 day before while the risk remains.",
+    "missedMin": "Report payments of at least, ₽",
+    "missedHint": "A client payment did not arrive or a planned debit did not go through 5 days after the expected date. One message per payment; checked every 3 hours from 8 to 21.",
     "save": "Save schedule",
     "saved": "Schedule saved",
     "days": [
@@ -1057,7 +1362,8 @@
       "risk": "Risk report",
       "week": "Week and plan",
       "month": "Month and plan",
-      "gap": "Gap alert"
+      "gap": "Gap alert",
+      "missed": "Missed payments"
     },
     "roles": {
       "viewer": "Reads",
@@ -1255,6 +1561,11 @@
     "weeksLeft_one": "{{count}} week of data left",
     "weeksLeft_other": "{{count}} weeks of data left",
     "advance": "A week has passed",
+    "back": "Back one week",
+    "rewinding": "Rolling back…",
+    "atStart": "Start of the demo",
+    "undone_one": "Rolled back {{count}} operation for {{from}} – {{to}}. The forecast was recomputed.",
+    "undone_other": "Rolled back {{count}} operations for {{from}} – {{to}}. The forecast was recomputed.",
     "advancing": "Feeding operations…",
     "finished": "Demo data is over",
     "unavailable": "The demo feed is unavailable right now.",
@@ -1394,7 +1705,7 @@
       "lockedTitle": "Email not confirmed",
       "lockedText": "Follow the link from the email sent after registration. Mailings are off until the email is confirmed.",
       "alerts": "Cash gap alerts",
-      "alertsHint": "A warning 7, 3 and 1 day before a possible gap, and an email when the risk goes down.",
+      "alertsHint": "A warning 7, 3 and 1 day before a possible gap, an email when the risk goes down, and missed plan-fact payments.",
       "reports": "Reports",
       "reportsHint": "Risk report, weekly and monthly results with a chart; the monthly one comes with an Excel file.",
       "schedule": "When reports arrive and the alert probability threshold are set by the owner or an administrator in \"Notification schedule\".",
@@ -1406,5 +1717,20 @@
     "checking": "Checking the link…",
     "toApp": "Go to the app",
     "backToLogin": "Back to sign in"
+  },
+  "datasetEval": {
+    "title": "Control dataset evaluation",
+    "subtitle": "Every company of all_operations.csv: rolling-origin backtest, balance and gap metrics",
+    "choose": "Choose all_operations.csv",
+    "running": "{{done}} of {{total}} done",
+    "hint": "Choose the dataset file (optionally with companies.csv). For every company the model sees only the past at each check date, forecasts 30 days and is compared with the actual balance. Nothing is saved to the company.",
+    "notDataset": "Not a dataset file: a company_id column with several companies is required",
+    "summary": "Companies: {{companies}}, evaluated (5+ months of history): {{evaluated}}, check points: {{origins}}.",
+    "brier": "Brier (probability)",
+    "matrix": "Confusion matrix: gap within 30 days, alarm at P ≥ 50%",
+    "calibration": "Mean predicted probability {{p}} vs actual gap rate {{rate}}.",
+    "balance": "Balance forecast error (P50 vs actual), mean over companies",
+    "nmae": "NMAE — MAE as % of the company median weekly turnover.",
+    "csv": "Download per-company metrics (CSV)"
   }
 }

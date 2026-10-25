@@ -24,7 +24,7 @@
 | `read` | все GET и вычисляющие POST (создание прогноза и сценария, backtest, вопрос консультанту) | да | да | да | да |
 | `edit` | любые изменения данных компании: импорт и подтверждение, ожидаемые платежи, смена категории и подкатегории, налоговый календарь, sync интеграций, применение предложений консультанта, `demo/advance-week`, цели недели | да | да | да | нет |
 | `admin` | сотрудники (editor/viewer), приглашения, название и реквизиты компании, настройки Telegram, отделы и политики, журнал действий | да | да | нет | нет |
-| `manage` | назначение, понижение и удаление администраторов, передача владения, способы входа директора (почта, ЭЦП), токены других сотрудников | да | нет | нет | нет |
+| `manage` | назначение, понижение и удаление администраторов, передача владения, способы входа директора (почта, ЭЦП), токены других сотрудников, подключение интеграций компании (адрес и пароль 1С) | да | нет | нет | нет |
 
 Нарушение: `403 forbidden` (`{"error":{"code":"forbidden","message":"Недостаточно прав для этого действия"}}`). Проверка выполняется до разбора тела и до обращения к данным. Чужая компания в пути остаётся `404 not_found` (проверяется раньше прав). Роль читается при **каждом** запросе, поэтому смена роли, удаление сотрудника и блокировка действуют сразу.
 
@@ -105,15 +105,36 @@
 | `POST /api/v1/companies/{cid}/expected-events/tax-calendar` | edit | |
 | `POST /api/v1/companies/{cid}/integrations/sync` | edit | |
 | `POST /api/v1/companies/{cid}/integrations/fns/sync` | edit | налоговые события на год из ФНС (docs/fns.md) |
+| `GET /api/v1/companies/{cid}/integrations` | read | статусы подключений; адрес и логин 1С в ответе только у manage, пароля нет ни у кого |
+| `PUT\|DELETE /api/v1/companies/{cid}/integrations/onec` | manage | подключить (с проверкой) и отключить 1С компании (docs/integrator.md) |
+| `POST /api/v1/companies/{cid}/integrations/onec/test` | manage | проверка подключения (не больше 10 в минуту на компанию) |
 | `GET /api/v1/companies/{cid}/fns/ens`, `/fns/counterparties` | read | ЕНС и проверка контрагентов |
 | `POST /api/v1/companies/{cid}/fns/ens/import` | edit | загрузка справки о состоянии расчётов (XML КНД 1160080 или CSV) |
+| `GET /api/v1/companies/{cid}/fns/settings` | read | настройки сведений ФНС: источники, признаки риска, учёт в прогнозе |
+| `PUT /api/v1/companies/{cid}/fns/settings` | admin | изменить настройки сведений ФНС |
 | `POST /api/v1/companies/{cid}/advisor/ask` | read | вычисляющий POST |
 | `POST /api/v1/companies/{cid}/advisor/suggestions/apply` | edit | |
+| `GET /api/v1/companies/{cid}/advisor/settings` | read | что разрешено ИИ-консультанту; `effective` — права для текущего пользователя |
+| `PUT /api/v1/companies/{cid}/advisor/settings` | admin | выдать или забрать права консультанта; право записи (`add_payments`, `recalc_forecast`) действует только для ролей с edit |
+| `GET /api/v1/companies/{cid}/advisor/prompts` | read | подсказки «что написать» под полем чата (`mode=plan` — для режима «План») |
+| `GET /api/v1/companies/{cid}/advisor/models` | read | модели подписки и уровни размышления |
+| `GET /api/v1/companies/{cid}/advisor/chats` | read | свои чаты с консультантом |
+| `POST /api/v1/companies/{cid}/advisor/chats` | read | новый чат: режим, модель, уровень размышления |
+| `GET /api/v1/companies/{cid}/advisor/chats/{id}` | read | свой чат с сообщениями; чужой — 404 |
+| `PATCH /api/v1/companies/{cid}/advisor/chats/{id}` | read | переименовать свой чат, сменить модель |
+| `DELETE /api/v1/companies/{cid}/advisor/chats/{id}` | read | удалить свой чат |
+| `POST /api/v1/companies/{cid}/advisor/chats/{id}/messages` | read | вопрос в чате с его контекстом; права консультанта — как у `ask` |
+| `GET /api/v1/companies/{cid}/advisor/plans/active` | read | активная стратегия консультанта для «Плана и факта» |
+| `DELETE /api/v1/companies/{cid}/advisor/plans/{id}` | edit | снять стратегию |
 | `GET /api/v1/companies/{cid}/demo/status` | read | |
 | `POST /api/v1/companies/{cid}/demo/advance-week` | edit | плюс условия демо |
+| `POST /api/v1/companies/{cid}/demo/rewind-week` | edit | откат последней недели демо; плюс условия демо |
 | `GET /api/v1/gov/key-rate` | read | |
 | `POST /api/v1/companies/{cid}/forecasts`, `/scenarios` | read | вычисляющие POST |
 | `GET /api/v1/companies/{cid}/forecasts/latest`, `/forecasts/{rid}`, `/backtest`, `/plan-fact` | read | |
+| `POST /api/v1/companies/{cid}/evaluate` | read | бэктест одной компании контрольного датасета без сохранения (оценка качества на всём датасете собирается в интерфейсе) |
+| `GET /api/v1/companies/{cid}/forecast-settings` | read | режим обновления прогноза |
+| `PUT /api/v1/companies/{cid}/forecast-settings` | admin | полный пересчёт или «Обновлять по новым данным» |
 | `GET /api/ext/v1/company`, `/forecast`, `/transactions`, `/expected-events`, `/plan-fact`; `POST /api/ext/v1/forecast` | токен, read | права по роли владельца |
 | `POST /api/ext/v1/expected-events` | токен, edit (scope `write`) | |
 | `/api/admin/v1/*` | оператор (`op_session`) | не пересекается с тенантскими маршрутами |

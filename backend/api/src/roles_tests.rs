@@ -72,6 +72,22 @@ pub(crate) struct Fake {
     pub(crate) top: Option<Value>,
     /// тела PUT counterparty-risk
     pub(crate) risk_puts: Vec<Value>,
+    /// настройки компаний: "cid/key" -> значение
+    pub(crate) settings: HashMap<String, Value>,
+    /// тела запросов advisor ask (что api передал консультанту)
+    pub(crate) asks: Vec<Value>,
+    /// подключение 1С в заглушке ledger (запись integration_connections без пароля) и флаг «нет INTEGRATIONS_KEY»
+    pub(crate) integ: Option<Value>,
+    pub(crate) integ_key_missing: bool,
+    /// тела PUT integrations/onec и PUT integrations/onec/status
+    pub(crate) integ_puts: Vec<Value>,
+    pub(crate) integ_status: Vec<Value>,
+    /// заглушка integrator: тела проверок 1С, ответ проверки, принудительная ошибка, query запросов obligations и их ответ
+    pub(crate) onec_tests: Vec<Value>,
+    pub(crate) onec_result: Option<Value>,
+    pub(crate) onec_fail: Option<(StatusCode, String)>,
+    pub(crate) obl_queries: Vec<String>,
+    pub(crate) obligations: Option<Value>,
 }
 
 pub(crate) type Shared = Arc<Mutex<Fake>>;
@@ -506,6 +522,92 @@ async fn l_risk_put(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
     (StatusCode::OK, Json(json!({"upserted": n, "changed": n})))
 }
 
+async fn l_settings_get(State(f): State<Shared>, Path((cid, key)): Path<(String, String)>) -> Resp {
+    let g = f.lock().unwrap();
+    let v = g.settings.get(&format!("{cid}/{key}")).cloned().unwrap_or(Value::Null);
+    (StatusCode::OK, Json(json!({"key": key, "value": v, "updated_at": null})))
+}
+
+async fn l_settings_put(State(f): State<Shared>, Path((cid, key)): Path<(String, String)>, Json(b): Json<Value>) -> Resp {
+    f.lock().unwrap().settings.insert(format!("{cid}/{key}"), b.clone());
+    (StatusCode::OK, Json(json!({"key": key, "value": b, "updated_at": "2026-10-25T10:00:00Z", "changed": true})))
+}
+
+async fn adv_chat_send(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    f.lock().unwrap().asks.push(b);
+    (StatusCode::OK, Json(json!({"user_message": {"role": "user"}, "chat": {"id": "c"}, "message": {"role": "assistant", "content": "ok", "meta": {
+        "provider": "hermes",
+        "suggestions": [{"id": "s1", "type": "add_expected_payment", "params": {"direction": "out", "amount_kop": "100", "date": "2000-01-01", "title": "t"}}],
+        "actions": [{"type": "add_expected_payment", "id": "ev1", "title": "t"}, {"type": "drop_table", "id": "x"}]}}})))
+}
+
+async fn adv_ask(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    f.lock().unwrap().asks.push(b);
+    (StatusCode::OK, Json(json!({"answer": "ok", "provider": "hermes", "suggestions": [], "followups": ["Что дальше?"],
+        "actions": [{"type": "add_expected_payment", "id": "ev1", "title": "t"}, {"type": "drop_table", "id": "x"}]})))
+}
+
+async fn l_integ_list(State(f): State<Shared>) -> Resp {
+    let g = f.lock().unwrap();
+    (StatusCode::OK, Json(json!({"key_configured": !g.integ_key_missing, "items": g.integ.clone().into_iter().collect::<Vec<_>>()})))
+}
+
+async fn l_integ_put(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    if g.integ_key_missing && b["password"].is_string() {
+        return lerr(StatusCode::SERVICE_UNAVAILABLE, "integrations_key_missing");
+    }
+    g.integ_puts.push(b.clone());
+    let row = json!({"kind": "onec", "url": b["url"], "username": b["username"], "password_set": true, "status": "unchecked",
+        "last_check_at": null, "last_error": null, "last_sync_at": null});
+    g.integ = Some(row.clone());
+    (StatusCode::OK, Json(row))
+}
+
+async fn l_integ_status(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    g.integ_status.push(b.clone());
+    let Some(row) = g.integ.as_mut() else { return lerr(StatusCode::NOT_FOUND, "not_found") };
+    let ok = b["ok"].as_bool().unwrap_or(false);
+    row["status"] = json!(if ok { "ok" } else { "error" });
+    row["last_error"] = if ok { Value::Null } else { b["error"].clone() };
+    if b["event"] == "check" {
+        row["last_check_at"] = json!("2026-10-25T10:00:00Z");
+    } else if ok {
+        row["last_sync_at"] = json!("2026-10-25T10:05:00Z");
+    }
+    (StatusCode::OK, Json(row.clone()))
+}
+
+async fn l_integ_delete(State(f): State<Shared>) -> StatusCode {
+    f.lock().unwrap().integ = None;
+    StatusCode::NO_CONTENT
+}
+
+async fn i_check_url(Json(b): Json<Value>) -> Resp {
+    let url = b["url"].as_str().unwrap_or_default();
+    if url.contains("10.0.0.1") || url.contains("localhost") {
+        return lerr(StatusCode::UNPROCESSABLE_ENTITY, "url_forbidden");
+    }
+    (StatusCode::OK, Json(json!({"ok": true, "url": url.trim_end_matches('/')})))
+}
+
+async fn i_onec_test(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    g.onec_tests.push(b);
+    if let Some((s, code)) = g.onec_fail.clone() {
+        return (s, Json(json!({"error": {"code": code, "message": "m"}})));
+    }
+    let r = g.onec_result.clone().unwrap_or_else(|| json!({"ok": true, "code": "ok", "message": "Подключение работает", "documents": 3, "more": false, "source": "live"}));
+    (StatusCode::OK, Json(r))
+}
+
+async fn i_obligations(State(f): State<Shared>, uri: axum::http::Uri) -> Resp {
+    let mut g = f.lock().unwrap();
+    g.obl_queries.push(uri.query().unwrap_or_default().to_string());
+    (StatusCode::OK, Json(g.obligations.clone().unwrap_or_else(|| json!({"items": [], "ok": true}))))
+}
+
 async fn fallback() -> Json<Value> {
     Json(json!({"items": [], "ok": true}))
 }
@@ -537,6 +639,15 @@ fn fake_router(f: Shared) -> Router {
         .route("/internal/v1/companies/{cid}/expected-events/bulk", post(l_bulk))
         .route("/internal/v1/companies/{cid}/counterparties/top", get(l_top))
         .route("/internal/v1/companies/{cid}/counterparty-risk", axum::routing::put(l_risk_put))
+        .route("/internal/v1/companies/{cid}/settings/{key}", get(l_settings_get).put(l_settings_put))
+        .route("/internal/v1/companies/{cid}/integrations", get(l_integ_list))
+        .route("/internal/v1/companies/{cid}/integrations/onec", axum::routing::put(l_integ_put).delete(l_integ_delete))
+        .route("/internal/v1/companies/{cid}/integrations/onec/status", axum::routing::put(l_integ_status))
+        .route("/internal/v1/onec/check-url", post(i_check_url))
+        .route("/internal/v1/onec/test", post(i_onec_test))
+        .route("/internal/v1/obligations", get(i_obligations))
+        .route("/internal/v1/companies/{cid}/ask", post(adv_ask))
+        .route("/internal/v1/companies/{cid}/advisor/chats/{chat}/messages", post(adv_chat_send))
         .route("/internal/v1/companies/{cid}/members", get(l_members).post(l_member_add))
         .route("/internal/v1/companies/{cid}/members/join", post(l_member_join))
         .route("/internal/v1/companies/{cid}/members/{uid}", patch(l_member_patch).delete(l_member_delete))
@@ -721,6 +832,8 @@ impl Need {
 }
 
 /// Все публичные тенантские маршруты (без входа, me/logout/set-credentials, внешнего API): метод, путь, нужное право.
+const CHAT: &str = "0123456789abcdef0123456789abcdef";
+
 fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
     let co = format!("/api/v1/companies/{c}");
     use Need::*;
@@ -738,19 +851,41 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
         ("POST", format!("{co}/expected-events/tax-calendar"), Edit),
         ("POST", format!("{co}/integrations/sync"), Edit),
         ("POST", format!("{co}/integrations/fns/sync"), Edit),
+        ("GET", format!("{co}/integrations"), Read),
+        ("PUT", format!("{co}/integrations/onec"), Manage),
+        ("POST", format!("{co}/integrations/onec/test"), Manage),
+        ("DELETE", format!("{co}/integrations/onec"), Manage),
         ("GET", format!("{co}/fns/ens"), Read),
         ("POST", format!("{co}/fns/ens/import"), Edit),
         ("GET", format!("{co}/fns/counterparties"), Read),
+        ("GET", format!("{co}/fns/settings"), Read),
+        ("PUT", format!("{co}/fns/settings"), Admin),
         ("POST", format!("{co}/advisor/ask"), Read),
         ("POST", format!("{co}/advisor/suggestions/apply"), Edit),
+        ("GET", format!("{co}/advisor/settings"), Read),
+        ("PUT", format!("{co}/advisor/settings"), Admin),
+        ("GET", format!("{co}/advisor/prompts"), Read),
+        ("GET", format!("{co}/advisor/models"), Read),
+        ("GET", format!("{co}/advisor/chats"), Read),
+        ("POST", format!("{co}/advisor/chats"), Read),
+        ("GET", format!("{co}/advisor/chats/{CHAT}"), Read),
+        ("PATCH", format!("{co}/advisor/chats/{CHAT}"), Read),
+        ("DELETE", format!("{co}/advisor/chats/{CHAT}"), Read),
+        ("POST", format!("{co}/advisor/chats/{CHAT}/messages"), Read),
+        ("GET", format!("{co}/advisor/plans/active"), Read),
+        ("DELETE", format!("{co}/advisor/plans/{CHAT}"), Edit),
         ("GET", format!("{co}/demo/status"), Read),
         ("POST", format!("{co}/demo/advance-week"), Edit),
+        ("POST", format!("{co}/demo/rewind-week"), Edit),
         ("GET", "/api/v1/gov/key-rate".into(), Read),
         ("POST", format!("{co}/forecasts"), Read),
         ("GET", format!("{co}/forecasts/latest"), Read),
         ("GET", format!("{co}/forecasts/r1"), Read),
         ("GET", format!("{co}/backtest"), Read),
+        ("POST", format!("{co}/evaluate"), Read),
         ("POST", format!("{co}/scenarios"), Read),
+        ("GET", format!("{co}/forecast-settings"), Read),
+        ("PUT", format!("{co}/forecast-settings"), Admin),
         ("GET", format!("{co}/plan-fact"), Read),
         ("GET", "/api/v1/account/methods".into(), Read),
         ("POST", "/api/v1/account/email".into(), Manage),
@@ -789,7 +924,7 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
 fn sample_body(method: &str, uri: &str) -> Option<Value> {
     match (method, uri) {
         ("GET", _) | ("DELETE", _) => None,
-        (_, u) if u.ends_with("/advisor/ask") => Some(json!({"question": "q"})),
+        (_, u) if u.ends_with("/advisor/ask") || u.ends_with("/messages") => Some(json!({"question": "q"})),
         (_, u) if u.ends_with("/suggestions/apply") => Some(json!({"type": "add_expected_payment", "params": {}})),
         (_, u) if u.ends_with("/account/email") => Some(json!({"email": "a@b.co", "password": "password-1", "password_confirm": "password-1"})),
         (_, u) if u.ends_with("/account/signatures") => Some(json!({"challenge": "c", "signature": "s"})),
@@ -814,7 +949,7 @@ async fn every_route_enforces_its_permission_for_each_role() {
     let (cid, toks) = t.team4();
     let roles = ["director", "admin", "editor", "viewer"];
     let table = route_table(&cid);
-    assert_eq!(table.len(), 58, "таблица маршрутов должна совпадать с docs/roles.md");
+    assert_eq!(table.len(), 80, "таблица маршрутов должна совпадать с docs/roles.md");
     for (method, uri, need) in &table {
         for (i, tok) in toks.iter().enumerate() {
             let before = t.calls().len();
@@ -1561,4 +1696,56 @@ async fn mailings_need_verified_email() {
     }
     // выключить рассылки можно и без подтверждения
     assert_eq!(t.call("PUT", "/api/v1/account/notifications", &e, Some(json!({"alerts": false}))).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn advisor_permissions_are_set_by_admin_and_cut_by_role() {
+    let t = T::new().await;
+    let (cid, [d, a, e, v]) = t.team4();
+    let uri = format!("/api/v1/companies/{cid}/advisor/settings");
+    let (s, j) = t.call("GET", &uri, &v, None).await;
+    assert_eq!((s, j["settings"]["enabled"].as_bool(), j["catalog"].as_array().map(Vec::len)), (StatusCode::OK, Some(true), Some(8)));
+    let body = json!({"permissions": ["add_payments", "read_forecast", "recalc_forecast"], "show_prompts": true, "enabled": true});
+    assert_eq!(t.call("PUT", &uri, &e, Some(body.clone())).await.0, StatusCode::FORBIDDEN);
+    let (s, j) = t.call("PUT", &uri, &a, Some(body)).await;
+    assert_eq!((s, j["settings"]["permissions"].clone()), (StatusCode::OK, json!(["read_forecast", "add_payments", "recalc_forecast"])), "{j}");
+    // editor получает всё выданное, viewer — без права записи
+    let ask = format!("/api/v1/companies/{cid}/advisor/ask");
+    let (s, j) = t.call("POST", &ask, &e, Some(json!({"question": "Добавь платёж"}))).await;
+    assert_eq!((s, j["followups"].clone(), j["actions"].as_array().map(Vec::len)), (StatusCode::OK, json!(["Что дальше?"]), Some(1)), "{j}");
+    t.call("POST", &ask, &v, Some(json!({"question": "q"}))).await;
+    let asks = t.f.lock().unwrap().asks.clone();
+    assert_eq!(asks[0]["permissions"], json!(["read_forecast", "add_payments", "recalc_forecast"]));
+    assert_eq!(asks[1]["permissions"], json!(["read_forecast"]));
+    // неизвестное право, выключенный консультант
+    let (s, j) = t.call("PUT", &uri, &d, Some(json!({"permissions": ["rm_rf"]}))).await;
+    assert_eq!((s, code(&j)), (StatusCode::UNPROCESSABLE_ENTITY, "invalid_permission"));
+    assert_eq!(t.call("PUT", &uri, &d, Some(json!({"enabled": false}))).await.0, StatusCode::OK);
+    let (s, j) = t.call("POST", &ask, &e, Some(json!({"question": "q"}))).await;
+    assert_eq!((s, code(&j)), (StatusCode::FORBIDDEN, "advisor_disabled"));
+    assert_eq!(t.call("GET", &format!("/api/v1/companies/{cid}/advisor/prompts"), &e, None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.f.lock().unwrap().asks.len(), 2);
+}
+
+#[tokio::test]
+async fn chat_message_gets_permissions_by_role_and_clean_meta() {
+    let t = T::new().await;
+    let (cid, [d, _, _, v]) = t.team4();
+    let uri = format!("/api/v1/companies/{cid}/advisor/settings");
+    t.call("PUT", &uri, &d, Some(json!({"permissions": ["read_forecast", "add_payments", "make_plans"]}))).await;
+    let send = format!("/api/v1/companies/{cid}/advisor/chats/{CHAT}/messages");
+    let (s, j) = t.call("POST", &send, &v, Some(json!({"question": "Составь план"}))).await;
+    assert_eq!(s, StatusCode::OK, "{j}");
+    // устаревшее предложение (дата вне диапазона) и неизвестное действие отброшены
+    assert_eq!((j["message"]["meta"]["suggestions"].as_array().map(Vec::len), j["message"]["meta"]["actions"].as_array().map(Vec::len)), (Some(0), Some(1)));
+    let asks = t.f.lock().unwrap().asks.clone();
+    assert_eq!(asks[0]["permissions"], json!(["read_forecast", "make_plans"]), "viewer без права записи");
+    assert_eq!(asks[0]["context"]["company_name"], "Ромашка");
+    let (s, j) = t.call("POST", &format!("/api/v1/companies/{cid}/advisor/chats/not-a-chat/messages"), &v, Some(json!({"question": "q"}))).await;
+    assert_eq!((s, code(&j)), (StatusCode::NOT_FOUND, "not_found"));
+    let (s, j) = t.call("POST", &send, &v, Some(json!({"question": "x".repeat(4001)}))).await;
+    assert_eq!((s, code(&j)), (StatusCode::UNPROCESSABLE_ENTITY, "invalid_question"));
+    t.call("PUT", &uri, &d, Some(json!({"enabled": false}))).await;
+    let (s, j) = t.call("POST", &send, &v, Some(json!({"question": "q"}))).await;
+    assert_eq!((s, code(&j)), (StatusCode::FORBIDDEN, "advisor_disabled"));
 }

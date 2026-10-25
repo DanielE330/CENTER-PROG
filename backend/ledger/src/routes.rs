@@ -39,6 +39,12 @@ fn bump(c: &rusqlite::Connection, cid: &str) -> R<()> {
     Ok(())
 }
 
+/// Новая ревизия, в которой уже учтённые операции изменились (не дописаны): прогноз по дельте здесь невозможен.
+fn bump_reset(c: &rusqlite::Connection, cid: &str) -> R<()> {
+    c.execute("UPDATE companies SET data_revision=data_revision+1, tx_reset_rev=data_revision+1 WHERE id=?", [cid]).map_err(internal)?;
+    Ok(())
+}
+
 // ---------- компании ----------
 #[derive(Deserialize)]
 pub struct EnsureBody {
@@ -191,12 +197,13 @@ pub async fn update_company(State(st): State<AppState>, ctx: Ctx, Path(cid): Pat
 }
 
 // ---------- снимок для расчётных сервисов ----------
-fn load_history(c: &rusqlite::Connection, cid: &str) -> R<Vec<HistoryRow>> {
+/// Операции компании, добавленные после ревизии `since` (0 — все).
+fn load_history(c: &rusqlite::Connection, cid: &str, since: i64) -> R<Vec<HistoryRow>> {
     let mut s = c
-        .prepare("SELECT date, amount_kop, balance_kop, counterparty, inn, purpose, category FROM transactions WHERE company_id=? ORDER BY date, id")
+        .prepare("SELECT date, amount_kop, balance_kop, counterparty, inn, purpose, category FROM transactions WHERE company_id=?1 AND (?2 = 0 OR rev>?2) ORDER BY date, id")
         .map_err(internal)?;
     let v = s
-        .query_map([cid], |r| {
+        .query_map(params![cid, since], |r| {
             Ok(HistoryRow {
                 tx: Tx {
                     date: NaiveDate::parse_from_str(&r.get::<_, String>(0)?, "%Y-%m-%d").unwrap_or_default(),
@@ -235,11 +242,22 @@ fn load_events(c: &rusqlite::Connection, cid: &str) -> R<Vec<Event>> {
     Ok(v)
 }
 
+#[derive(Deserialize)]
+pub struct SnapshotQuery {
+    since_rev: Option<i64>,
+}
+
 /// История, события и ревизия одним согласованным чтением. Суммы — числа (не для публикации в SPA).
-pub async fn snapshot(State(st): State<AppState>, Path(cid): Path<String>) -> R<Json<Snapshot>> {
+/// `since_rev`: только операции, добавленные после этой ревизии (дописывание прогноза без полного пересчёта).
+pub async fn snapshot(State(st): State<AppState>, Path(cid): Path<String>, Query(q): Query<SnapshotQuery>) -> R<Json<Snapshot>> {
     let c = lock(&st);
-    let rev: i64 = c.query_row("SELECT data_revision FROM companies WHERE id=?", [&cid], |r| r.get(0)).optional().map_err(internal)?.ok_or_else(not_found)?;
-    Ok(Json(Snapshot { data_revision: rev, transactions: load_history(&c, &cid)?, events: load_events(&c, &cid)?, counterparty_risks: crate::counterparties::load_risks(&c, &cid, true)? }))
+    let (rev, reset): (i64, i64) = c
+        .query_row("SELECT data_revision, tx_reset_rev FROM companies WHERE id=?", [&cid], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+        .map_err(internal)?
+        .ok_or_else(not_found)?;
+    let since = q.since_rev.unwrap_or(0).max(0);
+    Ok(Json(Snapshot { data_revision: rev, tx_reset_rev: reset, transactions: load_history(&c, &cid, since)?, events: load_events(&c, &cid)?, counterparty_risks: crate::counterparties::load_risks(&c, &cid, true)? }))
 }
 
 // ---------- импорт ----------
@@ -299,6 +317,7 @@ pub async fn upload_import(State(st): State<AppState>, ctx: Ctx, Path(cid): Path
             "too_many_rows" => "Слишком много строк (максимум 200 000)",
             "file_too_large" => "Файл больше 25 МБ",
             "bad_encoding" => "Не удалось определить кодировку файла",
+            "multiple_companies" => "В файле операции нескольких компаний: выберите компанию при загрузке",
             _ => "Не удалось разобрать файл",
         };
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "parse_failed", format!("{msg} ({code})")));
@@ -375,6 +394,26 @@ pub async fn get_import(State(st): State<AppState>, Path((cid, iid)): Path<(Stri
     Ok(Json(json!({"import_id": iid, "status": status, "filename": filename, "summary": serde_json::from_str::<Value>(&summary).unwrap_or(Value::Null)})))
 }
 
+/// Отмена подтверждённого импорта: удаляет его операции и запись импорта, повышает ревизию данных (прогноз пересчитается).
+pub async fn delete_import(State(st): State<AppState>, ctx: Ctx, Path((cid, iid)): Path<(String, String)>) -> R<Json<Value>> {
+    let mut c = lock(&st);
+    let exists: Option<i64> = c
+        .query_row("SELECT 1 FROM imports WHERE id=? AND company_id=?", params![iid, cid], |r| r.get(0))
+        .optional()
+        .map_err(internal)?;
+    if exists.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "not_found", "Не найдено"));
+    }
+    let tx = c.transaction().map_err(internal)?;
+    let removed = tx.execute("DELETE FROM transactions WHERE import_id=? AND company_id=?", params![iid, cid]).map_err(internal)?;
+    tx.execute("DELETE FROM imports WHERE id=? AND company_id=?", params![iid, cid]).map_err(internal)?;
+    tx.execute("UPDATE companies SET data_revision=data_revision+1 WHERE id=?", [&cid]).map_err(internal)?;
+    tx.commit().map_err(internal)?;
+    drop(c);
+    let _ = (&ctx, removed);
+    Ok(Json(json!({"import_id": iid, "removed": removed})))
+}
+
 pub async fn confirm_import(State(st): State<AppState>, ctx: Ctx, Path((cid, iid)): Path<(String, String)>) -> R<Json<Value>> {
     let mut c = lock(&st);
     let row: Option<(String, Option<String>)> = c
@@ -392,8 +431,8 @@ pub async fn confirm_import(State(st): State<AppState>, ctx: Ctx, Path((cid, iid
     {
         let mut ins = tx
             .prepare(
-                "INSERT OR IGNORE INTO transactions(company_id, import_id, row_no, date, amount_kop, balance_kop, counterparty, inn, purpose, category, category_conf, dedup_key, subcategory, grp, method)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO transactions(company_id, import_id, row_no, date, amount_kop, balance_kop, counterparty, inn, purpose, category, category_conf, dedup_key, subcategory, grp, method, rev)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT data_revision+1 FROM companies WHERE id=?1))",
             )
             .map_err(internal)?;
         for (t, k) in txs.iter().zip(keys.iter()) {
@@ -598,7 +637,7 @@ pub async fn set_category(State(st): State<AppState>, ctx: Ctx, Path((cid, id)):
             same = ids.len();
         }
         tx.commit().map_err(internal)?;
-        bump(&c, &cid)?;
+        bump_reset(&c, &cid)?;
         drop(c);
         audit(&st, &ctx, &cid, "transaction.subcategory", &id.to_string(), "ok");
         return Ok(Json(json!({"id": id, "category": category, "subcategory": sub, "group": group, "applied_to_similar": same})));
@@ -612,7 +651,7 @@ pub async fn set_category(State(st): State<AppState>, ctx: Ctx, Path((cid, id)):
     if n == 0 {
         return Err(not_found());
     }
-    bump(&c, &cid)?;
+    bump_reset(&c, &cid)?;
     Ok(Json(json!({"id": id, "category": category})))
 }
 
@@ -699,6 +738,14 @@ pub struct BulkItem {
     counterparty: String,
     source: String,
     confidence: f64,
+    /// ИНН контрагента (10 или 12 цифр); иначе не сохраняется
+    #[serde(default)]
+    inn: String,
+}
+
+fn event_inn(s: &str) -> &str {
+    let s = s.trim();
+    if (s.len() == 10 || s.len() == 12) && s.bytes().all(|b| b.is_ascii_digit()) { s } else { "" }
 }
 
 #[derive(Deserialize)]
@@ -718,18 +765,30 @@ pub async fn bulk_events(State(st): State<AppState>, _ctx: Ctx, Path(cid): Path<
     {
         let mut ins = tx
             .prepare(
-                "INSERT OR IGNORE INTO expected_events(id, company_id, date, amount_kop, title, counterparty, source, confidence, created_at, external_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO expected_events(id, company_id, date, amount_kop, title, counterparty, source, confidence, created_at, external_id, inn) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             )
             .map_err(internal)?;
+        // событие, созданное до появления ИНН, при повторной синхронизации получает ИНН (не считается созданным)
+        let mut fill = tx
+            .prepare("UPDATE expected_events SET inn=? WHERE company_id=? AND external_id=? AND inn='' AND ?<>''")
+            .map_err(internal)?;
         for e in &b.events {
-            if e.amount_kop == 0 || !["manual", "invoice", "contract", "tax"].contains(&e.source.as_str()) || !(0.0..=1.0).contains(&e.confidence) {
+            if e.amount_kop == 0 || !["manual", "invoice", "contract", "tax", "onec"].contains(&e.source.as_str()) || !(0.0..=1.0).contains(&e.confidence) {
                 return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_event", "Некорректное событие"));
             }
             let id = uuid::Uuid::new_v4().to_string();
+            let inn = event_inn(&e.inn);
             let n = ins
-                .execute(params![id, cid, e.date.to_string(), e.amount_kop, e.title, e.counterparty, e.source, e.confidence, now(), e.external_id])
+                .execute(params![id, cid, e.date.to_string(), e.amount_kop, e.title, e.counterparty, e.source, e.confidence, now(), e.external_id, inn])
                 .map_err(internal)?;
-            if n == 1 { ids.push(id) } else { skipped += 1 }
+            if n == 1 {
+                ids.push(id)
+            } else {
+                skipped += 1;
+                if let Some(ext) = &e.external_id {
+                    fill.execute(params![inn, cid, ext, inn]).map_err(internal)?;
+                }
+            }
         }
     }
     if !ids.is_empty() {

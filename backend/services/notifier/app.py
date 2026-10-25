@@ -134,6 +134,8 @@ class PrefsBody(BaseModel):
     gap_days: int | None = Field(None, ge=1, le=30)
     gap_threshold: float | None = Field(None, ge=0.05, le=0.95)
     ai_consent: bool | None = None
+    missed_enabled: bool | None = None
+    missed_min_kop: int | None = Field(None, ge=0, le=10**13)
 
 
 @app.put(CO + "/prefs")
@@ -190,6 +192,8 @@ async def send_now(cid: str, kind: str, request: Request):
             await j.send_month(cid)
         elif kind == "gap":
             return {"result": await j.check_gap(cid)}
+        elif kind == "missed":
+            return {"result": await j.check_missed(cid)}
         else:
             raise HTTPException(404, {"code": "unknown_kind", "message": "Неизвестный тип отчёта"})
     except UpstreamError as e:

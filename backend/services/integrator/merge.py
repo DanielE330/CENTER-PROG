@@ -10,6 +10,8 @@ def to_kop(amount) -> int:
 
 def confidence(rec: dict, overdue: bool) -> float:
     st = rec.get("doc_status", "")
+    if rec.get("kind") == "payment_order":  # платёжка уже создана в 1С: банк её исполнит
+        return 0.97
     if rec["source"] == "onec":
         c = 0.9 if rec.get("posted", True) else 0.5
     elif st == "Подписан":
@@ -50,10 +52,11 @@ def merge(records: list[dict], as_of: str) -> tuple[list[dict], dict[str, dict]]
             s["duplicates"] += 1
             first["confidence"] = min(1.0, round(first["confidence"] + 0.03, 2))  # подтверждён двумя источниками
             continue
-        overdue = r["date"] < as_of
+        when = max(r["date"], as_of) if r["kind"] == "payment_order" else r["date"]  # неисполненная — уйдёт сегодня
+        overdue = when < as_of
         item = {
             "external_id": r["external_id"], "source": r["source"], "kind": r["kind"], "direction": r["direction"],
-            "date": r["date"], "amount_kop": str(kop), "title": r["title"], "counterparty": r["counterparty"],
+            "date": when, "amount_kop": str(kop), "title": r["title"], "counterparty": r["counterparty"],
             "inn": r["inn"], "number": r["number"], "confidence": confidence(r, overdue),
             "status": r.get("doc_status", ""), "overdue": overdue, "duplicate_of": None,
         }

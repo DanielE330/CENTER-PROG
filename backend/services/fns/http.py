@@ -86,7 +86,9 @@ class PoliteHttp:
         try:
             with self._client() as c:
                 req = c.build_request(method, url, data=data, json=json_body, params=params, headers=headers)
-                with c.send(req, stream=True) as r:
+                # httpx.Response не контекстный менеджер: поток закрываем сами
+                r = c.send(req, stream=True)
+                try:
                     if r.is_redirect and _hops < 3 and r.headers.get("location"):
                         nxt = urljoin(url, r.headers["location"])
                         return self.request("GET", nxt, headers=headers, max_bytes=max_bytes, _hops=_hops + 1)
@@ -95,7 +97,11 @@ class PoliteHttp:
                         body += chunk
                         if len(body) > max_bytes:
                             raise SourceUnavailable("too_large", f"{host}: ответ больше {max_bytes} байт")
-                    out = httpx.Response(r.status_code, headers=r.headers, content=bytes(body), request=req)
+                    # тело уже раскодировано (gzip и т. п.): заголовки сжатия не переносим, иначе httpx распакует ещё раз
+                    hdrs = [(k, v) for k, v in r.headers.multi_items() if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")]
+                    out = httpx.Response(r.status_code, headers=hdrs, content=bytes(body), request=req)
+                finally:
+                    r.close()
         except httpx.TimeoutException:
             raise SourceUnavailable("timeout", f"{host}: таймаут") from None
         except httpx.HTTPError as e:

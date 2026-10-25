@@ -119,38 +119,22 @@ services:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8012/live', timeout=2)"]
 
-  fns-sim:
-    <<: *hardening
-    build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: fns_sim}
-    # имитатор источников ФНС (ЕНС, реестры контрагентов): данные из датасета, детерминированы по ИНН; только внутренняя сеть
-    environment:
-      MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
-      MOCK_DATASET_DIR: /dataset
-      FNS_SIM_TOKEN: ${FNS_SIM_TOKEN:-fns-sim-demo}
-    networks: [internal]
-    volumes: ["${DATASET_DIR:-../data/demo}:/dataset:ro"]
-    healthcheck:
-      <<: *pyhealth
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8016/live', timeout=2)"]
-
   fns:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: fns}
-    # сведения ФНС. FNS_MODE=sim (по умолчанию) работает без сети через fns-sim. Режим live (реальные открытые источники)
-    # выключен: включается FNS_MODE=live и файлом docker-compose.fns-live.yml, который даёт сервису выход наружу (docs/fns.md)
+    # сведения ФНС из открытых источников (ЕГРЮЛ/ЕГРИП, открытые данные ФНС, ЕФРСБ): сервису нужен выход наружу (edge).
+    # Ходит вежливо: честный User-Agent, robots.txt, не чаще FNS_MIN_INTERVAL секунд на хост, капчи не обходит (docs/fns.md)
     environment:
-      FNS_MODE: ${FNS_MODE:-sim}
       FNS_DB: /data/fns.db
-      FNS_SIM_URL: http://fns-sim:8016
-      FNS_SIM_TOKEN: ${FNS_SIM_TOKEN:-fns-sim-demo}
       GOV_URL: http://gov:8003
       FNS_CONTACT: ${FNS_CONTACT:-https://github.com/DanielE330/CI-hack}
       FNS_MIN_INTERVAL: ${FNS_MIN_INTERVAL:-1.0}
       FNS_CACHE_TTL: ${FNS_CACHE_TTL:-86400}
+      # индекс задолженности (открытые данные ФНС) строится при старте, а не при первой проверке
+      FNS_DEBT_PRELOAD: ${FNS_DEBT_PRELOAD:-1}
     volumes: [fns-data:/data]
-    networks: [internal]
+    networks: [internal, edge]
     depends_on:
-      fns-sim: {condition: service_healthy}
       gov: {condition: service_healthy}
     healthcheck:
       <<: *pyhealth
@@ -159,15 +143,23 @@ services:
   integrator:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: integrator}
-    # имитаторы 1С/ЭДО/банка и integrator живут только во внутренней сети
+    # по умолчанию ходит в имитаторы 1С/ЭДО/банка; с ONEC_URL из infra/.env — в настоящую 1С (например, 1С:Фреш),
+    # поэтому у integrator есть выход наружу (edge)
     environment:
-      ONEC_URL: http://onec:8004
+      ONEC_URL: ${ONEC_URL:-http://onec:8004}
+      ONEC_USER: ${ONEC_USER:-demo}
+      ONEC_PASSWORD: ${ONEC_PASSWORD:-demo}
       EDO_URL: http://edo:8005
       BANK_URL: http://bank:8006
       MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
-      INTEGRATOR_TODAY: ${MOCK_TODAY:-2026-09-29}
-    networks: [internal]
+      INTEGRATOR_TODAY: ${INTEGRATOR_TODAY:-${MOCK_TODAY:-2026-09-29}}
+      INTEGRATOR_TIMEOUT: ${INTEGRATOR_TIMEOUT:-30}
+      # подключения 1С, введённые компаниями: реквизиты берутся из ledger; адрес проверяется на SSRF (docs/integrator.md)
+      LEDGER_URL: http://ledger:3002
+      INTEGRATIONS_ALLOW_HTTP: ${INTEGRATIONS_ALLOW_HTTP:-0}
+    networks: [internal, edge]
     depends_on:
+      ledger: {condition: service_healthy}
       onec: {condition: service_healthy}
       edo: {condition: service_healthy}
       bank: {condition: service_healthy}
@@ -199,12 +191,20 @@ services:
   advisor:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: advisor}
-    # консультант читает ledger/forecast/planfact и вызывает llm-gateway; сам ничего не записывает
+    # консультант: Hermes Agent (если задан HERMES_AGENT_KEY) или llm-gateway; инструменты читают ledger/forecast/planfact,
+    # пишут в план только по праву, выданному владельцем (add_payments). MCP-сервер /mcp — для Hermes, по ADVISOR_MCP_TOKEN.
     environment:
+      HERMES_AGENT_URL: ${HERMES_AGENT_KEY:+http://hermes:8642}
+      HERMES_AGENT_KEY: ${HERMES_AGENT_KEY:-}
+      HERMES_AGENT_MODEL: ${HERMES_AGENT_MODEL:-gpt-6.1-sol}
+      ADVISOR_MCP_TOKEN: ${ADVISOR_MCP_TOKEN:-}
+      ADVISOR_DB: /data/advisor.db
       LLM_GATEWAY_URL: http://llm-gateway:8010
       LEDGER_URL: http://ledger:3002
       FORECAST_URL: http://forecast:3003
       PLANFACT_URL: http://planfact:3004
+    # чаты консультанта и стратегии «Плана и факта»
+    volumes: [advisor-data:/data]
     networks: [internal]
     depends_on:
       llm-gateway: {condition: service_healthy}
@@ -214,6 +214,43 @@ services:
     healthcheck:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8011/live', timeout=2)"]
+
+  hermes:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/hermes/Dockerfile}
+    # Hermes Agent: модель по подписке Codex (выход в интернет через edge), инструменты — только MCP advisor.
+    # Профиль hermes: `docker compose --profile hermes up -d`; вход в подписку — сервис hermes-login (один раз).
+    profiles: [hermes]
+    environment:
+      API_SERVER_KEY: ${HERMES_AGENT_KEY:-}
+      ADVISOR_MCP_TOKEN: ${ADVISOR_MCP_TOKEN:-}
+      HERMES_MODEL: ${HERMES_AGENT_MODEL:-gpt-6.1-sol}
+      HTTPS_PROXY: ${HERMES_PROXY:-}
+      HTTP_PROXY: ${HERMES_PROXY:-}
+      ALL_PROXY: ${HERMES_PROXY:-}
+      NO_PROXY: advisor,ledger,forecast,planfact,auth,api,web-api,localhost,127.0.0.1
+    tmpfs: ["/tmp", "/home/hermes:uid=1000,gid=1000,mode=0700"]
+    depends_on:
+      advisor: {condition: service_healthy}
+    volumes: ["${HERMES_DATA:-hermes-data}:/data"]
+    networks: [internal, edge]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8642/health', timeout=2)"]
+
+  hermes-login:
+    build: {context: .., dockerfile: infra/hermes/Dockerfile}
+    # вход в подписку ChatGPT/Codex по коду устройства: `docker compose --profile hermes run --rm hermes-login`
+    profiles: [hermes]
+    entrypoint: ["hermes", "auth", "add", "openai-codex"]
+    # Если сервер в России, OpenAI отвечает 403: задайте HERMES_PROXY (например http://192.168.1.101:1081, общий VPN-прокси контейнера bots)
+    environment:
+      HTTPS_PROXY: ${HERMES_PROXY:-}
+      HTTP_PROXY: ${HERMES_PROXY:-}
+      ALL_PROXY: ${HERMES_PROXY:-}
+      NO_PROXY: advisor,ledger,forecast,planfact,auth,api,web-api,localhost,127.0.0.1
+    volumes: ["${HERMES_DATA:-hermes-data}:/data"]
+    networks: [edge]
 
   backoffice:
     <<: *hardening
@@ -325,6 +362,8 @@ services:
       INTERNAL_ADDR: 0.0.0.0:3002
       DB_PATH: /data/ledger.db
       PARSER_URL: http://parser:8002
+      # ключ шифрования паролей, которые компании вводят в «Настройки → Интеграции» (создают install.sh и run.sh); пусто — пароли не принимаются
+      INTEGRATIONS_KEY: ${INTEGRATIONS_KEY:-}
     volumes: [ledger-data:/data]
     networks: [internal]
     depends_on:
@@ -433,5 +472,7 @@ volumes:
   notifier-data:
   llm-gateway-data:
   backoffice-data:
+  hermes-data:
+  advisor-data:
   notify-data:
   fns-data:

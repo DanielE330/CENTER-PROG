@@ -184,6 +184,8 @@ export interface ForecastResult {
   seed: number
   n_paths: number
   quality: { level: QualityLevel | string; history_days: number; notes: string[] }
+  /** Step-by-step calculation log (absent in runs made before it existed). */
+  trace?: Array<{ step: number; title: string; detail: string }>
   days: ForecastDay[]
   risk: Risk
   rules: Rule[]
@@ -199,6 +201,19 @@ export interface ForecastRun {
   recomputed?: boolean
   scenario: unknown
   result: ForecastResult
+  /** How the model was obtained: full refit or incremental update with new data. */
+  update?: ForecastUpdate
+}
+
+export type ForecastUpdateMode = 'full' | 'incremental'
+
+export interface ForecastUpdate {
+  mode: ForecastUpdateMode
+  /** full: mode_full | forced | first | reset | backdated | expired | grown; incremental: events_only | new_operations */
+  reason: string
+  /** Operations appended since the last full refit. */
+  ops_added: number
+  full_fit_at: string
 }
 
 export interface ScenarioParams {
@@ -225,6 +240,11 @@ export interface BacktestMetric {
   mae_drift: Kop
   model_beats_baselines_share: number
   band_coverage?: number
+  /** MSE, ₽² */
+  mse_model_rub2?: number
+  rmse_model?: Kop
+  /** MAE as % of the company's median weekly turnover */
+  mae_pct_turnover?: number
   n: number
 }
 
@@ -233,6 +253,17 @@ export interface Backtest {
   alarm_precision: number | null
   alarm_recall: number | null
   actual_gap_windows: number
+  /** confusion matrix of the gap alarm (P ≥ alarm_threshold) against an actual gap in 30 days */
+  alarm_tp?: number
+  alarm_fp?: number
+  alarm_fn?: number
+  alarm_tn?: number
+  alarm_accuracy?: number | null
+  alarm_f1?: number | null
+  brier?: number | null
+  mean_probability?: number | null
+  gap_rate?: number | null
+  alarm_threshold?: number
   metrics: BacktestMetric[]
   series_14?: Array<{ date: string; predicted: Kop; actual: Kop }>
   note?: string
@@ -266,7 +297,7 @@ export interface TransactionPage {
   offset: number
 }
 
-export type EventSource = 'manual' | 'invoice' | 'contract' | 'tax'
+export type EventSource = 'manual' | 'invoice' | 'contract' | 'tax' | 'onec'
 
 export interface ExpectedEvent {
   id: string
@@ -317,6 +348,16 @@ export interface DemoStatus {
   finished?: boolean
 }
 
+/** Result of the demo "step back": the last fed week is removed and the forecast is recomputed. */
+export interface DemoRewind {
+  removed: number
+  from: string | null
+  to: string | null
+  new_as_of: string | null
+  previous_as_of: string
+  recalc_ms: number
+}
+
 export interface DemoAdvance {
   added: number
   skipped_duplicates: number
@@ -335,7 +376,11 @@ export interface DemoAdvance {
 export interface SyncResult {
   created: number
   skipped: number
-  sources?: unknown
+  /** откуда пришли данные 1С: имитатор или подключённая настоящая 1С (Настройки → Интеграции) */
+  onec?: 'sim' | 'live' | null
+  sources?: { onec?: { status: string; error?: string | null; code?: string }; edo?: { status: string }; [k: string]: unknown }
+  /** проверка контрагентов с ИНН (счета 1С) в ФНС сразу после синхронизации; null — проверять было некого */
+  fns?: { checked: number; flagged?: number; saved?: boolean; error?: string } | null
 }
 
 export interface ImportStats {
@@ -516,6 +561,10 @@ export interface TgPrefs {
   gap_threshold: number
   /** Admin allows sending company statistics to the cloud advisor (Hermes). */
   ai_consent: number
+  /** Alert about missed planned payments (plan-fact), once per payment. */
+  missed_enabled: number
+  /** Ignore missed payments below this amount, kopecks. */
+  missed_min_kop: number
 }
 
 export interface TgStatus {
@@ -574,7 +623,7 @@ export interface SprintHistoryItem {
 }
 
 export type TgRole = 'viewer' | 'rater' | 'admin'
-export type TgKind = 'risk' | 'week' | 'month' | 'gap'
+export type TgKind = 'risk' | 'week' | 'month' | 'gap' | 'missed'
 
 export interface Department {
   id: number
@@ -638,7 +687,6 @@ export interface AuditPage {
 }
 
 // ----- ФНС: ЕНС, налоговые события, проверка контрагентов -----
-export type FnsMode = 'sim' | 'live'
 export type FnsRisk = 'low' | 'medium' | 'high' | 'unknown'
 
 export interface FnsUpcoming {
@@ -654,10 +702,9 @@ export interface FnsEns {
   has_debt: boolean
   upcoming: FnsUpcoming[]
   checked_at: string | null
-  /** `fns_sim` (имитатор), `import` (загруженная справка) или реестр режима live. */
+  /** `import` — загруженная справка о состоянии расчётов */
   source: string
   source_label: string
-  mode: FnsMode
 }
 
 export interface FnsEnsImportResult extends FnsEns {
@@ -681,10 +728,21 @@ export interface FnsCounterparty {
   mass_address?: boolean
   disqualified?: boolean
   registered_at?: string | null
+  /** дата, на которую ФНС опубликовала сведения о задолженности */
+  tax_debt_as_of?: string | null
   checked_at: string | null
   source: string | null
-  mode?: FnsMode
+  /** причины риска по настройкам компании: tax_debt_large, liquidated, not_in_registry, ... */
+  risk_reasons?: string[]
+  /** состояние источников: ok, off (выключен в настройках) или unavailable:<причина> */
+  sources?: Record<string, string>
   stale?: boolean
+  /** откуда контрагент: выписка и/или ожидаемые события (счета и платёжки 1С) */
+  origin?: ('statement' | 'expected' | 'onec')[]
+  expected_in_kop?: Kop
+  expected_out_kop?: Kop
+  /** доля в ожидаемых поступлениях */
+  expected_share?: number
 }
 
 export interface FnsCounterparties {
@@ -692,9 +750,82 @@ export interface FnsCounterparties {
   checked_at: string
   source: string | null
   source_label: string
-  mode: FnsMode | null
+  /** сведения выгружены из открытых источников ФНС */
+  exported_from: 'fns'
+  /** дата, на которую ФНС опубликовала набор о задолженности */
+  debt_as_of?: string | null
   saved: boolean
   total_income_kop: Kop | null
+  settings?: FnsSettings
+}
+
+export interface FnsSettings {
+  sources: { egrul: boolean; data_nalog: boolean; fedresurs: boolean }
+  risk: {
+    bankruptcy: boolean
+    liquidation: boolean
+    not_in_registry: boolean
+    unreliable: boolean
+    disqualified: boolean
+    tax_debt: boolean
+    mass_address: boolean
+    large_debt_kop: number
+  }
+  show_statement: boolean
+  show_expected: boolean
+  top: number
+  use_in_forecast: boolean
+  check_after_sync: boolean
+}
+
+export interface FnsSettingsView {
+  settings: FnsSettings
+  defaults: FnsSettings
+  updated_at: string | null
+  info: { fedresurs_configured: boolean; debt_as_of: string | null; debt_state: string } | null
+  sources_info: Record<string, string>
+}
+
+/** Настройки → Интеграции: подключения компании. Пароля в ответах нет; адрес и логин видит только владелец. */
+export type IntegrationStatus = 'not_connected' | 'unchecked' | 'ok' | 'error' | 'sim'
+
+export interface IntegrationItem {
+  kind: 'onec' | 'edo' | 'bank'
+  connected: boolean
+  source: 'sim' | 'live'
+  status: IntegrationStatus
+  last_check_at: string | null
+  last_error: string | null
+  last_sync_at: string | null
+  url?: string
+  username?: string
+  password_set?: boolean
+}
+
+/** Результат проверки подключения 1С; `code` — причина (bad_credentials, odata_not_published, url_forbidden, timeout…). */
+export interface IntegrationCheck {
+  ok: boolean
+  code: string
+  message: string
+  documents?: number
+  more?: boolean
+  optional_missing?: string[]
+  missing?: string[]
+}
+
+export interface IntegrationsView {
+  can_manage: boolean
+  /** задан ли на сервере ключ шифрования паролей; null для тех, кто не управляет подключениями */
+  key_configured: boolean | null
+  items: IntegrationItem[]
+  check?: IntegrationCheck | null
+  recorded?: boolean
+}
+
+export interface OnecConnectionInput {
+  url: string
+  username: string
+  password?: string
 }
 
 export interface FnsSyncResult {
@@ -707,7 +838,6 @@ export interface FnsSyncResult {
   regime_source: 'request' | 'statement' | 'default'
   source: string
   source_label: string
-  mode: FnsMode
   fetched_at: string
   items: { kind: string; title: string; date: string; amount_kop: Kop; estimated: boolean }[]
   debt_kop: Kop | null

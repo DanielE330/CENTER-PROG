@@ -63,6 +63,7 @@ sed -i.bak "s/^DEMO_SEED=[^ ]*/DEMO_SEED=$DEMO/" "$ENV"; rm -f "$ENV.bak"
 set_kv AUTH_MFA_KEY "$(rand 32)"           # ключ шифрования секретов 2FA пользователей компаний (необязательной, AUTH_REQUIRE_2FA=1 делает её обязательной)
 set_kv AUTH_REQUIRE_2FA 0
 set_kv BACKOFFICE_MFA_KEY "$(rand 32)"     # ключ шифрования секретов 2FA операторов; не теряйте: без него 2FA придётся сбросить
+set_kv INTEGRATIONS_KEY "$(rand 32)"       # ключ шифрования паролей 1С, которые компании вводят в «Настройки → Интеграции»; не теряйте: пароли придётся вводить заново
 set_kv BACKOFFICE_REQUIRE_2FA 1            # второй фактор оператора обязателен
 for v in TELEGRAM_BOT_USERNAME HERMES_URL HERMES_API_KEY; do
   [ -n "${!v:-}" ] && set_kv "$v" "${!v}"
@@ -107,5 +108,5 @@ echo "Дальше вход только по паролю и коду из пр
 echo "Потеряли телефон и резервные коды? Сбросить 2FA (при следующем входе настроится заново):"
 echo "  docker compose -f infra/docker-compose.yml exec backoffice python -m backoffice.create_operator --reset-2fa $EMAIL"
 echo
-echo "Сведения ФНС (налоги на год, ЕНС, проверка контрагентов): режим sim, данные имитатора. Режим live выключен: docs/fns.md"
+echo "Сведения ФНС (налоги на год, ЕНС из справки, проверка контрагентов по открытым реестрам): сервису fns нужен выход в интернет, настройки компании: Настройки → Сведения ФНС, подробности: docs/fns.md"
 echo "Сайт для компаний: ${URL%/operator}  (вход и регистрация; пользователи компаний видят свою компанию, а не панель оператора)"

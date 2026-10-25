@@ -160,6 +160,53 @@ pub async fn advance_week(State(st): State<AppState>, Editor(p): Editor, ctx: Ct
     ))
 }
 
+/// Файл недели демо-ленты: `<код компании>_<с>_<по>.csv` (см. demo_feed); только такие импорты можно откатывать.
+fn is_feed_file(name: &str, ext: &str) -> bool {
+    let Some(rest) = name.strip_prefix(&format!("{ext}_")).and_then(|r| r.strip_suffix(".csv")) else { return false };
+    let mut parts = rest.split('_');
+    let (a, b, none) = (parts.next(), parts.next(), parts.next());
+    none.is_none() && [a, b].iter().all(|d| d.is_some_and(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok()))
+}
+
+/// POST .../demo/rewind-week -> {removed, from, to, new_as_of, ...}: обратное действие к `advance-week`.
+/// Откатывает последнюю поданную неделю ленты (удаляет её импорт); выписка до даты отсечки остаётся нетронутой.
+pub async fn rewind_week(State(st): State<AppState>, Editor(p): Editor, ctx: Ctx, Path(cid): Path<String>) -> R<Json<Value>> {
+    guard(&st, &p, &cid)?;
+    let actx = actor_ctx(&ctx, &p);
+    let _one_at_a_time = STEP.lock().await;
+
+    let as_of = last_tx_date(&st, &actx, &cid)
+        .await?
+        .ok_or_else(|| err(StatusCode::CONFLICT, "demo_not_seeded", "Сначала загрузите демо-выписку (infra/scripts/seed_demo.sh)"))?;
+    let ext = st.demo.external_company.clone();
+    let list = st.ledger.get(&format!("/internal/v1/companies/{cid}/imports"), &actx).await?;
+    // импорты отсортированы от новых к старым: берём самый новый подтверждённый импорт недели ленты
+    let last = list["items"]
+        .as_array()
+        .and_then(|a| a.iter().find(|i| i["status"] == "confirmed" && i["filename"].as_str().is_some_and(|f| is_feed_file(f, &ext))))
+        .cloned()
+        .ok_or_else(|| err(StatusCode::CONFLICT, "demo_at_start", "Это начало демо: откатывать нечего"))?;
+    let iid = last["import_id"].as_str().ok_or_else(|| internal("ledger: no import_id"))?.to_string();
+
+    let prev = fetch_latest(&st, &actx, &cid).await.ok().flatten();
+    let del = st.ledger.json(Method::DELETE, &format!("/internal/v1/companies/{cid}/imports/{iid}"), &actx, None).await?.into_result()?;
+    let removed = del["removed"].as_u64().unwrap_or(0);
+
+    let t0 = Instant::now();
+    let fc = fetch_latest(&st, &actx, &cid).await?.unwrap_or(Value::Null);
+    let recalc_ms = t0.elapsed().as_millis() as u64;
+    let new_as_of = last_tx_date(&st, &actx, &cid).await?.or_else(|| fc["result"]["as_of"].as_str().and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()));
+    let _ = prev;
+    let _ = st
+        .ledger
+        .post(&format!("/internal/v1/companies/{cid}/audit"), &actx, &json!({"action": "demo.rewind_week", "object_id": iid, "outcome": "ok"}))
+        .await;
+    Ok(Json(json!({
+        "removed": removed, "from": last["date_from"], "to": last["date_to"], "new_as_of": new_as_of, "previous_as_of": as_of,
+        "import_id": iid, "recalc_ms": recalc_ms,
+    })))
+}
+
 /// Последний базовый прогноз; None, если его ещё нет (404 от forecast).
 async fn fetch_latest(st: &AppState, ctx: &Ctx, cid: &str) -> R<Option<Value>> {
     let r = st.forecast.json(Method::GET, &format!("/internal/v1/companies/{cid}/forecasts/latest"), ctx, None).await?;
@@ -242,5 +289,14 @@ mod tests {
         assert!(forecast_vs_fact(&prev, d("2026-09-01"), 5).is_none());
         assert!(forecast_vs_fact(&json!({}), d("2026-07-18"), 5).is_none());
         assert!(forecast_vs_fact(&json!({"days": [{"date": "2026-07-18", "p10": "x", "p50": "2", "p90": "3"}]}), d("2026-07-18"), 5).is_none());
+    }
+
+    #[test]
+    fn feed_file_names() {
+        assert!(is_feed_file("C001_2026-07-11_2026-07-17.csv", "C001"));
+        assert!(!is_feed_file("C001.csv", "C001"));
+        assert!(!is_feed_file("vypiska_petrov.csv", "C001"));
+        assert!(!is_feed_file("C001_2026-07-11.csv", "C001"));
+        assert!(!is_feed_file("C002_2026-07-11_2026-07-17.csv", "C001"));
     }
 }

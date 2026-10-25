@@ -44,6 +44,8 @@ export function SyncModal({ open, onClose }: { open: boolean; onClose: () => voi
         {sync.isSuccess && (
           <Notice tone="success" title={t('sync.doneTitle')}>
             {t('sync.doneText', { created: sync.data.created, skipped: sync.data.skipped })}
+            {sync.data.fns && !sync.data.fns.error && <> {t('sync.fnsChecked', { checked: sync.data.fns.checked, flagged: sync.data.fns.flagged ?? 0 })}</>}
+            {sync.data.fns?.error === 'inn_required' && <> {t('sync.fnsNoInn')}</>}
           </Notice>
         )}
         {sync.isError && <Notice tone="danger">{errorText(t, sync.error)}</Notice>}

@@ -64,7 +64,13 @@ impl Drop for Env {
     }
 }
 
+const TEST_KEY: &str = "test-integrations-key-0123456789";
+
 async fn env() -> Env {
+    env_key(Some(TEST_KEY)).await
+}
+
+async fn env_key(key: Option<&str>) -> Env {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -76,6 +82,7 @@ async fn env() -> Env {
     let st = AppState {
         db: db::open(dir.join("ledger.db").to_str().unwrap()),
         parser: Upstream::new("parser", "Сервис разбора", &format!("http://127.0.0.1:{port}"), 10),
+        integrations_key: key.and_then(crate::integrations::master_key),
     };
     Env { app: build(st), _dir: dir }
 }
@@ -246,6 +253,46 @@ async fn import_overlapping_statement_skips_rows_by_dedup_key() {
     assert_eq!((c["inserted"].as_i64(), c["skipped_duplicates"].as_i64()), (Some(1), Some(2)));
     let (_, t) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/transactions"), None).await;
     assert_eq!(t["total"], 5);
+}
+
+async fn snap_since(app: &Router, cid: &str, since: i64) -> (StatusCode, Value) {
+    call(app, "GET", &format!("/internal/v1/companies/{cid}/snapshot?since_rev={since}"), None).await
+}
+
+#[tokio::test]
+async fn snapshot_since_revision_returns_only_appended_rows_and_category_edit_resets() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    import_confirmed(&e.app, &cid, "a.csv", base_txs()).await;
+    let rev1 = revision(&e.app, &cid).await;
+    import_confirmed(&e.app, &cid, "b.csv", vec![tx(1, "2026-03-20", 900_000, "ООО Клиент", "Оплата по счёту 77", "revenue")]).await;
+    let (s, v) = snap_since(&e.app, &cid, rev1).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["transactions"].as_array().unwrap().len(), 1);
+    assert_eq!((v["data_revision"].as_i64(), v["tx_reset_rev"].as_i64()), (Some(rev1 + 1), Some(0)));
+    assert_eq!(snap_since(&e.app, &cid, 0).await.1["transactions"].as_array().unwrap().len(), 5);
+    // событие — новая ревизия без новых операций и без сброса
+    let (s, _) = call(&e.app, "POST", &format!("/internal/v1/companies/{cid}/expected-events"), Some(json!({"date": Local::now().date_naive().to_string(), "amount_kop": "100000", "direction": "out", "title": "Ремонт"}))).await;
+    assert_eq!(s, StatusCode::CREATED);
+    let (_, v) = snap_since(&e.app, &cid, rev1 + 1).await;
+    assert_eq!((v["transactions"].as_array().unwrap().len(), v["tx_reset_rev"].as_i64()), (0, Some(0)));
+    // правка категории меняет уже учтённую операцию: дельта невозможна
+    let (_, t) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/transactions"), None).await;
+    let id = t["items"][0]["id"].as_i64().unwrap();
+    let (s, _) = call(&e.app, "PATCH", &format!("/internal/v1/companies/{cid}/transactions/{id}/category"), Some(json!({"category": "other_expense"}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v) = snap_since(&e.app, &cid, 0).await;
+    assert_eq!(v["tx_reset_rev"], v["data_revision"]);
+}
+
+#[tokio::test]
+async fn snapshot_includes_rows_imported_before_revisions_existed() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    import_confirmed(&e.app, &cid, "a.csv", base_txs()).await;
+    // строки из базы до появления колонки rev получили rev = 0 при миграции
+    rusqlite::Connection::open(e._dir.join("ledger.db")).unwrap().execute("UPDATE transactions SET rev = 0", []).unwrap();
+    assert_eq!(snap_since(&e.app, &cid, 0).await.1["transactions"].as_array().unwrap().len(), 4);
 }
 
 #[tokio::test]
@@ -662,7 +709,7 @@ async fn old_director_is_found_by_user_and_email_is_filled_on_ensure() {
         )
         .unwrap();
     }
-    let st = AppState { db: db::open(path.to_str().unwrap()), parser: Upstream::new("parser", "p", "http://127.0.0.1:1", 1) };
+    let st = AppState { db: db::open(path.to_str().unwrap()), parser: Upstream::new("parser", "p", "http://127.0.0.1:1", 1), integrations_key: None };
     let app = build(st);
     let (s, m) = call(&app, "GET", "/internal/v1/members/by-user/owner-1", None).await;
     assert_eq!((s, m["company_id"].as_str(), m["role"].as_str()), (StatusCode::OK, Some("c1"), Some("director")));
@@ -1165,4 +1212,230 @@ async fn company_requisites_can_be_edited_validated_and_cleared() {
     assert_eq!(v["inn"], "");
     let (_, v) = call(&e.app, "GET", &uri, None).await;
     assert_eq!((v["inn"].as_str(), v["company_name"].as_str()), (Some(""), Some("Новая")));
+}
+
+fn onec_item(ext: &str, amount: i64, cp: &str, inn: &str) -> Value {
+    json!({"external_id": ext, "date": in_days(5), "amount_kop": amount, "title": "Счёт из 1С", "counterparty": cp, "source": "onec", "confidence": 0.9, "inn": inn})
+}
+
+#[tokio::test]
+async fn expected_events_with_inn_join_fns_checks_and_risk_names() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    import_confirmed(&e.app, &cid, "a.csv", vec![tx_inn(1, 9_000_000, "ООО Большой клиент", "7701234567", "revenue")]).await;
+    let bulk = format!("/internal/v1/companies/{cid}/expected-events/bulk");
+    // событие без ИНН (создано до появления ИНН) при повторной синхронизации получает ИНН и не считается новым
+    call(&e.app, "POST", &bulk, Some(json!({"events": [onec_item("bs-1", 45_000_000, "ДОНАГРО ООО", "")]}))).await;
+    let (_, v) = call(&e.app, "POST", &bulk, Some(json!({"events": [onec_item("bs-1", 45_000_000, "ДОНАГРО ООО", "6166065050"), onec_item("bs-2", 12_000_000, "ДОНАГРО ООО", "6166065050"), onec_item("pp-1", -15_000_000, "ЦТСК ООО", "6165235781"), onec_item("x", 1, "Кривой", "61660-65050")]}))).await;
+    assert_eq!((v["created"].as_i64(), v["skipped"].as_i64()), (Some(3), Some(1)));
+
+    let (_, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/counterparties/top?limit=20"), None).await;
+    let items = v["items"].as_array().unwrap();
+    let inns: Vec<_> = items.iter().map(|i| i["inn"].as_str().unwrap()).collect();
+    assert_eq!(inns, ["6166065050", "6165235781", "7701234567"], "сначала контрагенты ожидаемых событий, неверный ИНН не проверяется");
+    let don = &items[0];
+    assert_eq!((don["name"].as_str(), don["expected_in_kop"].as_i64(), don["events_count"].as_i64(), don["tx_count"].as_i64()), (Some("ДОНАГРО ООО"), Some(57_000_000), Some(2), Some(0)));
+    assert_eq!(don["origin"], json!(["expected", "onec"]));
+    assert!((don["expected_share"].as_f64().unwrap() - 1.0).abs() < 1e-9, "все ожидаемые поступления — от ДОНАГРО (и 1 коп. кривого)");
+    assert_eq!(items[1]["expected_out_kop"], 15_000_000);
+    assert_eq!(items[2]["origin"], json!(["statement"]));
+
+    // флаг по ИНН из 1С приходит в снимок с названием из события: forecast сопоставит его с поступлением
+    call(&e.app, "PUT", &format!("/internal/v1/companies/{cid}/counterparty-risk"), Some(json!({"items": [risk_item("6166065050", "medium", "active", 496_997_838)]}))).await;
+    let (_, v) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/snapshot"), None).await;
+    let r = &v["counterparty_risks"][0];
+    assert_eq!((r["inn"].as_str(), r["names"].clone(), r["risk_level"].as_str()), (Some("6166065050"), json!(["ДОНАГРО ООО"]), Some("medium")));
+}
+
+#[tokio::test]
+async fn company_settings_by_section_with_revision_for_fns() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    let url = |k: &str| format!("/internal/v1/companies/{cid}/settings/{k}");
+    let snap = format!("/internal/v1/companies/{cid}/snapshot");
+    let app = e.app.clone();
+    let rev = |_: &axum::Router| {
+        let (app, snap) = (app.clone(), snap.clone());
+        async move { call(&app, "GET", &snap, None).await.1["data_revision"].as_i64().unwrap() }
+    };
+    let (s, v) = call(&e.app, "GET", &url("fns"), None).await;
+    assert_eq!((s, v["value"].is_null()), (StatusCode::OK, true));
+    let r0 = rev(&e.app).await;
+    let (s, v) = call(&e.app, "PUT", &url("fns"), Some(json!({"risk": {"not_in_registry": true}}))).await;
+    assert_eq!((s, v["changed"].as_bool()), (StatusCode::OK, Some(true)));
+    assert_eq!(rev(&e.app).await, r0 + 1, "учёт риска в прогнозе мог измениться");
+    let (_, v) = call(&e.app, "PUT", &url("fns"), Some(json!({"risk": {"not_in_registry": true}}))).await;
+    assert_eq!((v["changed"].as_bool(), rev(&e.app).await), (Some(false), r0 + 1), "те же настройки — ревизия не двигается");
+    // advisor не влияет на прогноз
+    call(&e.app, "PUT", &url("advisor"), Some(json!({"permissions": ["read_forecast"]}))).await;
+    assert_eq!(rev(&e.app).await, r0 + 1);
+    assert_eq!(call(&e.app, "GET", &url("advisor"), None).await.1["value"], json!({"permissions": ["read_forecast"]}));
+    assert_eq!(call(&e.app, "GET", &url("nope"), None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&e.app, "PUT", &url("fns"), Some(json!([1]))).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(call(&e.app, "PUT", "/internal/v1/companies/missing/settings/fns", Some(json!({}))).await.0, StatusCode::NOT_FOUND);
+}
+
+
+// ---------- подключения интеграций (1С) ----------
+const ONEC_URL: &str = "https://msk1.1cfresh.com/a/ea/4269703";
+
+async fn call_as(app: &Router, actor: &str, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value, axum::http::HeaderMap) {
+    let b = body.map(|v| Body::from(serde_json::to_vec(&v).unwrap())).unwrap_or_else(Body::empty);
+    let req = Request::builder().method(method).uri(uri).header("content-type", "application/json").header("x-actor", actor).body(b).unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let (status, headers) = (res.status(), res.headers().clone());
+    let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null), headers)
+}
+
+fn db_dump(e: &Env) -> String {
+    // файл БД целиком: пароль не должен лежать в нём открытым текстом
+    let mut out = Vec::new();
+    for f in std::fs::read_dir(&e._dir).unwrap() {
+        out.extend(std::fs::read(f.unwrap().path()).unwrap());
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+#[tokio::test]
+async fn onec_connection_is_stored_encrypted_and_password_never_returned() {
+    let e = env().await;
+    let cid = company(&e.app, "owner-int").await;
+    let base = format!("/internal/v1/companies/{cid}/integrations");
+    let (s, v) = call(&e.app, "GET", &base, None).await;
+    assert_eq!((s, v["items"].as_array().unwrap().len(), v["key_configured"].as_bool()), (StatusCode::OK, 0, Some(true)));
+
+    let secret = "Sup3r-Secret-Pass!";
+    let (s, v) = call(&e.app, "PUT", &format!("{base}/onec"), Some(json!({"url": ONEC_URL, "username": "odata", "password": secret}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["url"].as_str(), v["username"].as_str(), v["status"].as_str(), v["password_set"].as_bool()), (Some(ONEC_URL), Some("odata"), Some("unchecked"), Some(true)));
+    assert!(!v.to_string().contains(secret) && v.get("password").is_none() && v.get("password_enc").is_none());
+    let (_, l) = call(&e.app, "GET", &base, None).await;
+    assert!(!l.to_string().contains(secret) && l["items"][0]["password_set"] == true);
+    assert!(!db_dump(&e).contains(secret), "пароль лежит в БД открытым текстом");
+    let enc: String = {
+        let c = db::open(e._dir.join("ledger.db").to_str().unwrap());
+        let g = c.lock().unwrap();
+        g.query_row("SELECT password_enc FROM integration_connections WHERE company_id=?", [&cid], |r| r.get(0)).unwrap()
+    };
+    assert!(enc.starts_with("v1:") && !enc.contains(secret));
+
+    // расшифрованные реквизиты — только сервису integrator
+    let cred = format!("{base}/onec/credentials");
+    for actor in ["tester", "", "u-123", "svc:integrator2"] {
+        let (s, v, _) = call_as(&e.app, actor, "GET", &cred, None).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::FORBIDDEN, Some("forbidden")), "actor={actor:?}");
+        assert!(!v.to_string().contains(secret));
+    }
+    let (s, v, h) = call_as(&e.app, "svc:integrator", "GET", &cred, None).await;
+    assert_eq!((s, v["password"].as_str(), v["url"].as_str(), v["username"].as_str()), (StatusCode::OK, Some(secret), Some(ONEC_URL), Some("odata")));
+    assert_eq!(h.get("cache-control").and_then(|x| x.to_str().ok()), Some("no-store"));
+    // чужая компания реквизитов не видит
+    let other = company(&e.app, "owner-other").await;
+    let (s, _, _) = call_as(&e.app, "svc:integrator", "GET", &format!("/internal/v1/companies/{other}/integrations/onec/credentials"), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn onec_without_key_does_not_accept_passwords() {
+    let e = env_key(None).await;
+    let cid = company(&e.app, "owner-nokey").await;
+    let uri = format!("/internal/v1/companies/{cid}/integrations/onec");
+    let (s, v) = call(&e.app, "PUT", &uri, Some(json!({"url": ONEC_URL, "username": "odata", "password": "x1"}))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("integrations_key_missing")));
+    let (_, l) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/integrations"), None).await;
+    assert_eq!((l["key_configured"].as_bool(), l["items"].as_array().unwrap().len()), (Some(false), 0));
+    // слишком короткий ключ — тоже «нет ключа»
+    assert!(crate::integrations::master_key("short").is_none());
+}
+
+#[tokio::test]
+async fn onec_password_is_kept_only_for_the_same_address() {
+    let e = env().await;
+    let cid = company(&e.app, "owner-keep").await;
+    let uri = format!("/internal/v1/companies/{cid}/integrations/onec");
+    // первый раз пароль обязателен
+    let (s, v) = call(&e.app, "PUT", &uri, Some(json!({"url": ONEC_URL, "username": "odata"}))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("onec_password_required")));
+    call(&e.app, "PUT", &uri, Some(json!({"url": ONEC_URL, "username": "odata", "password": "first-pass-1"}))).await;
+    // тот же сервер, другой путь и логин: пароль сохраняется
+    let (s, _) = call(&e.app, "PUT", &uri, Some(json!({"url": "https://MSK1.1cfresh.com/a/ea/777", "username": "odata2", "password": ""}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v, _) = call_as(&e.app, "svc:integrator", "GET", &format!("{uri}/credentials"), None).await;
+    assert_eq!((v["password"].as_str(), v["username"].as_str()), (Some("first-pass-1"), Some("odata2")));
+    // другой сервер без нового пароля: отказ (старый пароль на новый адрес не уходит)
+    let (s, v) = call(&e.app, "PUT", &uri, Some(json!({"url": "https://evil.example.org/a", "username": "odata2"}))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("onec_password_required")));
+    let (_, v, _) = call_as(&e.app, "svc:integrator", "GET", &format!("{uri}/credentials"), None).await;
+    assert_eq!(v["url"].as_str(), Some("https://MSK1.1cfresh.com/a/ea/777"));
+    // форма значений
+    for body in [json!({"url": "ftp://x.ru", "username": "u", "password": "p"}), json!({"url": "https://x.ru/a b", "username": "u", "password": "p"}), json!({"url": "", "username": "u", "password": "p"})] {
+        let (s, v) = call(&e.app, "PUT", &uri, Some(body)).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_url")));
+    }
+    let (s, v) = call(&e.app, "PUT", &uri, Some(json!({"url": ONEC_URL, "username": "  ", "password": "p"}))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_username")));
+}
+
+#[tokio::test]
+async fn onec_statuses_check_sync_disconnect_and_audit_without_secrets() {
+    let e = env().await;
+    let cid = company(&e.app, "owner-st").await;
+    let base = format!("/internal/v1/companies/{cid}/integrations");
+    let secret = "Zz-audit-secret-9";
+    // статус несуществующего подключения
+    let (s, _) = call(&e.app, "PUT", &format!("{base}/onec/status"), Some(json!({"event": "check", "ok": true}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    call(&e.app, "PUT", &format!("{base}/onec"), Some(json!({"url": ONEC_URL, "username": "odata", "password": secret}))).await;
+
+    let (s, v) = call(&e.app, "PUT", &format!("{base}/onec/status"), Some(json!({"event": "check", "ok": false, "error": "Неверный логин или пароль\nвторая строка"}))).await;
+    assert_eq!((s, v["status"].as_str(), v["last_error"].as_str()), (StatusCode::OK, Some("error"), Some("Неверный логин или парольвторая строка")));
+    assert!(v["last_check_at"].is_string() && v["last_sync_at"].is_null());
+    let (_, v) = call(&e.app, "PUT", &format!("{base}/onec/status"), Some(json!({"event": "check", "ok": true}))).await;
+    assert_eq!((v["status"].as_str(), v["last_error"].is_null()), (Some("ok"), true));
+    let (_, v) = call(&e.app, "PUT", &format!("{base}/onec/status"), Some(json!({"event": "sync", "ok": true}))).await;
+    assert!(v["last_sync_at"].is_string() && v["status"] == "ok");
+    let (_, v) = call(&e.app, "PUT", &format!("{base}/onec/status"), Some(json!({"event": "sync", "ok": false, "error": "x".repeat(1000)}))).await;
+    assert_eq!((v["status"].as_str(), v["last_error"].as_str().map(str::len)), (Some("error"), Some(300)));
+    assert!(v["last_sync_at"].is_string(), "время последней удачной синхронизации не стирается");
+    let (s, _) = call(&e.app, "PUT", &format!("{base}/onec/status"), Some(json!({"event": "other", "ok": true}))).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // отключение: реквизиты удалены, повтор безопасен
+    let (s, _) = call(&e.app, "DELETE", &format!("{base}/onec"), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert_eq!(call(&e.app, "DELETE", &format!("{base}/onec"), None).await.0, StatusCode::NO_CONTENT);
+    let (_, l) = call(&e.app, "GET", &base, None).await;
+    assert_eq!(l["items"].as_array().unwrap().len(), 0);
+    assert!(!db_dump(&e).contains(secret));
+    let (s, _, _) = call_as(&e.app, "svc:integrator", "GET", &format!("{base}/onec/credentials"), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // аудит: подключено, проверено, отключено; ни пароля, ни адреса в записях нет
+    let (_, a) = call(&e.app, "GET", &format!("/internal/v1/companies/{cid}/audit"), None).await;
+    let actions: Vec<&str> = a["items"].as_array().unwrap().iter().map(|i| i["action"].as_str().unwrap()).collect();
+    for want in ["integrations.onec.connect", "integrations.onec.check", "integrations.onec.disconnect"] {
+        assert!(actions.contains(&want), "{want} не записан: {actions:?}");
+    }
+    assert!(!a.to_string().contains(secret) && !a.to_string().contains("1cfresh"));
+}
+
+#[tokio::test]
+async fn onec_password_ciphertext_is_bound_to_its_company() {
+    let e = env().await;
+    let (a, b) = (company(&e.app, "owner-a").await, company(&e.app, "owner-b").await);
+    for (cid, pw) in [(&a, "pass-of-company-a"), (&b, "pass-of-company-b")] {
+        call(&e.app, "PUT", &format!("/internal/v1/companies/{cid}/integrations/onec"), Some(json!({"url": ONEC_URL, "username": "u", "password": pw}))).await;
+    }
+    {
+        // шифртекст компании A подложен в запись компании B
+        let c = db::open(e._dir.join("ledger.db").to_str().unwrap());
+        let g = c.lock().unwrap();
+        g.execute("UPDATE integration_connections SET password_enc=(SELECT password_enc FROM integration_connections WHERE company_id=?1) WHERE company_id=?2", rusqlite::params![a, b]).unwrap();
+    }
+    let (s, v, _) = call_as(&e.app, "svc:integrator", "GET", &format!("/internal/v1/companies/{b}/integrations/onec/credentials"), None).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::CONFLICT, Some("integrations_key_invalid")));
+    assert!(!v.to_string().contains("pass-of-company"));
+    let (s, v, _) = call_as(&e.app, "svc:integrator", "GET", &format!("/internal/v1/companies/{a}/integrations/onec/credentials"), None).await;
+    assert_eq!((s, v["password"].as_str()), (StatusCode::OK, Some("pass-of-company-a")));
 }

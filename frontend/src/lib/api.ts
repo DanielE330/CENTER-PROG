@@ -4,62 +4,72 @@
  */
 import type {
   AccountMethods,
+  ApiTokenInfo,
   AuditPage,
+  Backtest,
+  DemoAdvance,
   DemoLoginAccount,
   DemoLoginStatus,
-  ApiTokenInfo,
-  Backtest,
+  DemoRewind,
+  DemoStatus,
   Department,
   ExpectedEvent,
   FnsCounterparties,
   FnsEns,
   FnsEnsImportResult,
+  FnsSettings,
+  FnsSettingsView,
   FnsSyncResult,
+  ForecastRun,
+  ForecastUpdateMode,
   Goal,
   GoalStatus,
-  ForecastRun,
   ImportPreview,
-  DemoAdvance,
-  DemoStatus,
   ImportRow,
+  IntegrationsView,
   KeyRate,
   Me,
+  Member,
+  MemberResetResult,
   MeWithCodes,
   MfaChallenge,
   MfaSetup,
-  Member,
+  NewApiToken,
+  NewExpectedEvent,
+  NewInvite,
   NewMemberRequest,
   NewMemberResult,
-  MemberResetResult,
   NotificationPrefs,
-  Role,
-  NewApiToken,
-  NewInvite,
-  NewExpectedEvent,
+  OnecConnectionInput,
   PlanFact,
   Retro,
+  Role,
   ScenarioParams,
   ScenarioResponse,
   SprintHistoryItem,
   SprintView,
   SyncResult,
-  TgLink,
+  TaxCalendarRequest,
+  TaxCalendarResult,
+  Taxonomy,
+  TeamInvite,
   TgKind,
+  TgLink,
   TgMember,
   TgPrefs,
   TgRole,
   TgStatus,
   TgTeam,
-  TaxCalendarRequest,
-  TaxCalendarResult,
-  TeamInvite,
-  Taxonomy,
   TransactionPage,
 } from '../types'
+import type { EvalRow } from './datasetSplit'
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
 
-import type { AdvisorAnswer, AdvisorHistoryItem, AdvisorSuggestion } from '../features/assistant/advisorTypes'
+import type {
+  AdvisorAnswer, AdvisorChat, AdvisorHistoryItem, AdvisorModels, AdvisorPrompt, AdvisorSettings, AdvisorSettingsView, AdvisorSuggestion,
+  ChatMode, Reasoning, StoredMessage, StrategyPlan,
+} from '../features/assistant/advisorTypes'
 
 export { ApiError } from './errors'
 
@@ -206,10 +216,16 @@ export const api = {
       throw e
     }
   },
-  createForecast: (horizonDays: number) => request<ForecastRun>('POST', co('/forecasts'), { body: { horizon_days: horizonDays } }),
+  /** full: refit the model on the whole history even in the incremental update mode. */
+  createForecast: (horizonDays: number, full = false) =>
+    request<ForecastRun>('POST', co('/forecasts'), { body: full ? { horizon_days: horizonDays, full: true } : { horizon_days: horizonDays } }),
+  forecastSettings: () => request<{ update_mode: ForecastUpdateMode }>('GET', co('/forecast-settings')),
+  saveForecastSettings: (mode: ForecastUpdateMode) => request<{ update_mode: ForecastUpdateMode }>('PUT', co('/forecast-settings'), { body: { update_mode: mode } }),
   scenario: (horizonDays: number, scenario: ScenarioParams) =>
     request<ScenarioResponse>('POST', co('/scenarios'), { body: { horizon_days: horizonDays, scenario } }),
   backtest: () => request<Backtest>('GET', co('/backtest')),
+  evaluate: (company: string, rows: EvalRow[]) =>
+    request<{ company: string; operations: number; backtest: Backtest | null }>('POST', co('/evaluate'), { body: { company, rows } }),
 
   // ----- ledger -----
   transactions: (q: TransactionQuery) => {
@@ -237,9 +253,17 @@ export const api = {
   syncIntegrations: (externalCompany: string) =>
     request<SyncResult>('POST', co('/integrations/sync'), { body: { external_company: externalCompany } }),
 
+  // ----- интеграции компании (Настройки → Интеграции) -----
+  integrations: () => request<IntegrationsView>('GET', co('/integrations')),
+  saveOnec: (b: OnecConnectionInput) => request<IntegrationsView>('PUT', co('/integrations/onec'), { body: b }),
+  testOnec: (b: Partial<OnecConnectionInput> = {}) => request<IntegrationsView>('POST', co('/integrations/onec/test'), { body: b }),
+  disconnectOnec: () => request<void>('DELETE', co('/integrations/onec')),
+
   // ----- ФНС -----
   fnsEns: () => request<FnsEns>('GET', co('/fns/ens')),
-  fnsCounterparties: (top = 20) => request<FnsCounterparties>('GET', co(`/fns/counterparties?top=${top}`)),
+  fnsCounterparties: (top?: number) => request<FnsCounterparties>('GET', co(top ? `/fns/counterparties?top=${top}` : '/fns/counterparties')),
+  fnsSettings: () => request<FnsSettingsView>('GET', co('/fns/settings')),
+  saveFnsSettings: (s: FnsSettings) => request<FnsSettingsView>('PUT', co('/fns/settings'), { body: s }),
   fnsSync: (b: { year?: number; regime?: string } = {}) => request<FnsSyncResult>('POST', co('/integrations/fns/sync'), { body: b }),
   fnsImportEns: (filename: string, contentB64: string) =>
     request<FnsEnsImportResult>('POST', co('/fns/ens/import'), { body: { filename, content_b64: contentB64 } }),
@@ -281,10 +305,24 @@ export const api = {
   // ----- demo «Прошла неделя» -----
   demoStatus: () => request<DemoStatus>('GET', co('/demo/status')),
   demoAdvanceWeek: () => request<DemoAdvance>('POST', co('/demo/advance-week'), { body: {} }),
+  demoRewindWeek: () => request<DemoRewind>('POST', co('/demo/rewind-week'), { body: {} }),
 
   // ----- advisor (LLM assistant; it only proposes, the user applies) -----
   advisorAsk: (question: string, history: AdvisorHistoryItem[], lang: string) =>
     request<AdvisorAnswer>('POST', co('/advisor/ask'), { body: { question, history, lang } }),
+  advisorPrompts: (lang: string, mode: ChatMode = 'chat') => request<{ items: AdvisorPrompt[] }>('GET', co(`/advisor/prompts?lang=${lang}&mode=${mode}`)),
+  advisorModels: () => request<AdvisorModels>('GET', co('/advisor/models')),
+  advisorChats: () => request<{ items: AdvisorChat[] }>('GET', co('/advisor/chats')),
+  createChat: (b: { mode: ChatMode; reasoning: Reasoning; model?: string; title?: string }) => request<AdvisorChat>('POST', co('/advisor/chats'), { body: b }),
+  getChat: (id: string) => request<{ chat: AdvisorChat; messages: StoredMessage[] }>('GET', co(`/advisor/chats/${id}`)),
+  patchChat: (id: string, b: { title?: string; model?: string }) => request<AdvisorChat>('PATCH', co(`/advisor/chats/${id}`), { body: b }),
+  deleteChat: (id: string) => request<void>('DELETE', co(`/advisor/chats/${id}`)),
+  sendChat: (id: string, question: string, lang: string) =>
+    request<{ user_message: StoredMessage; message: StoredMessage; chat: AdvisorChat }>('POST', co(`/advisor/chats/${id}/messages`), { body: { question, lang } }),
+  activePlan: () => request<{ plan: StrategyPlan | null }>('GET', co('/advisor/plans/active')),
+  deletePlan: (id: string) => request<void>('DELETE', co(`/advisor/plans/${id}`)),
+  advisorSettings: () => request<AdvisorSettingsView>('GET', co('/advisor/settings')),
+  saveAdvisorSettings: (s: AdvisorSettings) => request<AdvisorSettingsView>('PUT', co('/advisor/settings'), { body: s }),
   advisorApply: (s: Pick<AdvisorSuggestion, 'type' | 'params'>) =>
     request<{ id: string; type: string }>('POST', co('/advisor/suggestions/apply'), { body: { type: s.type, params: s.params } }),
 
