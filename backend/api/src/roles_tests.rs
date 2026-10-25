@@ -878,6 +878,7 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
         ("POST", format!("{co}/demo/advance-week"), Edit),
         ("POST", format!("{co}/demo/rewind-week"), Edit),
         ("GET", "/api/v1/gov/key-rate".into(), Read),
+        ("GET", "/api/v1/gov/rates".into(), Read),
         ("POST", format!("{co}/forecasts"), Read),
         ("GET", format!("{co}/forecasts/latest"), Read),
         ("GET", format!("{co}/forecasts/r1"), Read),
@@ -949,7 +950,7 @@ async fn every_route_enforces_its_permission_for_each_role() {
     let (cid, toks) = t.team4();
     let roles = ["director", "admin", "editor", "viewer"];
     let table = route_table(&cid);
-    assert_eq!(table.len(), 80, "таблица маршрутов должна совпадать с docs/roles.md");
+    assert_eq!(table.len(), 81, "таблица маршрутов должна совпадать с docs/roles.md");
     for (method, uri, need) in &table {
         for (i, tok) in toks.iter().enumerate() {
             let before = t.calls().len();

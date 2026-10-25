@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Card } from '../../components/shared/Page'
 import { ErrorState, LoadingState } from '../../components/shared/States'
 import { Notice } from '../../components/shared/Notice'
+import { RubInputNote } from '../../components/shared/RubInputNote'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { usePerms } from '../../app/perms'
@@ -102,7 +103,7 @@ export function FnsSettingsCard() {
               </div>
               <Input
                 label={t('settings.fns.largeDebt')}
-                hint={t('settings.fns.largeDebtHint')}
+                hint={<>{t('settings.fns.largeDebtHint')} <RubInputNote value={Math.round(draft.risk.large_debt_kop / 100)} /></>}
                 type="number"
                 min={0}
                 step={1000}

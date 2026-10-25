@@ -7,6 +7,8 @@ import { ReadOnlyBanner } from './ReadOnlyBanner'
 import { VerifyEmailBanner } from './VerifyEmailBanner'
 import { useAuth } from '../../app/auth'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
+import { useCurrencyRates } from '../../hooks/queries'
+import { useCurrencyVersion } from '../../lib/currency'
 
 export function AppLayout() {
   const tablet = useMediaQuery('(max-width: 1279px)')
@@ -16,6 +18,9 @@ export function AppLayout() {
   const { pathname } = useLocation()
   const { t } = useTranslation()
   const { me } = useAuth()
+  // Amounts are formatted at render time: a changed display currency (or its rates) re-mounts the page so every figure follows.
+  const currency = useCurrencyVersion()
+  useCurrencyRates()
 
   const collapsed = userCollapsed ?? tablet
 
@@ -45,7 +50,7 @@ export function AppLayout() {
         {me?.email && me.email_verified === false && <VerifyEmailBanner email={me.email} />}
         <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto overflow-x-hidden outline-none">
           {/* Re-keyed per route so the short fade replays on navigation; app state outside the page is untouched. */}
-          <div key={pathname} className="page-enter">
+          <div key={`${pathname}|${currency}`} className="page-enter">
             <Outlet />
           </div>
         </main>

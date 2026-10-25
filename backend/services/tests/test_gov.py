@@ -163,3 +163,75 @@ def test_api_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_client", client(tmp_path / "x", {}))
     assert cl.get("/internal/v1/gov/calendar?year=2026").status_code == 503
     assert cl.get("/internal/v1/gov/calendar?year=1900").status_code == 422
+
+
+# --- курсы валют ЦБ (XML_daily.asp) ---
+def test_rates_parser_comma_and_nominal():
+    r = cbr.parse_rates(fx("cbr_rates.xml"))
+    assert r.date == "2026-10-24" and r.source == "cbr.ru" and not r.approx
+    assert list(r.rates) == ["USD", "EUR", "CNY", "GBP", "KZT", "BYN", "TRY", "AED"]  # лишние (AUD, JPY, DZD) отброшены
+    assert r.rates["USD"] == {"nominal": 1, "value": 80.5381}  # «80,5381»: запятая как десятичный разделитель
+    assert r.rates["KZT"] == {"nominal": 100, "value": 17.9797}
+    assert r.rates["TRY"]["nominal"] == 10
+
+
+def test_rates_parser_rejects_bad_input():
+    with pytest.raises(ParseError):
+        cbr.parse_rates("<html>не xml")
+    with pytest.raises(ParseError):
+        cbr.parse_rates('<Other Date="24.10.2026"/>')
+    with pytest.raises(ParseError):
+        cbr.parse_rates('<ValCurs Date="24.10.2026"></ValCurs>')  # нет USD/EUR
+    with pytest.raises(ParseError):
+        cbr.parse_rates('<!DOCTYPE x [<!ENTITY a "b">]><ValCurs Date="24.10.2026"/>')
+    bad = fx("cbr_rates.xml").replace("<Value>80,5381</Value>", "<Value>abc</Value>")
+    with pytest.raises(ParseError):
+        cbr.parse_rates(bad)
+    zero = fx("cbr_rates.xml").replace("<Nominal>10</Nominal>", "<Nominal>0</Nominal>")
+    with pytest.raises(ParseError):
+        cbr.parse_rates(zero)
+
+
+def test_rates_service_fresh_then_cached(tmp_path):
+    c = client(tmp_path, {"XML_daily.asp": fx("cbr_rates.xml")})
+    r = service.rates(c)
+    assert r["date"] == "2026-10-24" and r["source"] == "cbr.ru"
+    assert r["stale"] is False and r["approx"] is False and r["from_cache"] is False
+    assert r["rates"]["EUR"]["value"] == 90.2429
+    again = service.rates(c)
+    assert again["from_cache"] is True and again["stale"] is False
+    assert sum("XML_daily" in u for u in c._open.calls) == 1  # сутки обслуживаются из кэша
+
+
+def test_rates_service_stale_cache_when_cbr_down(tmp_path):
+    c = client(tmp_path, {"XML_daily.asp": fx("cbr_rates.xml")}, ttl=0)  # кэш сразу просрочен
+    assert service.rates(c)["stale"] is False
+    c._open.routes.clear()  # ЦБ отвечает 404
+    r = service.rates(c)
+    assert r["stale"] is True and r["approx"] is False and r["date"] == "2026-10-24"
+    assert r["rates"]["USD"]["value"] == 80.5381
+
+
+def test_rates_service_fallback_when_no_cache(tmp_path):
+    c = client(tmp_path, {})
+    r = service.rates(c)
+    assert r["approx"] is True and r["date"] is None and r["source"] == "cbr.ru"
+    assert set(r["rates"]) == set(cbr.SUPPORTED)
+    assert all(v["nominal"] > 0 and v["value"] > 0 for v in r["rates"].values())
+    assert r["rates"]["KZT"]["nominal"] == 100
+
+
+def test_rates_service_fallback_on_unparseable_body(tmp_path):
+    r = service.rates(client(tmp_path, {"XML_daily.asp": "<html>заглушка DDoS-защиты</html>"}))
+    assert r["approx"] is True
+
+
+def test_rates_endpoint(tmp_path, monkeypatch):
+    c = client(tmp_path, {"XML_daily.asp": fx("cbr_rates.xml")})
+    monkeypatch.setattr(service, "_client", c)
+    monkeypatch.setattr(service, "get_client", lambda: c)
+    res = TestClient(gov_app.app).get("/internal/v1/gov/rates")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["date"] == "2026-10-24" and body["rates"]["CNY"] == {"nominal": 1, "value": 12.0557}
+    assert body["approx"] is False and body["stale"] is False

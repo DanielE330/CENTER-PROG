@@ -3,6 +3,7 @@ import { Bell, Building2, ChevronDown, LogOut, Menu, Settings } from 'lucide-rea
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ThemeToggle } from './ThemeToggle'
+import { CurrencySwitch } from './CurrencySwitch'
 import { useForecast } from '../../hooks/queries'
 import { useAuth, useMe } from '../../app/auth'
 import { usePerms } from '../../app/perms'
@@ -129,6 +130,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
       </div>
 
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
+        <CurrencySwitch />
         <ThemeToggle />
         <Notifications />
         <Profile />

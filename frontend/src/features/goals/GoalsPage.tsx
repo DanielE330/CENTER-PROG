@@ -8,6 +8,7 @@ import { ErrorState, LoadingState } from '../../components/shared/States'
 import { Badge } from '../../components/shared/StatusBadge'
 import type { Tone } from '../../components/shared/StatusBadge'
 import { Notice } from '../../components/shared/Notice'
+import { RubInputNote } from '../../components/shared/RubInputNote'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
@@ -119,7 +120,7 @@ export default function GoalsPage() {
                 )}
                 {editable && <form className="flex flex-col gap-3 border-t border-line pt-4" onSubmit={submit}>
                   <Input label={t('goals.newTitle')} placeholder={t('goals.newPlaceholder')} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} required />
-                  <Input label={t('goals.newAmount')} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+                  <Input label={t('goals.newAmount')} hint={<RubInputNote value={amount} />} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
                   <div>
                     <Button type="submit" variant="primary" disabled={add.isPending || !title.trim()}>
                       {add.isPending ? <Loader2 size={16} className="spin" aria-hidden /> : <Plus size={16} aria-hidden />} {t('goals.add')}

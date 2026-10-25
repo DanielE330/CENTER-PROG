@@ -6,6 +6,7 @@ import { FlaskConical, Loader2, Plus, Trash2 } from 'lucide-react'
 import { PageContainer, PageHeader, Card } from '../../components/shared/Page'
 import { EmptyState, ErrorState, LoadingState } from '../../components/shared/States'
 import { Notice } from '../../components/shared/Notice'
+import { RubInputNote } from '../../components/shared/RubInputNote'
 import { Badge } from '../../components/shared/StatusBadge'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -171,9 +172,9 @@ function Workspace({ v }: { v: ForecastView }) {
             <Input label={t('scenarios.params.costGrowth')} type="number" min={0} max={300} value={p.fixed_cost_growth_pct} onChange={num('fixed_cost_growth_pct')} />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Input label={t('scenarios.params.extraExpense')} inputMode="decimal" placeholder={t('scenarios.params.extraExpensePh')} value={p.extra_expense} onChange={(e) => set('extra_expense', e.target.value)} />
+            <Input label={t('scenarios.params.extraExpense')} hint={<RubInputNote value={p.extra_expense} />} inputMode="decimal" placeholder={t('scenarios.params.extraExpensePh')} value={p.extra_expense} onChange={(e) => set('extra_expense', e.target.value)} />
             <DatePicker label={t('scenarios.params.extraExpenseDate')} value={p.extra_expense_date} onChange={(v) => set('extra_expense_date', v)} />
-            <Input label={t('scenarios.params.extraIncome')} inputMode="decimal" placeholder={t('scenarios.params.extraIncomePh')} value={p.extra_income} onChange={(e) => set('extra_income', e.target.value)} />
+            <Input label={t('scenarios.params.extraIncome')} hint={<RubInputNote value={p.extra_income} />} inputMode="decimal" placeholder={t('scenarios.params.extraIncomePh')} value={p.extra_income} onChange={(e) => set('extra_income', e.target.value)} />
             <DatePicker label={t('scenarios.params.extraIncomeDate')} value={p.extra_income_date} onChange={(v) => set('extra_income_date', v)} />
           </div>
 

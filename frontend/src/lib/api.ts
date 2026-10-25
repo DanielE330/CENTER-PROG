@@ -4,6 +4,7 @@
  */
 import type { AccountMethods, AuditPage, DemoLoginAccount, DemoLoginStatus, ApiTokenInfo, Backtest, Department, ExpectedEvent, FnsCounterparties, FnsEns, FnsEnsImportResult, FnsSyncResult, Goal, GoalStatus, ForecastRun, ImportPreview, DemoAdvance, DemoRewind, DemoStatus, ImportRow, KeyRate, Me, MeWithCodes, MfaChallenge, MfaSetup, Member, NewMemberRequest, NewMemberResult, MemberResetResult, NotificationPrefs, ForecastUpdateMode, Role, NewApiToken, NewInvite, NewExpectedEvent, PlanFact, Retro, ScenarioParams, ScenarioResponse, SprintHistoryItem, SprintView, SyncResult, TgLink, TgKind, TgMember, TgPrefs, TgRole, TgStatus, TgTeam, TaxCalendarRequest, TaxCalendarResult, TeamInvite, Taxonomy, TransactionPage, FnsSettings, FnsSettingsView, IntegrationsView, OnecConnectionInput } from '../types'
 import type { EvalRow } from './datasetSplit'
+import type { RatesPayload } from './currency'
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
 
@@ -270,4 +271,5 @@ export const api = {
   // ----- plan / fact, gov -----
   planFact: (days: number) => request<PlanFact>('GET', co(`/plan-fact?days=${days}`)),
   keyRate: () => request<KeyRate>('GET', '/api/v1/gov/key-rate'),
+  govRates: () => request<RatesPayload>('GET', '/api/v1/gov/rates'),
 }

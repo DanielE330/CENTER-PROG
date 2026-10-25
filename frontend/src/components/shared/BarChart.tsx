@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import { useTranslation } from 'react-i18next'
-import { formatAxisNumber, formatCurrency, formatShortDate } from '../../lib/formatters'
+import { formatAxisNumber, formatChartMoney, formatShortDate } from '../../lib/formatters'
+import { chartRub, useCurrencyVersion } from '../../lib/currency'
 import { cssVar, prefersReducedMotion } from '../../lib/utils'
 import { useTheme } from '../../lib/theme'
 
@@ -11,7 +12,7 @@ export interface BarSeries {
   token: 'primary' | 'danger' | 'warning' | 'neutral'
   /** Lighter fill, e.g. for "plan" next to "fact". */
   soft?: boolean
-  /** Rubles. Display-only. */
+  /** Rubles. Display-only; converted to the display currency when drawn. */
   data: number[]
   stack?: string
 }
@@ -23,6 +24,7 @@ export function BarChart({ categories, series, height = 300, ariaLabel, weekPref
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   const theme = useTheme()
+  const currency = useCurrencyVersion()
   // A theme switch only recolours the chart: no data morphing, so nothing moves while the page cross-fades.
   const lastTheme = useRef(theme)
   const themeSwitched = lastTheme.current !== theme
@@ -44,17 +46,17 @@ export function BarChart({ categories, series, height = 300, ariaLabel, weekPref
       legend: { top: 0, left: 0, icon: 'roundRect', itemWidth: 14, itemHeight: 8, textStyle: { color: muted, fontSize: 12 } },
       tooltip: {
         trigger: 'axis', confine: true, backgroundColor: surface, borderColor: line, textStyle: { color: ink, fontSize: 12 },
-        valueFormatter: (v) => formatCurrency(v as number),
+        valueFormatter: (v) => formatChartMoney(v as number),
         axisPointer: { type: 'shadow' },
       },
       xAxis: { type: 'category', data: categories, axisTick: { show: false }, axisLine: { lineStyle: { color: line } }, axisLabel: { color: muted, fontSize: 12, hideOverlap: true, formatter: label } },
       yAxis: { type: 'value', axisLabel: { color: muted, fontSize: 12, formatter: (v: number) => formatAxisNumber(v) }, splitLine: { lineStyle: { color: line } } },
       series: series.map((s) => ({
-        id: s.name, name: s.name, type: 'bar' as const, stack: s.stack, data: s.data,
+        id: s.name, name: s.name, type: 'bar' as const, stack: s.stack, data: s.data.map(chartRub),
         itemStyle: { color: cssVar(TOKENS[s.token], '#176B45'), opacity: s.soft ? 0.45 : 1, borderRadius: [3, 3, 0, 0] },
       })),
     }
-  }, [categories, series, theme, lang, t, weekPrefix])
+  }, [categories, series, theme, lang, t, weekPrefix, currency])
   return (
     <div role="img" aria-label={ariaLabel} style={{ width: '100%', height }}>
       <ReactECharts option={option} style={{ width: '100%', height: '100%' }} />

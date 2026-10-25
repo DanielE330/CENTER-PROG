@@ -194,6 +194,7 @@ pub fn tenant_routes() -> Router<AppState> {
         .route(&format!("{co}/demo/advance-week"), post(demo::advance_week))
         .route(&format!("{co}/demo/rewind-week"), post(demo::rewind_week))
         .route("/api/v1/gov/key-rate", get(http::gov_key_rate))
+        .route("/api/v1/gov/rates", get(http::gov_rates))
         .route(&format!("{co}/forecasts"), post(http::create_forecast))
         .route(&format!("{co}/forecasts/latest"), get(http::to_forecast))
         .route(&format!("{co}/forecasts/{{rid}}"), get(http::to_forecast))

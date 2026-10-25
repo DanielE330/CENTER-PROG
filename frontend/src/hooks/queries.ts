@@ -1,8 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { TransactionQuery } from '../lib/api'
 import { useAuth } from '../app/auth'
+import { setRates } from '../lib/currency'
 import { buildView } from '../features/forecast/model'
 import type { ForecastView } from '../features/forecast/model'
 import type { AdvisorChat, AdvisorHistoryItem, AdvisorSuggestion, ChatMode } from '../features/assistant/advisorTypes'
@@ -256,4 +257,16 @@ export function useRewindWeek() {
 export function useKeyRate() {
   const key = useKey()
   return useQuery({ queryKey: key('key-rate'), queryFn: api.keyRate, staleTime: 60 * 60_000 })
+}
+
+/**
+ * CBR exchange rates for the display currency (the server caches them for a day). The result is pushed into the
+ * currency store, which also keeps the last good set in localStorage so the first paint already has rates.
+ */
+export function useCurrencyRates() {
+  const q = useQuery({ queryKey: ['gov-rates'], queryFn: api.govRates, staleTime: 6 * 60 * 60_000, retry: 1 })
+  useEffect(() => {
+    if (q.data) setRates(q.data)
+  }, [q.data])
+  return q
 }

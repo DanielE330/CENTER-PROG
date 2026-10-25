@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="windows-1251"?>
+<ValCurs Date="24.10.2026" name="Foreign Currency Market">
+<Valute ID="R01010"><NumCode>036</NumCode><CharCode>AUD</CharCode><Nominal>1</Nominal><Name>Австралийский доллар</Name><Value>56,4250</Value><VunitRate>56,425</VunitRate></Valute>
+<Valute ID="R01030"><NumCode>012</NumCode><CharCode>DZD</CharCode><Nominal>100</Nominal><Name>Алжирских динаров</Name><Value>59,7463</Value><VunitRate>0,597463</VunitRate></Valute>
+<Valute ID="R01035"><NumCode>826</NumCode><CharCode>GBP</CharCode><Nominal>1</Nominal><Name>Фунт стерлингов</Name><Value>107,6231</Value><VunitRate>107,6231</VunitRate></Valute>
+<Valute ID="R01090B"><NumCode>933</NumCode><CharCode>BYN</CharCode><Nominal>1</Nominal><Name>Белорусский рубль</Name><Value>27,3381</Value><VunitRate>27,3381</VunitRate></Valute>
+<Valute ID="R01230"><NumCode>784</NumCode><CharCode>AED</CharCode><Nominal>1</Nominal><Name>Дирхам ОАЭ</Name><Value>21,9300</Value><VunitRate>21,93</VunitRate></Valute>
+<Valute ID="R01235"><NumCode>840</NumCode><CharCode>USD</CharCode><Nominal>1</Nominal><Name>Доллар США</Name><Value>80,5381</Value><VunitRate>80,5381</VunitRate></Valute>
+<Valute ID="R01239"><NumCode>978</NumCode><CharCode>EUR</CharCode><Nominal>1</Nominal><Name>Евро</Name><Value>90,2429</Value><VunitRate>90,2429</VunitRate></Valute>
+<Valute ID="R01335"><NumCode>398</NumCode><CharCode>KZT</CharCode><Nominal>100</Nominal><Name>Тенге</Name><Value>17,9797</Value><VunitRate>0,179797</VunitRate></Valute>
+<Valute ID="R01375"><NumCode>156</NumCode><CharCode>CNY</CharCode><Nominal>1</Nominal><Name>Юань</Name><Value>12,0557</Value><VunitRate>12,0557</VunitRate></Valute>
+<Valute ID="R01700J"><NumCode>949</NumCode><CharCode>TRY</CharCode><Nominal>10</Nominal><Name>Турецких лир</Name><Value>16,2429</Value><VunitRate>1,62429</VunitRate></Valute>
+<Valute ID="R01820"><NumCode>392</NumCode><CharCode>JPY</CharCode><Nominal>100</Nominal><Name>Иен</Name><Value>51,4785</Value><VunitRate>0,514785</VunitRate></Valute>
+</ValCurs>

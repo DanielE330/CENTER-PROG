@@ -1426,6 +1426,15 @@ pub async fn gov_key_rate(axum::extract::State(st): axum::extract::State<AppStat
     Ok(Json(r.json()))
 }
 
+/// Курсы валют ЦБ РФ на сегодня (сервис gov, XML_daily.asp): только для пересчёта отображения, учёт остаётся в рублях.
+pub async fn gov_rates(axum::extract::State(st): axum::extract::State<AppState>, _p: Reader, ctx: Ctx) -> R<Json<Value>> {
+    let r = st.gov.json(Method::GET, "/internal/v1/gov/rates", &ctx, None).await?;
+    if !r.status.is_success() {
+        return Err(err(StatusCode::BAD_GATEWAY, "gov_error", "Не удалось получить курсы валют"));
+    }
+    Ok(Json(r.json()))
+}
+
 // ---------- синхронизация обязательств из интеграций ----------
 #[derive(Deserialize, Default)]
 pub struct SyncBody {

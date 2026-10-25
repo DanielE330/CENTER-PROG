@@ -8,6 +8,7 @@ import { DatePicker } from '../../components/ui/DatePicker'
 import { Select } from '../../components/ui/Select'
 import { Button } from '../../components/ui/Button'
 import { Notice } from '../../components/shared/Notice'
+import { RubInputNote } from '../../components/shared/RubInputNote'
 import { useCreateEvent, useTaxCalendar } from '../../hooks/queries'
 import { parseRubToKop } from '../../lib/money'
 import { errorText } from '../../i18n/helpers'
@@ -84,7 +85,7 @@ export function AddEventModal({ open, onClose }: { open: boolean; onClose: () =>
               onChange={(v) => set('direction', v)}
               options={[{ value: 'in', label: t('obligations.receipt') }, { value: 'out', label: t('obligations.payment') }]}
             />
-            <Input label={t('obligations.add.amount')} inputMode="decimal" required placeholder="300 000" value={f.amount} onChange={(e) => set('amount', e.target.value)} />
+            <Input label={t('obligations.add.amount')} hint={<RubInputNote value={f.amount} />} inputMode="decimal" required placeholder="300 000" value={f.amount} onChange={(e) => set('amount', e.target.value)} />
             <Input label={t('obligations.add.name')} required maxLength={200} value={f.title} onChange={(e) => set('title', e.target.value)} />
             <Input label={t('obligations.add.counterparty')} value={f.counterparty} onChange={(e) => set('counterparty', e.target.value)} />
             <Select
@@ -132,7 +133,7 @@ export function AddEventModal({ open, onClose }: { open: boolean; onClose: () =>
           )}
           <Input
             label={t('obligations.tax.label')}
-            hint={t('obligations.tax.hint')}
+            hint={<>{t('obligations.tax.hint')} <RubInputNote value={taxAmount} /></>}
             inputMode="decimal"
             value={taxAmount}
             onChange={(e) => setTaxAmount(e.target.value)}

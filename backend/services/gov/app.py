@@ -31,6 +31,12 @@ def key_rate():
     return _call(service.key_rate)
 
 
+@app.get("/internal/v1/gov/rates")
+def rates():
+    # service.rates сам деградирует (кэш -> запасной набор), поэтому ошибок источника наружу не отдаёт
+    return service.rates()
+
+
 @app.get("/internal/v1/gov/calendar")
 def calendar(year: int = Query(default_factory=lambda: date.today().year, ge=2013, le=2100)):
     return _call(service.production_calendar, year)

@@ -1,9 +1,11 @@
 /**
  * Locale-aware formatting. All functions read the active i18n language at call time, so they also
- * work inside chart callbacks. Currency is independent of the language (RUB).
+ * work inside chart callbacks. Currency is independent of the language (display currency, default RUB).
  */
 import { parseISO } from 'date-fns'
 import i18n from '../i18n'
+import { activeCurrency, CURRENCY_SYMBOLS, kopToDisplay, rubToDisplay } from './currency'
+import type { CurrencyCode } from './currency'
 
 const LOCALES = { ru: 'ru-RU', en: 'en-GB' } as const
 
@@ -11,51 +13,74 @@ export function getLocale(): string {
   return LOCALES[(i18n.language?.slice(0, 2) as keyof typeof LOCALES) ?? 'ru'] ?? LOCALES.ru
 }
 
-const CURRENCY = 'RUB'
+/**
+ * Money is stored and computed in rubles; the user may pick another DISPLAY currency (lib/currency.ts).
+ * Everything below converts at call time, so chart callbacks and i18n helpers follow the choice too.
+ */
 
-export function formatCurrency(value: number | null | undefined): string {
-  if (value == null) return '—'
-  return new Intl.NumberFormat(getLocale(), {
-    style: 'currency',
-    currency: CURRENCY,
-    currencyDisplay: 'narrowSymbol',
-    maximumFractionDigits: 0,
-  })
-    .format(value)
-    .replace(/ /g, ' ')
+/** Whole units are enough for large sums; small foreign amounts keep cents (1 200 ₽ is only ≈ $15). */
+function fractionDigits(code: CurrencyCode, value: number): number {
+  return code === 'RUB' || Math.abs(value) >= 100 ? 0 : 2
 }
 
-/** Money from the API: a decimal string of kopecks. Rounded to whole rubles without float arithmetic. */
+/** Formats an amount that is ALREADY in the active currency, swapping Intl's sign for ours (₽ $ € ¥ £ ₸ Br ₺ AED). */
+function money(value: number, opts: { compact?: boolean } = {}): string {
+  const code = activeCurrency()
+  const fmt = new Intl.NumberFormat(getLocale(), {
+    style: 'currency',
+    currency: code,
+    currencyDisplay: 'narrowSymbol',
+    ...(opts.compact ? { notation: 'compact' as const, maximumFractionDigits: 1 } : { maximumFractionDigits: fractionDigits(code, value) }),
+  })
+  return fmt
+    .formatToParts(value)
+    .map((p) => (p.type === 'currency' ? CURRENCY_SYMBOLS[code] : p.value))
+    .join('')
+}
+
+/** Rubles (a number) -> the display currency. */
+export function formatCurrency(value: number | null | undefined): string {
+  if (value == null) return '—'
+  return money(rubToDisplay(value)).replace(/\u00A0/g, '\u202F')
+}
+
+/** Money from the API: a decimal string of kopecks. In rubles it is rounded to whole rubles without float arithmetic. */
 export function formatKop(kop: string | null | undefined, opts: { sign?: boolean } = {}): string {
   if (kop == null || kop === '') return '—'
   const v = BigInt(kop)
   const abs = v < 0n ? -v : v
-  const rub = (abs + 50n) / 100n
-  const text = new Intl.NumberFormat(getLocale(), {
-    style: 'currency',
-    currency: CURRENCY,
-    currencyDisplay: 'narrowSymbol',
-    maximumFractionDigits: 0,
-  })
-    .format(rub)
-    .replace(/ /g, ' ')
-  if (v < 0n && rub > 0n) return `−${text}`
-  return opts.sign && rub > 0n ? `+${text}` : text
+  let text: string
+  let nonZero: boolean
+  if (activeCurrency() === 'RUB') {
+    const rub = (abs + 50n) / 100n
+    text = money(Number(rub))
+    nonZero = rub > 0n
+  } else {
+    const conv = kopToDisplay(abs.toString())
+    text = money(conv)
+    nonZero = Number(conv.toFixed(fractionDigits(activeCurrency(), conv))) > 0
+  }
+  if (v < 0n && nonZero) return `−${text}`
+  return opts.sign && nonZero ? `+${text}` : text
 }
 
-/** Compact money: 12,5 млн ₽ / ₽12.5M. */
+/** Compact money from rubles: 12,5 млн ₽ / $12.5M. */
 export function formatCompact(value: number | null | undefined): string {
   if (value == null) return '—'
-  return new Intl.NumberFormat(getLocale(), {
-    style: 'currency',
-    currency: CURRENCY,
-    currencyDisplay: 'narrowSymbol',
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(value)
+  return money(rubToDisplay(value), { compact: true })
 }
 
-/** Compact number without a currency sign — for chart axes. */
+/** Chart tooltips: an amount already converted with `chartRub()`. */
+export function formatChartMoney(value: number | null | undefined): string {
+  return value == null ? '—' : money(value).replace(/\u00A0/g, '\u202F')
+}
+
+/** Chart tooltips: compact variant of an amount already converted with `chartRub()`. */
+export function formatChartCompact(value: number | null | undefined): string {
+  return value == null ? '—' : money(value, { compact: true })
+}
+
+/** Compact number without a currency sign — for money chart axes. Takes a value already converted with `chartRub()`. */
 export function formatAxisNumber(value: number): string {
   return new Intl.NumberFormat(getLocale(), { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 }

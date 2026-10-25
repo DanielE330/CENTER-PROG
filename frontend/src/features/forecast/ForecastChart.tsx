@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import type { ForecastPoint } from '../../types'
-import { formatAxisNumber, formatCompact, formatCurrency, formatDate, formatPercent, formatShortDate } from '../../lib/formatters'
+import { formatAxisNumber, formatChartCompact, formatChartMoney, formatDate, formatPercent, formatShortDate } from '../../lib/formatters'
+import { chartRub, useCurrencyVersion } from '../../lib/currency'
 import { cssVar, prefersReducedMotion } from '../../lib/utils'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from '../../lib/theme'
@@ -23,10 +24,12 @@ interface Props {
   height?: number
 }
 
-export function ForecastChart({ points, today, shortageDate, compare, forecastName: forecastNameProp, height = 380 }: Props) {
+export function ForecastChart({ points: rubPoints, today, shortageDate, compare, forecastName: forecastNameProp, height = 380 }: Props) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   const theme = useTheme()
+  // Data arrive in rubles; the chart draws in the display currency so axes pick round ticks in that unit.
+  const currency = useCurrencyVersion()
   // A theme switch only recolours the chart: no data morphing, so nothing moves while the page cross-fades.
   const lastTheme = useRef(theme)
   const themeSwitched = lastTheme.current !== theme
@@ -45,9 +48,11 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
     const surface = cssVar('--c-surface', '#FFFFFF')
     const onDanger = cssVar('--c-on-primary', '#FFFFFF')
 
+    const scale = (v: number | null | undefined) => (v == null ? v : chartRub(v))
+    const points: ForecastPoint[] = rubPoints.map((p) => ({ ...p, actual: scale(p.actual) ?? null, forecast: scale(p.forecast) ?? null, lower: scale(p.lower) ?? null, upper: scale(p.upper) ?? null, inflow: chartRub(p.inflow), outflow: chartRub(p.outflow) }))
     const animate = !prefersReducedMotion() && points.length <= 400
     const dates = points.map((p) => p.date)
-    const compareByDate = new Map(compare?.points.map((c) => [c.date, c.balance]))
+    const compareByDate = new Map(compare?.points.map((c) => [c.date, c.balance == null ? null : chartRub(c.balance)]))
     const hasBand = points.some((p) => p.lower != null && p.upper != null)
 
     // Contiguous ranges where the supplied forecast is below zero.
@@ -114,7 +119,7 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
         symbol: 'none',
         silent: true,
         data: [
-          { yAxis: 0, lineStyle: { color: ink, type: 'dashed', width: 1 }, label: { formatter: formatCurrency(0), color: ink, position: 'insideEndTop' } },
+          { yAxis: 0, lineStyle: { color: ink, type: 'dashed', width: 1 }, label: { formatter: formatChartMoney(0), color: ink, position: 'insideEndTop' } },
           ...(dates.includes(today)
             ? [{ xAxis: today, lineStyle: { color: muted, type: 'solid' as const, width: 1 }, label: { show: dates.indexOf(today) > 2, formatter: t('chart.today'), color: muted, position: 'insideEndTop' as const } }]
             : []),
@@ -193,19 +198,19 @@ export function ForecastChart({ points, today, shortageDate, compare, forecastNa
             `<div style="display:flex;justify-content:space-between;gap:20px"><span style="color:${muted}">${k}</span><b style="font-variant-numeric:tabular-nums;${color ? `color:${color}` : ''}">${v}</b></div>`
           return [
             `<div style="min-width:210px"><div style="font-weight:600;margin-bottom:4px">${formatDate(p.date)} · ${isActual ? t('chart.tooltip.actual') : t('chart.tooltip.forecast')}</div>`,
-            row(isActual ? t('chart.tooltip.balanceActual') : t('chart.tooltip.balanceOf', { name: forecastName.toLowerCase() }), bal != null ? formatCurrency(bal) : t('common.noData'), bal != null && bal < 0 ? danger : undefined),
-            cmp !== undefined ? row(compare!.name, cmp != null ? formatCurrency(cmp) : t('common.noData')) : '',
-            p.lower != null && p.upper != null && !isActual ? row(t('chart.tooltip.range'), `${formatCompact(p.lower)} … ${formatCompact(p.upper)}`) : '',
+            row(isActual ? t('chart.tooltip.balanceActual') : t('chart.tooltip.balanceOf', { name: forecastName.toLowerCase() }), bal != null ? formatChartMoney(bal) : t('common.noData'), bal != null && bal < 0 ? danger : undefined),
+            cmp !== undefined ? row(compare!.name, cmp != null ? formatChartMoney(cmp) : t('common.noData')) : '',
+            p.lower != null && p.upper != null && !isActual ? row(t('chart.tooltip.range'), `${formatChartCompact(p.lower)} … ${formatChartCompact(p.upper)}`) : '',
             p.probNegative != null && !isActual ? row(t('chart.tooltip.probNegative'), formatPercent(p.probNegative), p.probNegative >= 0.25 ? danger : undefined) : '',
-            p.inflow || p.outflow ? row(t('chart.tooltip.inflow'), formatCurrency(p.inflow), primary) : '',
-            p.inflow || p.outflow ? row(t('chart.tooltip.outflow'), formatCurrency(p.outflow), warning) : '',
+            p.inflow || p.outflow ? row(t('chart.tooltip.inflow'), formatChartMoney(p.inflow), primary) : '',
+            p.inflow || p.outflow ? row(t('chart.tooltip.outflow'), formatChartMoney(p.outflow), warning) : '',
             '</div>',
           ].join('')
         },
       },
       series,
     }
-  }, [points, today, shortageDate, compare, forecastName, theme, lang, t])
+  }, [rubPoints, today, shortageDate, compare, forecastName, theme, lang, t, currency])
 
   return (
     <div role="img" aria-label={t('chart.aria')} style={{ width: '100%', height }}>

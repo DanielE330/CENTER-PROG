@@ -1,8 +1,9 @@
 """Высокоуровневые функции: клиент + парсер -> простые dict (JSON)."""
+import time
 from datetime import date, timedelta
 
 from .client import GovClient
-from .errors import ParseError
+from .errors import FetchError, ParseError
 from .parsers import calendar as cal
 from .parsers import cbr, nalog
 
@@ -26,6 +27,18 @@ def key_rate(client=None, today=None) -> dict:
     # окно в ~13 месяцев, чтобы увидеть последнее изменение ставки
     resp = client.get(cbr.url(today - timedelta(days=400), today))
     return {**cbr.parse_key_rate(resp.body).to_dict(), "url": resp.url, **_meta(resp)}
+
+
+def rates(client=None) -> dict:
+    """Курсы ЦБ РФ на сегодня. Кэш на сутки; ЦБ недоступен -> просроченный кэш (stale: true);
+    нет и кэша -> запасной набор приблизительных курсов (approx: true). Только для пересчёта отображения."""
+    client = client or get_client()
+    try:
+        resp = client.get(cbr.RATES_URL)
+        return {**cbr.parse_rates(resp.body).to_dict(), "url": resp.url, **_meta(resp)}
+    except (FetchError, ParseError):
+        return {**cbr.fallback_rates().to_dict(), "url": cbr.RATES_URL, "fetched_at": int(time.time()),
+                "from_cache": False, "stale": False}
 
 
 def production_calendar(year: int, client=None) -> dict:
