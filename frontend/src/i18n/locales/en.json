@@ -777,13 +777,39 @@
       "missed": "Not received",
       "pending": "Pending"
     },
-    "planNote": "The plan for recurring payments follows templates found in the whole history (in-sample); manual events and invoices follow the entered dates."
+    "planNote": "The plan for recurring payments follows templates found in the whole history (in-sample); manual events and invoices follow the entered dates.",
+    "strategy": {
+      "emptyTitle": "Strategy from the AI CFO",
+      "emptyText": "In plan mode the advisor analyses your data and builds a plan: dated steps with amounts, risks and what to watch here.",
+      "make": "Build a plan",
+      "title": "Strategy: {{title}}",
+      "subtitle": "Built by the AI advisor {{date}}",
+      "badge": "Active",
+      "goal": "Goal:",
+      "kind": {
+        "income": "Income",
+        "expense": "Expense",
+        "reserve": "Reserve",
+        "negotiation": "Negotiation",
+        "tax": "Taxes",
+        "financing": "Financing",
+        "control": "Control"
+      },
+      "due": "by {{date}}",
+      "overdue": "{{date}} passed",
+      "checkpoints": "What to watch on Plan vs fact",
+      "risks": "Plan risks",
+      "openChat": "Open chat",
+      "remake": "Rebuild",
+      "remove": "Remove strategy",
+      "showAll": "Show the full strategy: {{count}} steps, risks and checkpoints"
+    }
   },
   "assistant": {
     "title": "AI assistant",
-    "description": "Explains the causes of risk and helps check scenarios.",
+    "description": "AI CFO: cash, taxes, 1C, risks, strategies and app guidance. Chats are saved.",
     "rulesBadge": "Rule-based answers",
-    "welcome": "Hello! I am the AI advisor: I answer from the forecast and your company data — gap risk, upcoming payments, plan vs actual, counterparties (tax registry data) and what-if scenarios. Numbers come from the calculations, nothing is made up. What I may do — view, propose or add payments myself — is set by the owner in Settings → AI advisor. Prompts below show where to start.",
+    "welcome": "Hello! I am the AI CFO: I explain cash flow, taxes, 1C, risks and how to use the app in plain words, and take numbers from the company data. I may ask a clarifying question. What I may do — view, propose or add payments myself — is set by the owner in Settings → AI advisor.",
     "noForecastTitle": "No forecast to analyse",
     "noForecastText": "The assistant answers from the saved forecast. Upload a statement and build a forecast first.",
     "error": "Could not get an answer: {{reason}}",
@@ -793,7 +819,7 @@
     "bot": "Assistant",
     "suggestionsAria": "Quick questions",
     "inputAria": "Question to the assistant",
-    "inputPlaceholder": "Ask a question about the forecast…",
+    "inputPlaceholder": "Ask about cash, taxes, 1C or the app…",
     "send": "Send",
     "source": "Source: forecast as of {{asOfDate}}, run {{id}}.",
     "monthly": "monthly",
@@ -866,7 +892,45 @@
     "followupsAria": "What to ask next",
     "disabledTitle": "AI advisor is off",
     "disabledText": "The company owner switched the advisor off; answers come from forecast rules.",
-    "openSettings": "Advisor settings"
+    "openSettings": "Advisor settings",
+    "chatsAria": "Advisor chats",
+    "newChat": "New chat",
+    "newPlan": "New strategy (plan mode)",
+    "noChats": "No chats yet. Start one — it will be saved.",
+    "modePlan": "Plan",
+    "modeChat": "Consultant",
+    "deleteChat": "Delete chat “{{title}}”",
+    "deleteTitle": "Delete the chat?",
+    "deleteText": "Chat “{{title}}” and its messages will be deleted permanently. A saved strategy on Plan vs fact stays.",
+    "startTitle": "Start a conversation with the AI CFO",
+    "startText": "Chats are saved: you can switch tabs and come back. Each chat keeps its own context.",
+    "newTitle": "New chat",
+    "modeLabel": "Mode",
+    "modeChatHint": "Questions about cash, taxes, 1C, risks and how to use the app.",
+    "modePlanHint": "Builds a strategy from your data and saves it on the Plan vs fact screen. Asks clarifying questions first.",
+    "reasoningLabel": "Reasoning depth",
+    "reasoningHint": "Deeper means a more careful analysis and a longer wait. Set at the start and fixed for the chat.",
+    "effort": {
+      "low": "Fast",
+      "medium": "Normal",
+      "high": "Deep",
+      "xhigh": "Maximum"
+    },
+    "effortHint": {
+      "low": "seconds",
+      "medium": "up to a minute",
+      "high": "1–3 minutes",
+      "xhigh": "up to 5 minutes"
+    },
+    "modelLabel": "Model",
+    "modelDefault": "Default ({{model}})",
+    "start": "Start",
+    "reasoningBadge": "Reasoning: {{level}}",
+    "welcomePlan": "Plan mode. I will gather the company data — forecast, payments, plan vs fact, clients and their risks — and build a strategy with steps, dates and amounts. If inputs are missing (goal, deadline, reserve) I will ask first. The strategy will appear on the Plan vs fact screen.",
+    "planSaved": "Strategy saved — open Plan vs fact",
+    "thinkingPlan": "The advisor is gathering data and building the plan…",
+    "inputPlaceholderPlan": "What is the goal? E.g. stay out of the red until year end",
+    "enterHint": "Enter — send, Shift+Enter — new line"
   },
   "settings": {
     "title": "Settings",
@@ -963,14 +1027,16 @@
         "run_scenarios": "Run what-if scenarios",
         "propose_payments": "Propose payments",
         "add_payments": "Add payments to the plan directly",
-        "recalc_forecast": "Recalculate the forecast"
+        "recalc_forecast": "Recalculate the forecast",
+        "make_plans": "Build strategies"
       },
       "permHint": {
         "read_forecast": "Balance, dates and size of possible gaps, upcoming payments",
         "read_operations": "Statement by category, missed and deviating payments",
         "read_counterparties": "Largest clients and suppliers, data exported from the tax registry",
         "run_scenarios": "Late payments, revenue drop, cost growth — nothing saved",
-        "propose_payments": "A payment card: the user adds it"
+        "propose_payments": "A payment card: the user adds it",
+        "make_plans": "Saves a plan for the Plan vs fact screen; does not change company data."
       },
       "writeHint": "Writes company data. Works only for members who can edit; every action is shown in the chat and the audit log.",
       "showPrompts": "“What to write” prompts",

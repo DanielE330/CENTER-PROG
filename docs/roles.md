@@ -113,7 +113,16 @@
 | `POST /api/v1/companies/{cid}/advisor/suggestions/apply` | edit | |
 | `GET /api/v1/companies/{cid}/advisor/settings` | read | что разрешено ИИ-консультанту; `effective` — права для текущего пользователя |
 | `PUT /api/v1/companies/{cid}/advisor/settings` | admin | выдать или забрать права консультанта; право записи (`add_payments`, `recalc_forecast`) действует только для ролей с edit |
-| `GET /api/v1/companies/{cid}/advisor/prompts` | read | подсказки «что написать» под полем чата |
+| `GET /api/v1/companies/{cid}/advisor/prompts` | read | подсказки «что написать» под полем чата (`mode=plan` — для режима «План») |
+| `GET /api/v1/companies/{cid}/advisor/models` | read | модели подписки и уровни размышления |
+| `GET /api/v1/companies/{cid}/advisor/chats` | read | свои чаты с консультантом |
+| `POST /api/v1/companies/{cid}/advisor/chats` | read | новый чат: режим, модель, уровень размышления |
+| `GET /api/v1/companies/{cid}/advisor/chats/{id}` | read | свой чат с сообщениями; чужой — 404 |
+| `PATCH /api/v1/companies/{cid}/advisor/chats/{id}` | read | переименовать свой чат, сменить модель |
+| `DELETE /api/v1/companies/{cid}/advisor/chats/{id}` | read | удалить свой чат |
+| `POST /api/v1/companies/{cid}/advisor/chats/{id}/messages` | read | вопрос в чате с его контекстом; права консультанта — как у `ask` |
+| `GET /api/v1/companies/{cid}/advisor/plans/active` | read | активная стратегия консультанта для «Плана и факта» |
+| `DELETE /api/v1/companies/{cid}/advisor/plans/{id}` | edit | снять стратегию |
 | `GET /api/v1/companies/{cid}/demo/status` | read | |
 | `POST /api/v1/companies/{cid}/demo/advance-week` | edit | плюс условия демо |
 | `GET /api/v1/gov/key-rate` | read | |

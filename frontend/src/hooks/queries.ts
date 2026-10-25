@@ -5,7 +5,7 @@ import type { TransactionQuery } from '../lib/api'
 import { useAuth } from '../app/auth'
 import { buildView } from '../features/forecast/model'
 import type { ForecastView } from '../features/forecast/model'
-import type { AdvisorHistoryItem, AdvisorSuggestion } from '../features/assistant/advisorTypes'
+import type { AdvisorChat, AdvisorHistoryItem, AdvisorSuggestion, ChatMode } from '../features/assistant/advisorTypes'
 import type { NewExpectedEvent, ScenarioParams, TaxCalendarRequest } from '../types'
 
 /** All company data lives under ['co', companyId, ...], so one call refreshes everything after a data change. */
@@ -128,9 +128,87 @@ export function useAdvisorAsk() {
 }
 
 /** Prompts under the chat input, built from company data and the advisor's permissions. */
-export function useAdvisorPrompts(lang: string) {
+export function useAdvisorPrompts(lang: string, mode: ChatMode = 'chat') {
   const key = useKey()
-  return useQuery({ queryKey: key('advisor-prompts', lang), queryFn: () => api.advisorPrompts(lang), retry: false, staleTime: 60_000 })
+  return useQuery({ queryKey: key('advisor-prompts', lang, mode), queryFn: () => api.advisorPrompts(lang, mode), retry: false, staleTime: 60_000 })
+}
+
+export function useAdvisorModels() {
+  const key = useKey()
+  return useQuery({ queryKey: key('advisor-models'), queryFn: api.advisorModels, staleTime: 10 * 60_000, retry: false })
+}
+
+export function useAdvisorChats() {
+  const key = useKey()
+  return useQuery({ queryKey: key('advisor-chats'), queryFn: api.advisorChats })
+}
+
+/** A saved chat with its messages; refetched on focus so an answer that finished while the user was away shows up. */
+export function useAdvisorChat(id: string | null) {
+  const key = useKey()
+  return useQuery({ queryKey: key('advisor-chat', id), queryFn: () => api.getChat(id as string), enabled: !!id, refetchOnWindowFocus: true })
+}
+
+/** The advisor's active strategy for Plan vs fact. */
+export function useActivePlan() {
+  const key = useKey()
+  return useQuery({ queryKey: key('advisor-plan'), queryFn: api.activePlan, retry: false })
+}
+
+export function useDeletePlan() {
+  const key = useKey()
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (id: string) => api.deletePlan(id), onSuccess: () => void qc.invalidateQueries({ queryKey: key('advisor-plan') }) })
+}
+
+export function useCreateChat() {
+  const key = useKey()
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: api.createChat, onSuccess: () => void qc.invalidateQueries({ queryKey: key('advisor-chats') }) })
+}
+
+export function usePatchChat() {
+  const key = useKey()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { id: string; title?: string; model?: string }) => api.patchChat(v.id, { title: v.title, model: v.model }),
+    onSuccess: (c) => {
+      qc.setQueryData(key('advisor-chat', c.id), (old: { chat: AdvisorChat } | undefined) => (old ? { ...old, chat: c } : old))
+      void qc.invalidateQueries({ queryKey: key('advisor-chats') })
+    },
+  })
+}
+
+export function useDeleteChat() {
+  const key = useKey()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.deleteChat(id),
+    onSuccess: (_v, id) => {
+      qc.removeQueries({ queryKey: key('advisor-chat', id) })
+      void qc.invalidateQueries({ queryKey: key('advisor-chats') })
+    },
+  })
+}
+
+export const sendKey = (cid: string) => ['co', cid, 'advisor-send'] as const
+
+/** A question in a saved chat. Lives in the mutation cache, not in the page: leaving the tab does not lose the answer,
+ * and on return the page sees the question still pending (useMutationState with sendKey). */
+export function useSendChat() {
+  const key = useKey()
+  const { me } = useAuth()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationKey: sendKey(me?.company_id ?? ''),
+    mutationFn: (v: { chatId: string; question: string; lang: string }) => api.sendChat(v.chatId, v.question, v.lang),
+    onSettled: (r, _e, v) => {
+      void qc.invalidateQueries({ queryKey: key('advisor-chat', v.chatId) })
+      void qc.invalidateQueries({ queryKey: key('advisor-chats') })
+      if (r?.message.meta.plan_id) void qc.invalidateQueries({ queryKey: key('advisor-plan') })
+      if (r?.message.meta.actions?.length) void qc.invalidateQueries({ queryKey: ['co'] })
+    },
+  })
 }
 
 /** Applying a suggestion creates an expected event, so every cached screen is refreshed. */

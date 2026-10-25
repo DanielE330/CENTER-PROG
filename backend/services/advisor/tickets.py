@@ -25,6 +25,7 @@ class Ticket:
     actions: list[dict] = field(default_factory=list)  # что консультант записал сам (по праву на запись)
     used: list[str] = field(default_factory=list)
     counterparties: set[str] = field(default_factory=set)
+    plan: dict = field(default_factory=dict)  # стратегия из режима «План» (save_strategy_plan)
 
 
 _lock = threading.Lock()

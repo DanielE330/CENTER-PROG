@@ -18,14 +18,17 @@ def _date(s: str, lang: str) -> str:
     return d.strftime("%d.%m") if lang == "ru" else d.strftime("%b %d")
 
 
-async def build(box: tl.Toolbox, perms: list[str], lang: str) -> list[dict]:
-    """[{text, kind}] — kind: gap | overdue | counterparty | scenario | action | general."""
+async def build(box: tl.Toolbox, perms: list[str], lang: str, mode: str = "chat") -> list[dict]:
+    """[{text, kind}] — kind: gap | overdue | counterparty | scenario | action | plan | guide | general."""
     ru = lang == "ru"
     out: list[dict] = []
 
     def add(text: str, kind: str):
         if len(out) < MAX and all(o["text"] != text for o in out):
             out.append({"text": text, "kind": kind})
+
+    if mode == "plan":
+        return plan_prompts(perms, ru)
 
     forecast = None
     if "read_forecast" in perms:
@@ -77,3 +80,16 @@ async def build(box: tl.Toolbox, perms: list[str], lang: str) -> list[dict]:
     if not out:
         add("Что ты умеешь?" if ru else "What can you do?", "general")
     return out
+
+
+def plan_prompts(perms: list[str], ru: bool) -> list[dict]:
+    """Стартовые запросы режима «План»: стратегия для экрана «План и факт»."""
+    if "make_plans" not in perms:
+        return [{"text": "Что нужно, чтобы составить стратегию?" if ru else "What is needed to build a strategy?", "kind": "general"}]
+    items = [
+        ("Составь план, чтобы не уйти в минус в ближайшие 3 месяца", "Build a plan to stay out of the red for the next 3 months"),
+        ("Как собрать резерв в размере месяца расходов?", "How do I build a reserve of one month of costs?"),
+        ("План по просроченным оплатам клиентов", "A plan for overdue client payments"),
+        ("Подготовь компанию к налоговым платежам квартала", "Prepare the company for this quarter's tax payments"),
+    ]
+    return [{"text": r if ru else e, "kind": "plan"} for r, e in items]

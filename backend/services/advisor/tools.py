@@ -168,6 +168,30 @@ TOOL_SPECS: list[dict] = [
         "parameters": {"type": "object", "required": ["questions"], "properties": {
             "questions": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 120}}}}}},
     {"type": "function", "function": {
+        "name": "get_app_guide",
+        "description": "Гид по приложению: экраны (как подписаны в меню), что на них и как сделать типичные действия. "
+                       "Вызывай, когда спрашивают «где/как в приложении…».",
+        "parameters": {"type": "object", "properties": {
+            "topic": {"type": "string", "description": "Экран или действие: прогноз, выписка, 1С, ФНС, план и факт… Пусто — все экраны"}}}}},
+    {"type": "function", "function": {
+        "name": "save_strategy_plan",
+        "description": "Сохранить стратегию для экрана «План и факт» (режим «План»): цель, шаги с датами и суммами, риски. "
+                       "Сохраняется одна активная стратегия компании; данные компании (платежи) не меняет.",
+        "parameters": {"type": "object", "required": ["title", "summary", "steps"], "properties": {
+            "title": {"type": "string", "maxLength": 120},
+            "summary": {"type": "string", "maxLength": 1200, "description": "Суть плана простыми словами: цель и почему так"},
+            "goal": {"type": "string", "maxLength": 300, "description": "Измеримая цель: например, не уйти в минус до 30.11 и держать резерв 300 000 ₽"},
+            "horizon_days": {"type": "integer", "minimum": 7, "maximum": 365},
+            "steps": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "object", "required": ["title"], "properties": {
+                "title": {"type": "string", "maxLength": 160},
+                "detail": {"type": "string", "maxLength": 600, "description": "Что сделать и как это влияет на разрыв"},
+                "due_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "amount_rub": {"type": "number", "description": "Сумма эффекта: плюс — деньги приходят/остаются, минус — уходят"},
+                "kind": {"type": "string", "enum": ["income", "expense", "reserve", "negotiation", "tax", "financing", "control"]}}}},
+            "risks": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 300}},
+            "checkpoints": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 200},
+                            "description": "Что смотреть на «Плане и факте», чтобы понять, что план работает"}}}}},
+    {"type": "function", "function": {
         "name": "propose_expected_payment",
         "description": "Предложить пользователю добавить ожидаемый платёж или поступление. Ничего не записывает: пользователь увидит карточку и решит сам.",
         "parameters": {"type": "object", "required": ["direction", "amount_rub", "date", "title"], "properties": {
@@ -225,6 +249,7 @@ class Toolbox:
         self.used: list[str] = st.used
         self.actions: list[dict] = st.actions
         self.followups: list[str] = st.followups
+        self.plan: dict = st.plan
 
     def specs(self) -> list[dict]:
         """Спецификации инструментов, доступных по правам."""
@@ -413,6 +438,38 @@ class Toolbox:
         self.actions.append({"type": "recalc_forecast", "id": run.get("run_id") or run.get("id", ""), "title": "Прогноз пересчитан" if self.lang == "ru" else "Forecast recalculated"})
         return summarize_forecast(run)
 
+    async def _t_get_app_guide(self, topic: str = "") -> dict:
+        from .guide import guide
+        return guide(str(topic)[:80])
+
+    async def _t_save_strategy_plan(self, title: str, summary: str, steps: list, goal: str = "", horizon_days: int | None = None,
+                                    risks: list | None = None, checkpoints: list | None = None) -> dict:
+        def s(v, n):
+            return str(v or "").strip()[:n]
+        clean = []
+        for st in (steps or [])[:10]:
+            if not isinstance(st, dict) or not s(st.get("title"), 160):
+                continue
+            row = {"title": s(st.get("title"), 160), "detail": s(st.get("detail"), 600), "kind": st.get("kind") if st.get("kind") in
+                   ("income", "expense", "reserve", "negotiation", "tax", "financing", "control") else "control"}
+            try:
+                row["due_date"] = dt.date.fromisoformat(str(st["due_date"])).isoformat() if st.get("due_date") else None
+            except ValueError:
+                row["due_date"] = None
+            try:
+                row["amount_rub"] = round(float(st["amount_rub"])) if st.get("amount_rub") not in (None, "") else None
+            except (TypeError, ValueError):
+                row["amount_rub"] = None
+            clean.append(row)
+        if not s(title, 120) or not clean:
+            raise ToolError("invalid_plan", "Нужны название и хотя бы один шаг")
+        self.plan.clear()
+        self.plan.update({"title": s(title, 120), "summary": s(summary, 1200), "goal": s(goal, 300),
+                          "horizon_days": max(7, min(int(horizon_days), 365)) if horizon_days else None, "steps": clean,
+                          "risks": [s(r, 300) for r in (risks or [])[:6] if s(r, 300)],
+                          "checkpoints": [s(c, 200) for c in (checkpoints or [])[:6] if s(c, 200)]})
+        return {"status": "saved", "note": "Стратегия появится на экране «План и факт»."}
+
     async def _t_suggest_followups(self, questions: list | None = None) -> dict:
         qs = [str(q).strip()[:120] for q in (questions or []) if str(q).strip()][:3]
         self.followups[:] = qs
@@ -438,11 +495,12 @@ class _State:
         self.used: list[str] = []
         self.actions: list[dict] = []
         self.followups: list[str] = []
+        self.plan: dict = {}
 
 
 # инструменты старого агента (llm_gateway): только чтение, сценарии и предложения
 LEGACY_TOOLS = {"get_forecast_risk", "get_upcoming_payments", "get_plan_fact", "run_scenario", "get_transactions_by_category",
-                "propose_expected_payment", "get_counterparty_risks", "suggest_followups"}
+                "propose_expected_payment", "get_counterparty_risks", "suggest_followups", "get_app_guide"}
 
 
 def dumps(data: Any, limit: int = 8000) -> str:

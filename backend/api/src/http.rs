@@ -1134,7 +1134,7 @@ const MAX_BODY: usize = 26 * 1024 * 1024;
 
 /// Переписывает публичный путь /api/v1/companies/{cid}/... в /internal/v1/companies/{cid}/... и пересылает запрос
 /// как есть (метод, query, тело, Content-Type). Ответ сервиса возвращается без изменений.
-async fn relay(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request, perm: Perm) -> R<Reply> {
+pub(crate) async fn relay(up: &Upstream, p: &Principal, ctx: &Ctx, req: Request, perm: Perm) -> R<Reply> {
     let uri = req.uri().clone();
     let cid = uri.path().split('/').nth(4).unwrap_or_default().to_string();
     authorize(p, &cid)?;

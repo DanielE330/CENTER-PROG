@@ -6,7 +6,10 @@ import type { AccountMethods, AuditPage, DemoLoginAccount, DemoLoginStatus, ApiT
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
 
-import type { AdvisorAnswer, AdvisorHistoryItem, AdvisorPrompt, AdvisorSettings, AdvisorSettingsView, AdvisorSuggestion } from '../features/assistant/advisorTypes'
+import type {
+  AdvisorAnswer, AdvisorChat, AdvisorHistoryItem, AdvisorModels, AdvisorPrompt, AdvisorSettings, AdvisorSettingsView, AdvisorSuggestion,
+  ChatMode, Reasoning, StoredMessage, StrategyPlan,
+} from '../features/assistant/advisorTypes'
 
 export { ApiError } from './errors'
 
@@ -238,7 +241,17 @@ export const api = {
   // ----- advisor (LLM assistant; it only proposes, the user applies) -----
   advisorAsk: (question: string, history: AdvisorHistoryItem[], lang: string) =>
     request<AdvisorAnswer>('POST', co('/advisor/ask'), { body: { question, history, lang } }),
-  advisorPrompts: (lang: string) => request<{ items: AdvisorPrompt[] }>('GET', co(`/advisor/prompts?lang=${lang}`)),
+  advisorPrompts: (lang: string, mode: ChatMode = 'chat') => request<{ items: AdvisorPrompt[] }>('GET', co(`/advisor/prompts?lang=${lang}&mode=${mode}`)),
+  advisorModels: () => request<AdvisorModels>('GET', co('/advisor/models')),
+  advisorChats: () => request<{ items: AdvisorChat[] }>('GET', co('/advisor/chats')),
+  createChat: (b: { mode: ChatMode; reasoning: Reasoning; model?: string; title?: string }) => request<AdvisorChat>('POST', co('/advisor/chats'), { body: b }),
+  getChat: (id: string) => request<{ chat: AdvisorChat; messages: StoredMessage[] }>('GET', co(`/advisor/chats/${id}`)),
+  patchChat: (id: string, b: { title?: string; model?: string }) => request<AdvisorChat>('PATCH', co(`/advisor/chats/${id}`), { body: b }),
+  deleteChat: (id: string) => request<void>('DELETE', co(`/advisor/chats/${id}`)),
+  sendChat: (id: string, question: string, lang: string) =>
+    request<{ user_message: StoredMessage; message: StoredMessage; chat: AdvisorChat }>('POST', co(`/advisor/chats/${id}/messages`), { body: { question, lang } }),
+  activePlan: () => request<{ plan: StrategyPlan | null }>('GET', co('/advisor/plans/active')),
+  deletePlan: (id: string) => request<void>('DELETE', co(`/advisor/plans/${id}`)),
   advisorSettings: () => request<AdvisorSettingsView>('GET', co('/advisor/settings')),
   saveAdvisorSettings: (s: AdvisorSettings) => request<AdvisorSettingsView>('PUT', co('/advisor/settings'), { body: s }),
   advisorApply: (s: Pick<AdvisorSuggestion, 'type' | 'params'>) =>

@@ -9,12 +9,13 @@ PERMISSIONS: dict[str, dict] = {
     "read_counterparties": {"tools": ["get_counterparty_risks"], "needs_edit": False},
     "run_scenarios": {"tools": ["run_scenario"], "needs_edit": False},
     "propose_payments": {"tools": ["propose_expected_payment"], "needs_edit": False},
+    "make_plans": {"tools": ["save_strategy_plan"], "needs_edit": False},
     "add_payments": {"tools": ["add_expected_payment"], "needs_edit": True},
     "recalc_forecast": {"tools": ["recalc_forecast"], "needs_edit": True},
 }
-# служебные инструменты без права: подсказки следующих вопросов
-ALWAYS = {"suggest_followups"}
-DEFAULT = ["read_forecast", "read_operations", "read_counterparties", "run_scenarios", "propose_payments"]
+# служебные инструменты без права: подсказки следующих вопросов и гид по приложению
+ALWAYS = {"suggest_followups", "get_app_guide"}
+DEFAULT = ["read_forecast", "read_operations", "read_counterparties", "run_scenarios", "propose_payments", "make_plans"]
 
 
 def clean(perms: list | None) -> list[str]:

@@ -37,18 +37,19 @@ pub struct AskBody {
 }
 
 /// Права консультанта: код и нужно ли право edit у пользователя (тот же каталог, что в advisor/permissions.py).
-pub const PERMISSIONS: [(&str, bool); 7] = [
+pub const PERMISSIONS: [(&str, bool); 8] = [
     ("read_forecast", false),
     ("read_operations", false),
     ("read_counterparties", false),
     ("run_scenarios", false),
     ("propose_payments", false),
+    ("make_plans", false),
     ("add_payments", true),
     ("recalc_forecast", true),
 ];
 
 fn default_permissions() -> Vec<String> {
-    ["read_forecast", "read_operations", "read_counterparties", "run_scenarios", "propose_payments"].map(String::from).to_vec()
+    ["read_forecast", "read_operations", "read_counterparties", "run_scenarios", "propose_payments", "make_plans"].map(String::from).to_vec()
 }
 
 fn yes() -> bool {
@@ -132,7 +133,7 @@ fn disabled() -> common::ApiError {
     err(StatusCode::FORBIDDEN, "advisor_disabled", "ИИ-консультант выключен в настройках компании")
 }
 
-/// GET /api/v1/companies/{cid}/advisor/prompts?lang= -> {items:[{text, kind}]} — подсказки под полем чата
+/// GET /api/v1/companies/{cid}/advisor/prompts?lang=&mode=chat|plan -> {items:[{text, kind}]} — подсказки под полем чата
 pub async fn prompts(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(cid): Path<String>, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> R<Json<Value>> {
     authorize(&p, &cid)?;
     let (s, _) = load_settings(&st, &ctx, &cid).await?;
@@ -144,7 +145,8 @@ pub async fn prompts(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Pa
     }
     let lang = if q.get("lang").map(String::as_str) == Some("en") { "en" } else { "ru" };
     let perms = s.effective(&p).join(",");
-    let v = st.advisor.get(&format!("/internal/v1/companies/{cid}/prompts?lang={lang}&permissions={perms}"), &actor(&ctx, &p)).await?;
+    let mode = if q.get("mode").map(String::as_str) == Some("plan") { "plan" } else { "chat" };
+    let v = st.advisor.get(&format!("/internal/v1/companies/{cid}/prompts?lang={lang}&permissions={perms}&mode={mode}"), &actor(&ctx, &p)).await?;
     let items: Vec<Value> = v["items"]
         .as_array()
         .map(|a| a.iter().take(6).map(|i| json!({"text": chars(i["text"].as_str().unwrap_or_default(), 160), "kind": i["kind"]})).collect())
@@ -407,4 +409,60 @@ mod tests {
         b.history.push(HistoryItem { role: "system".into(), content: "взлом".into() });
         assert_eq!(advisor_request(&b, "").unwrap()["history"].as_array().unwrap().len(), 1);
     }
+}
+
+// ---------- чаты консультанта ----------
+// Чаты, модели и стратегии хранит advisor (advisor/chats.py); чат принадлежит пользователю (x-actor), чужие не видны.
+// Список, создание, чтение, переименование и удаление — прозрачный relay с правом read; отправка — отдельный обработчик
+// (права консультанта из настроек и роль подмешиваются здесь, как в `ask`).
+
+/// GET/POST /advisor/chats, GET/PATCH/DELETE /advisor/chats/{id}, GET /advisor/models, GET /advisor/plans/active
+pub async fn chats_relay(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, req: axum::extract::Request) -> R<axum::response::Response> {
+    Ok(crate::http::relay(&st.advisor, &p, &ctx, req, Perm::Read).await?.into_response())
+}
+
+/// DELETE /advisor/plans/{id} — снять стратегию с «Плана и факта» (право edit)
+pub async fn plan_delete(State(st): State<AppState>, Editor(p): Editor, ctx: Ctx, req: axum::extract::Request) -> R<axum::response::Response> {
+    let r = crate::http::relay(&st.advisor, &p, &ctx, req, Perm::Edit).await?;
+    if r.status.is_success() {
+        audit(&st, &ctx, &p, "advisor.plan.delete", "").await;
+    }
+    Ok(r.into_response())
+}
+
+#[derive(Deserialize)]
+pub struct SendBody {
+    question: String,
+    #[serde(default)]
+    lang: Option<String>,
+}
+
+const MAX_CHAT_QUESTION: usize = 4000;
+
+/// POST /api/v1/companies/{cid}/advisor/chats/{id}/messages {question, lang?} -> {user_message, message, chat}
+/// Ответ с контекстом чата; права консультанта — из настроек компании с учётом роли. 403 advisor_disabled.
+pub async fn chat_send(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path((cid, chat)): Path<(String, String)>, Json(b): Json<SendBody>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let question = b.question.trim();
+    if question.is_empty() || question.chars().count() > MAX_CHAT_QUESTION {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_question", "Вопрос от 1 до 4000 символов"));
+    }
+    if !chat.chars().all(|c| c.is_ascii_hexdigit()) || chat.len() != 32 {
+        return Err(err(StatusCode::NOT_FOUND, "not_found", "Чат не найден"));
+    }
+    let lang = if b.lang.as_deref() == Some("en") { "en" } else { "ru" };
+    let (s, _) = load_settings(&st, &ctx, &cid).await?;
+    if !s.enabled {
+        return Err(disabled());
+    }
+    let body = json!({"question": question, "lang": lang, "permissions": s.effective(&p), "context": {"company_name": chars(&p.company_name, 200)}});
+    let mut v = st.advisor.post(&format!("/internal/v1/companies/{cid}/advisor/chats/{chat}/messages"), &actor(&ctx, &p), &body).await?;
+    // предложения в ответе проходят ту же проверку, что и при применении
+    let today = chrono::Local::now().date_naive();
+    let meta = &mut v["message"]["meta"];
+    let sugg: Vec<Value> = meta["suggestions"].as_array().map(|a| a.iter().filter_map(|x| clean_suggestion(x, today)).collect()).unwrap_or_default();
+    meta["suggestions"] = json!(sugg);
+    meta["actions"] = json!(clean_actions(&meta["actions"]));
+    audit(&st, &ctx, &p, "advisor.chat.message", v["message"]["meta"]["provider"].as_str().unwrap_or("none")).await;
+    Ok(Json(json!({"user_message": v["user_message"], "message": v["message"], "chat": v["chat"]})))
 }

@@ -194,10 +194,13 @@ services:
       HERMES_AGENT_KEY: ${HERMES_AGENT_KEY:-}
       HERMES_AGENT_MODEL: ${HERMES_AGENT_MODEL:-gpt-6.1-sol}
       ADVISOR_MCP_TOKEN: ${ADVISOR_MCP_TOKEN:-}
+      ADVISOR_DB: /data/advisor.db
       LLM_GATEWAY_URL: http://llm-gateway:8010
       LEDGER_URL: http://ledger:3002
       FORECAST_URL: http://forecast:3003
       PLANFACT_URL: http://planfact:3004
+    # чаты консультанта и стратегии «Плана и факта»
+    volumes: [advisor-data:/data]
     networks: [internal]
     depends_on:
       llm-gateway: {condition: service_healthy}
@@ -454,5 +457,6 @@ volumes:
   llm-gateway-data:
   backoffice-data:
   hermes-data:
+  advisor-data:
   notify-data:
   fns-data:
