@@ -63,3 +63,6 @@ add_member() {
 }
 add_member demo-editor@example.com editor editor
 add_member demo-viewer@example.com viewer viewer
+
+# витрина: события, налоги и интеграции, чтобы на графиках была видна вся функциональность (DEMO_SHOWCASE=0 — не нужно)
+[ "${DEMO_SHOWCASE:-1}" = 0 ] || bash "$(dirname "$0")/seed_showcase.sh" "$BASE" || true
