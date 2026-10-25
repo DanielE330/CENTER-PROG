@@ -74,6 +74,8 @@ pub(crate) struct Fake {
     pub(crate) risk_puts: Vec<Value>,
     /// настройки компаний: "cid/key" -> значение
     pub(crate) settings: HashMap<String, Value>,
+    /// тела запросов advisor ask (что api передал консультанту)
+    pub(crate) asks: Vec<Value>,
 }
 
 pub(crate) type Shared = Arc<Mutex<Fake>>;
@@ -519,6 +521,12 @@ async fn l_settings_put(State(f): State<Shared>, Path((cid, key)): Path<(String,
     (StatusCode::OK, Json(json!({"key": key, "value": b, "updated_at": "2026-10-25T10:00:00Z", "changed": true})))
 }
 
+async fn adv_ask(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    f.lock().unwrap().asks.push(b);
+    (StatusCode::OK, Json(json!({"answer": "ok", "provider": "hermes", "suggestions": [], "followups": ["Что дальше?"],
+        "actions": [{"type": "add_expected_payment", "id": "ev1", "title": "t"}, {"type": "drop_table", "id": "x"}]})))
+}
+
 async fn fallback() -> Json<Value> {
     Json(json!({"items": [], "ok": true}))
 }
@@ -551,6 +559,7 @@ fn fake_router(f: Shared) -> Router {
         .route("/internal/v1/companies/{cid}/counterparties/top", get(l_top))
         .route("/internal/v1/companies/{cid}/counterparty-risk", axum::routing::put(l_risk_put))
         .route("/internal/v1/companies/{cid}/settings/{key}", get(l_settings_get).put(l_settings_put))
+        .route("/internal/v1/companies/{cid}/ask", post(adv_ask))
         .route("/internal/v1/companies/{cid}/members", get(l_members).post(l_member_add))
         .route("/internal/v1/companies/{cid}/members/join", post(l_member_join))
         .route("/internal/v1/companies/{cid}/members/{uid}", patch(l_member_patch).delete(l_member_delete))
@@ -759,6 +768,9 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
         ("PUT", format!("{co}/fns/settings"), Admin),
         ("POST", format!("{co}/advisor/ask"), Read),
         ("POST", format!("{co}/advisor/suggestions/apply"), Edit),
+        ("GET", format!("{co}/advisor/settings"), Read),
+        ("PUT", format!("{co}/advisor/settings"), Admin),
+        ("GET", format!("{co}/advisor/prompts"), Read),
         ("GET", format!("{co}/demo/status"), Read),
         ("POST", format!("{co}/demo/advance-week"), Edit),
         ("GET", "/api/v1/gov/key-rate".into(), Read),
@@ -832,7 +844,7 @@ async fn every_route_enforces_its_permission_for_each_role() {
     let (cid, toks) = t.team4();
     let roles = ["director", "admin", "editor", "viewer"];
     let table = route_table(&cid);
-    assert_eq!(table.len(), 62, "таблица маршрутов должна совпадать с docs/roles.md");
+    assert_eq!(table.len(), 65, "таблица маршрутов должна совпадать с docs/roles.md");
     for (method, uri, need) in &table {
         for (i, tok) in toks.iter().enumerate() {
             let before = t.calls().len();
@@ -1579,4 +1591,33 @@ async fn mailings_need_verified_email() {
     }
     // выключить рассылки можно и без подтверждения
     assert_eq!(t.call("PUT", "/api/v1/account/notifications", &e, Some(json!({"alerts": false}))).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn advisor_permissions_are_set_by_admin_and_cut_by_role() {
+    let t = T::new().await;
+    let (cid, [d, a, e, v]) = t.team4();
+    let uri = format!("/api/v1/companies/{cid}/advisor/settings");
+    let (s, j) = t.call("GET", &uri, &v, None).await;
+    assert_eq!((s, j["settings"]["enabled"].as_bool(), j["catalog"].as_array().map(Vec::len)), (StatusCode::OK, Some(true), Some(7)));
+    let body = json!({"permissions": ["add_payments", "read_forecast", "recalc_forecast"], "show_prompts": true, "enabled": true});
+    assert_eq!(t.call("PUT", &uri, &e, Some(body.clone())).await.0, StatusCode::FORBIDDEN);
+    let (s, j) = t.call("PUT", &uri, &a, Some(body)).await;
+    assert_eq!((s, j["settings"]["permissions"].clone()), (StatusCode::OK, json!(["read_forecast", "add_payments", "recalc_forecast"])), "{j}");
+    // editor получает всё выданное, viewer — без права записи
+    let ask = format!("/api/v1/companies/{cid}/advisor/ask");
+    let (s, j) = t.call("POST", &ask, &e, Some(json!({"question": "Добавь платёж"}))).await;
+    assert_eq!((s, j["followups"].clone(), j["actions"].as_array().map(Vec::len)), (StatusCode::OK, json!(["Что дальше?"]), Some(1)), "{j}");
+    t.call("POST", &ask, &v, Some(json!({"question": "q"}))).await;
+    let asks = t.f.lock().unwrap().asks.clone();
+    assert_eq!(asks[0]["permissions"], json!(["read_forecast", "add_payments", "recalc_forecast"]));
+    assert_eq!(asks[1]["permissions"], json!(["read_forecast"]));
+    // неизвестное право, выключенный консультант
+    let (s, j) = t.call("PUT", &uri, &d, Some(json!({"permissions": ["rm_rf"]}))).await;
+    assert_eq!((s, code(&j)), (StatusCode::UNPROCESSABLE_ENTITY, "invalid_permission"));
+    assert_eq!(t.call("PUT", &uri, &d, Some(json!({"enabled": false}))).await.0, StatusCode::OK);
+    let (s, j) = t.call("POST", &ask, &e, Some(json!({"question": "q"}))).await;
+    assert_eq!((s, code(&j)), (StatusCode::FORBIDDEN, "advisor_disabled"));
+    assert_eq!(t.call("GET", &format!("/api/v1/companies/{cid}/advisor/prompts"), &e, None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.f.lock().unwrap().asks.len(), 2);
 }

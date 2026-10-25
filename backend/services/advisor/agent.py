@@ -51,8 +51,8 @@ def gateway_url() -> str:
     return os.environ.get("LLM_GATEWAY_URL", "http://127.0.0.1:8010").rstrip("/")
 
 
-async def chat(http: httpx.AsyncClient, user: str, rid: str, messages: list[dict], protect: list[str], with_tools: bool) -> dict:
-    payload = {"user": user, "messages": messages, "protect": protect, "tools": tl.TOOL_SPECS if with_tools else []}
+async def chat(http: httpx.AsyncClient, user: str, rid: str, messages: list[dict], protect: list[str], tools: list[dict]) -> dict:
+    payload = {"user": user, "messages": messages, "protect": protect, "tools": tools}
     try:
         r = await http.post(f"{gateway_url()}/internal/v1/chat", json=payload, headers={"x-request-id": rid} if rid else {},
                             timeout=float(os.environ.get("ADVISOR_LLM_TIMEOUT_SECONDS", "90")))
@@ -94,7 +94,7 @@ async def run(http: httpx.AsyncClient, box: tl.Toolbox, user: str, rid: str, que
 
     for step in range(MAX_STEPS + 1):
         last = step == MAX_STEPS  # после лимита шагов просим ответить без инструментов
-        res = await chat(http, user, rid, messages, protect(), with_tools=not last)
+        res = await chat(http, user, rid, messages, protect(), box.specs() if not last else [])
         provider, model = res.get("provider", provider), res.get("model", model)
         u = res.get("usage") or {}
         for k in ("prompt_tokens", "completion_tokens", "total_tokens"):

@@ -783,7 +783,7 @@
     "title": "AI assistant",
     "description": "Explains the causes of risk and helps check scenarios.",
     "rulesBadge": "Rule-based answers",
-    "welcome": "Hello! I answer from the forecast and your company data: gap risk, upcoming payments, plan vs actual and what-if scenarios. Numbers come from the calculations, nothing is made up. If an AI provider is connected, a model writes the answer (names, tax IDs and accounts are hidden before sending), otherwise I answer by rules. I never write anything myself: you accept suggestions with a button.",
+    "welcome": "Hello! I am the AI advisor: I answer from the forecast and your company data — gap risk, upcoming payments, plan vs actual, counterparties (tax registry data) and what-if scenarios. Numbers come from the calculations, nothing is made up. What I may do — view, propose or add payments myself — is set by the owner in Settings → AI advisor. Prompts below show where to start.",
     "noForecastTitle": "No forecast to analyse",
     "noForecastText": "The assistant answers from the saved forecast. Upload a statement and build a forecast first.",
     "error": "Could not get an answer: {{reason}}",
@@ -860,7 +860,13 @@
     "applied": "Added to expected payments",
     "dismissed": "Dismissed",
     "applyError": "Could not add: {{reason}}",
-    "proposalsAria": "Advisor suggestions"
+    "proposalsAria": "Advisor suggestions",
+    "actionsAria": "What the advisor did",
+    "done": "Done:",
+    "followupsAria": "What to ask next",
+    "disabledTitle": "AI advisor is off",
+    "disabledText": "The company owner switched the advisor off; answers come from forecast rules.",
+    "openSettings": "Advisor settings"
   },
   "settings": {
     "title": "Settings",
@@ -940,6 +946,39 @@
       "checkAfterSyncHint": "New counterparties from invoices are checked right away",
       "reset": "Restore defaults",
       "saved": "Saved, counterparties rechecked"
+    },
+    "advisor": {
+      "title": "AI advisor",
+      "subtitle": "What the advisor (Hermes) may do in the company. Owners and administrators grant permissions.",
+      "hermesOn": "Hermes answering",
+      "hermesDown": "Hermes unavailable",
+      "gateway": "Cloud model",
+      "enabled": "Advisor enabled",
+      "enabledHint": "When off, the advisor does not answer; the chat answers from forecast rules.",
+      "permissions": "Advisor permissions",
+      "perm": {
+        "read_forecast": "View the forecast and gap risk",
+        "read_operations": "View transactions and plan vs fact",
+        "read_counterparties": "View counterparties and tax registry flags",
+        "run_scenarios": "Run what-if scenarios",
+        "propose_payments": "Propose payments",
+        "add_payments": "Add payments to the plan directly",
+        "recalc_forecast": "Recalculate the forecast"
+      },
+      "permHint": {
+        "read_forecast": "Balance, dates and size of possible gaps, upcoming payments",
+        "read_operations": "Statement by category, missed and deviating payments",
+        "read_counterparties": "Largest clients and suppliers, data exported from the tax registry",
+        "run_scenarios": "Late payments, revenue drop, cost growth — nothing saved",
+        "propose_payments": "A payment card: the user adds it"
+      },
+      "writeHint": "Writes company data. Works only for members who can edit; every action is shown in the chat and the audit log.",
+      "showPrompts": "“What to write” prompts",
+      "showPromptsHint": "Under the chat input: questions from company data and next questions from the advisor.",
+      "reset": "Defaults",
+      "saved": "Advisor settings saved",
+      "hermesStarted": "Hermes running",
+      "hermesFailed": "Hermes: last answer failed"
     }
   },
   "import": {

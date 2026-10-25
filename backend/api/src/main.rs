@@ -173,6 +173,8 @@ pub fn tenant_routes() -> Router<AppState> {
         .route(&format!("{co}/fns/settings"), get(fns::get_settings).put(fns::put_settings))
         .route(&format!("{co}/advisor/ask"), post(advisor::ask))
         .route(&format!("{co}/advisor/suggestions/apply"), post(advisor::apply))
+        .route(&format!("{co}/advisor/settings"), get(advisor::get_settings).put(advisor::put_settings))
+        .route(&format!("{co}/advisor/prompts"), get(advisor::prompts))
         // демо «Прошла неделя»: только для демо-пользователя при DEMO_FEED_ENABLED=1
         .route(&format!("{co}/demo/status"), get(demo::status))
         .route(&format!("{co}/demo/advance-week"), post(demo::advance_week))

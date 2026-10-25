@@ -58,6 +58,8 @@ api (`backend/api/src/demo.rs`, `DEMO_FEED_URL`, `DEMO_FEED_ENABLED=1`, `DEMO_EM
 
 ## Консультант с ИИ: llm_gateway (:8010) и advisor (:8011)
 
+Основной движок — Hermes Agent по подписке Codex, инструменты по MCP, права задаёт владелец: docs/advisor-hermes.md. Ниже — запасной путь через llm_gateway.
+
 Публичный API (api, `backend/api/src/advisor.rs`, сессия и принадлежность компании проверяет api):
 - `POST /api/v1/companies/{cid}/advisor/ask` `{question, history?:[{role,content}], lang?:"ru"|"en"}` -> `{answer, suggestions:[{id,type,params,title}], provider, model, notice, usage, tools_used}`. `provider:"none"` — ответ по шаблону из прогноза (дата и сумма ближайшего разрыва, причины, три действия); `notice`: `provider_not_configured` | `provider_unavailable` | `budget_exceeded`.
 - `POST /api/v1/companies/{cid}/advisor/suggestions/apply` `{type:"add_expected_payment", params:{direction:"in"|"out", amount_kop, date, title, counterparty?}}` -> 201 `{id,type}`: api заново проверяет параметры и создаёт ожидаемое событие в ledger (`source: manual`). Консультант сам ничего не записывает.

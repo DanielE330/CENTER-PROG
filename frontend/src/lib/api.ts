@@ -6,7 +6,7 @@ import type { AccountMethods, AuditPage, DemoLoginAccount, DemoLoginStatus, ApiT
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
 
-import type { AdvisorAnswer, AdvisorHistoryItem, AdvisorSuggestion } from '../features/assistant/advisorTypes'
+import type { AdvisorAnswer, AdvisorHistoryItem, AdvisorPrompt, AdvisorSettings, AdvisorSettingsView, AdvisorSuggestion } from '../features/assistant/advisorTypes'
 
 export { ApiError } from './errors'
 
@@ -238,6 +238,9 @@ export const api = {
   // ----- advisor (LLM assistant; it only proposes, the user applies) -----
   advisorAsk: (question: string, history: AdvisorHistoryItem[], lang: string) =>
     request<AdvisorAnswer>('POST', co('/advisor/ask'), { body: { question, history, lang } }),
+  advisorPrompts: (lang: string) => request<{ items: AdvisorPrompt[] }>('GET', co(`/advisor/prompts?lang=${lang}`)),
+  advisorSettings: () => request<AdvisorSettingsView>('GET', co('/advisor/settings')),
+  saveAdvisorSettings: (s: AdvisorSettings) => request<AdvisorSettingsView>('PUT', co('/advisor/settings'), { body: s }),
   advisorApply: (s: Pick<AdvisorSuggestion, 'type' | 'params'>) =>
     request<{ id: string; type: string }>('POST', co('/advisor/suggestions/apply'), { body: { type: s.type, params: s.params } }),
 

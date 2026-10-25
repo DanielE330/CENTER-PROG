@@ -111,6 +111,9 @@
 | `PUT /api/v1/companies/{cid}/fns/settings` | admin | изменить настройки сведений ФНС |
 | `POST /api/v1/companies/{cid}/advisor/ask` | read | вычисляющий POST |
 | `POST /api/v1/companies/{cid}/advisor/suggestions/apply` | edit | |
+| `GET /api/v1/companies/{cid}/advisor/settings` | read | что разрешено ИИ-консультанту; `effective` — права для текущего пользователя |
+| `PUT /api/v1/companies/{cid}/advisor/settings` | admin | выдать или забрать права консультанта; право записи (`add_payments`, `recalc_forecast`) действует только для ролей с edit |
+| `GET /api/v1/companies/{cid}/advisor/prompts` | read | подсказки «что написать» под полем чата |
 | `GET /api/v1/companies/{cid}/demo/status` | read | |
 | `POST /api/v1/companies/{cid}/demo/advance-week` | edit | плюс условия демо |
 | `GET /api/v1/gov/key-rate` | read | |

@@ -16,7 +16,7 @@ import type { FnsSettings } from '../../types'
 const SOURCES = ['egrul', 'data_nalog', 'fedresurs'] as const
 const RISKS = ['bankruptcy', 'liquidation', 'tax_debt', 'unreliable', 'disqualified', 'mass_address', 'not_in_registry'] as const
 
-function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string; disabled?: boolean }) {
+export function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string; disabled?: boolean }) {
   return (
     <label className={`flex gap-3 rounded-lg border border-line p-3 text-sm ${disabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}>
       <input type="checkbox" className="mt-0.5" style={{ accentColor: 'var(--c-primary)' }} checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />

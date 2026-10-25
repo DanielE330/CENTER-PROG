@@ -127,6 +127,12 @@ export function useAdvisorAsk() {
   return useMutation({ mutationFn: (v: { question: string; history: AdvisorHistoryItem[]; lang: string }) => api.advisorAsk(v.question, v.history, v.lang) })
 }
 
+/** Prompts under the chat input, built from company data and the advisor's permissions. */
+export function useAdvisorPrompts(lang: string) {
+  const key = useKey()
+  return useQuery({ queryKey: key('advisor-prompts', lang), queryFn: () => api.advisorPrompts(lang), retry: false, staleTime: 60_000 })
+}
+
 /** Applying a suggestion creates an expected event, so every cached screen is refreshed. */
 export function useApplySuggestion() {
   const all = useInvalidateAll()

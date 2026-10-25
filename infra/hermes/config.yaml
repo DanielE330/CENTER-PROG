@@ -1,0 +1,23 @@
+# Hermes как ИИ-консультант CenterInvest. Только API-сервер (порт 8642, ключ API_SERVER_KEY) и инструменты компании.
+model:
+  provider: openai-codex          # подписка ChatGPT/Codex: вход `hermes auth add openai-codex`, токены в /data/auth.json
+  default: ${HERMES_MODEL}
+
+# У API-сервера — только MCP-сервер ci (инструменты advisor): имя сервера в списке работает как белый список MCP,
+# встроенных наборов в списке нет, значит терминал, файлы, браузер, веб, навыки и память недоступны.
+platform_toolsets:
+  api_server: [ci]
+
+mcp_servers:
+  ci:
+    url: http://advisor:8011/mcp
+    headers:
+      Authorization: Bearer ${ADVISOR_MCP_TOKEN}
+    timeout: 60
+    connect_timeout: 15
+    skip_preflight: true
+
+# каждый вопрос — отдельная сессия, общая память между компаниями не нужна
+memory:
+  memory_enabled: false
+  user_profile_enabled: false

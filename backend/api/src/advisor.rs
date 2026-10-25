@@ -1,9 +1,10 @@
-//! Консультант: публичные ручки для SPA. Вопрос уходит в сервис advisor (агент на облачной модели через llm_gateway,
-//! без провайдера — шаблонный ответ из прогноза). Консультант только предлагает действия; применяет предложение
-//! пользователь отдельным запросом `suggestions/apply`, и здесь параметры проверяются заново (ответу модели не верим).
+//! Консультант: публичные ручки для SPA. Вопрос уходит в сервис advisor (Hermes Agent по подписке Codex или агент через
+//! llm_gateway; без модели — шаблонный ответ из прогноза). Что консультанту можно, решает владелец или администратор в
+//! настройках (`advisor/settings`, раздел `advisor` в ledger); права записи получает только пользователь с правом edit.
+//! Предложения применяет пользователь запросом `suggestions/apply`, и здесь параметры проверяются заново (ответу модели не верим).
 
 use crate::AppState;
-use crate::http::{Editor, Principal, Reader};
+use crate::http::{Administrator, Editor, Perm, Principal, Reader};
 use axum::{
     Json,
     extract::{Path, State},
@@ -33,6 +34,122 @@ pub struct AskBody {
     history: Vec<HistoryItem>,
     #[serde(default)]
     lang: Option<String>,
+}
+
+/// Права консультанта: код и нужно ли право edit у пользователя (тот же каталог, что в advisor/permissions.py).
+pub const PERMISSIONS: [(&str, bool); 7] = [
+    ("read_forecast", false),
+    ("read_operations", false),
+    ("read_counterparties", false),
+    ("run_scenarios", false),
+    ("propose_payments", false),
+    ("add_payments", true),
+    ("recalc_forecast", true),
+];
+
+fn default_permissions() -> Vec<String> {
+    ["read_forecast", "read_operations", "read_counterparties", "run_scenarios", "propose_payments"].map(String::from).to_vec()
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AdvisorSettings {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default = "default_permissions")]
+    pub permissions: Vec<String>,
+    /// подсказки «что написать» под полем чата
+    #[serde(default = "yes")]
+    pub show_prompts: bool,
+}
+
+impl Default for AdvisorSettings {
+    fn default() -> Self {
+        Self { enabled: true, permissions: default_permissions(), show_prompts: true }
+    }
+}
+
+impl AdvisorSettings {
+    fn validate(&self) -> R<()> {
+        if let Some(bad) = self.permissions.iter().find(|p| !PERMISSIONS.iter().any(|(k, _)| k == p)) {
+            return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_permission", format!("Неизвестное право консультанта: {}", chars(bad, 40))));
+        }
+        Ok(())
+    }
+    /// Права для этого пользователя: выданные владельцем, без записи для роли без права edit; порядок каталога.
+    pub fn effective(&self, p: &Principal) -> Vec<String> {
+        PERMISSIONS
+            .iter()
+            .filter(|(k, edit)| self.permissions.iter().any(|x| x == k) && (!edit || p.role.can(Perm::Edit)))
+            .map(|(k, _)| k.to_string())
+            .collect()
+    }
+}
+
+async fn load_settings(st: &AppState, ctx: &Ctx, cid: &str) -> R<(AdvisorSettings, Value)> {
+    let v = st.ledger.get(&format!("/internal/v1/companies/{cid}/settings/advisor"), ctx).await?;
+    Ok((serde_json::from_value(v["value"].clone()).unwrap_or_default(), v["updated_at"].clone()))
+}
+
+/// Состояние движка (Hermes подключён ли) из advisor; сервис недоступен — null.
+async fn engine(st: &AppState, ctx: &Ctx) -> Value {
+    st.advisor.get("/internal/v1/engine", ctx).await.map(|v| json!({"engine": v["engine"], "hermes": v["hermes"]})).unwrap_or(Value::Null)
+}
+
+fn settings_json(s: &AdvisorSettings, p: &Principal, updated_at: &Value, engine: Value) -> Value {
+    let catalog: Vec<Value> = PERMISSIONS.iter().map(|(k, edit)| json!({"code": k, "needs_edit": edit})).collect();
+    json!({"settings": s, "defaults": AdvisorSettings::default(), "updated_at": updated_at, "catalog": catalog,
+           "effective": s.effective(p), "engine": engine})
+}
+
+/// GET /api/v1/companies/{cid}/advisor/settings -> {settings, defaults, updated_at, catalog, effective, engine}
+pub async fn get_settings(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(cid): Path<String>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let (s, at) = load_settings(&st, &ctx, &cid).await?;
+    Ok(Json(settings_json(&s, &p, &at, engine(&st, &ctx).await)))
+}
+
+/// PUT /api/v1/companies/{cid}/advisor/settings {enabled, permissions[], show_prompts} — владелец и администратор
+pub async fn put_settings(State(st): State<AppState>, Administrator(p): Administrator, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<Value>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let mut s: AdvisorSettings = serde_json::from_value(b).map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings", format!("Настройки консультанта: {e}")))?;
+    s.validate()?;
+    s.permissions = PERMISSIONS.iter().filter(|(k, _)| s.permissions.iter().any(|x| x == k)).map(|(k, _)| k.to_string()).collect();
+    let actx = actor(&ctx, &p);
+    let r = st.ledger.json(axum::http::Method::PUT, &format!("/internal/v1/companies/{cid}/settings/advisor"), &actx, Some(&json!(s))).await?;
+    if !r.status.is_success() {
+        return Err(err(StatusCode::BAD_GATEWAY, "settings_not_saved", "Настройки не сохранены"));
+    }
+    audit(&st, &ctx, &p, "advisor.settings", &s.permissions.join(",")).await;
+    Ok(Json(settings_json(&s, &p, &r.json()["updated_at"], engine(&st, &ctx).await)))
+}
+
+fn disabled() -> common::ApiError {
+    err(StatusCode::FORBIDDEN, "advisor_disabled", "ИИ-консультант выключен в настройках компании")
+}
+
+/// GET /api/v1/companies/{cid}/advisor/prompts?lang= -> {items:[{text, kind}]} — подсказки под полем чата
+pub async fn prompts(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(cid): Path<String>, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let (s, _) = load_settings(&st, &ctx, &cid).await?;
+    if !s.enabled {
+        return Err(disabled());
+    }
+    if !s.show_prompts {
+        return Ok(Json(json!({"items": []})));
+    }
+    let lang = if q.get("lang").map(String::as_str) == Some("en") { "en" } else { "ru" };
+    let perms = s.effective(&p).join(",");
+    let v = st.advisor.get(&format!("/internal/v1/companies/{cid}/prompts?lang={lang}&permissions={perms}"), &actor(&ctx, &p)).await?;
+    let items: Vec<Value> = v["items"]
+        .as_array()
+        .map(|a| a.iter().take(6).map(|i| json!({"text": chars(i["text"].as_str().unwrap_or_default(), 160), "kind": i["kind"]})).collect())
+        .unwrap_or_default();
+    Ok(Json(json!({"items": items})))
 }
 
 #[derive(Deserialize)]
@@ -79,10 +196,16 @@ fn advisor_request(b: &AskBody, company_name: &str) -> R<Value> {
     Ok(json!({"question": question, "history": history, "lang": lang, "context": {"company_name": chars(company_name, 200)}}))
 }
 
-/// POST /api/v1/companies/{cid}/advisor/ask -> {answer, suggestions[], provider, model, notice, usage, tools_used}
+/// POST /api/v1/companies/{cid}/advisor/ask -> {answer, suggestions[], actions[], followups[], provider, model, notice, usage, tools_used}
+/// 403 advisor_disabled — консультант выключен в настройках.
 pub async fn ask(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<AskBody>) -> R<Json<Value>> {
     authorize(&p, &cid)?;
-    let body = advisor_request(&b, &p.company_name)?;
+    let mut body = advisor_request(&b, &p.company_name)?;
+    let (s, _) = load_settings(&st, &ctx, &cid).await?;
+    if !s.enabled {
+        return Err(disabled());
+    }
+    body["permissions"] = json!(s.effective(&p));
     let v = st.advisor.post(&format!("/internal/v1/companies/{cid}/ask"), &actor(&ctx, &p), &body).await?;
     // наружу — только известные поля; предложения проходят ту же проверку, что и при применении
     let suggestions: Vec<Value> = v["suggestions"]
@@ -97,9 +220,26 @@ pub async fn ask(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(c
         "notice": v["notice"],
         "usage": v["usage"],
         "tools_used": v["tools_used"],
+        // что консультант записал сам (по праву add_payments/recalc_forecast) и подсказки следующего вопроса
+        "actions": clean_actions(&v["actions"]),
+        "followups": v["followups"].as_array().map(|a| a.iter().filter_map(Value::as_str).take(3).map(|q| chars(q, 160)).collect::<Vec<_>>()).unwrap_or_default(),
     });
     audit(&st, &ctx, &p, "advisor.ask", out["provider"].as_str().unwrap_or("none")).await;
     Ok(Json(out))
+}
+
+fn clean_actions(v: &Value) -> Vec<Value> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .take(5)
+                .filter_map(|x| {
+                    let kind = x["type"].as_str().filter(|k| matches!(*k, ADD_EXPECTED_PAYMENT | "recalc_forecast"))?;
+                    Some(json!({"type": kind, "id": x["id"].as_str().unwrap_or_default(), "title": chars(x["title"].as_str().unwrap_or_default(), 300)}))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn clean_suggestion(s: &Value, today: NaiveDate) -> Option<Value> {

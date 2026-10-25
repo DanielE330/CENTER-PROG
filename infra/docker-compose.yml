@@ -187,8 +187,12 @@ services:
   advisor:
     <<: *hardening
     build: {context: .., dockerfile: infra/docker/python.Dockerfile, target: advisor}
-    # консультант читает ledger/forecast/planfact и вызывает llm-gateway; сам ничего не записывает
+    # консультант: Hermes Agent (если задан HERMES_AGENT_KEY) или llm-gateway; инструменты читают ledger/forecast/planfact,
+    # пишут в план только по праву, выданному владельцем (add_payments). MCP-сервер /mcp — для Hermes, по ADVISOR_MCP_TOKEN.
     environment:
+      HERMES_AGENT_URL: ${HERMES_AGENT_KEY:+http://hermes:8642}
+      HERMES_AGENT_KEY: ${HERMES_AGENT_KEY:-}
+      ADVISOR_MCP_TOKEN: ${ADVISOR_MCP_TOKEN:-}
       LLM_GATEWAY_URL: http://llm-gateway:8010
       LEDGER_URL: http://ledger:3002
       FORECAST_URL: http://forecast:3003
@@ -202,6 +206,33 @@ services:
     healthcheck:
       <<: *pyhealth
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8011/live', timeout=2)"]
+
+  hermes:
+    <<: *hardening
+    build: {context: .., dockerfile: infra/hermes/Dockerfile}
+    # Hermes Agent: модель по подписке Codex (выход в интернет через edge), инструменты — только MCP advisor.
+    # Профиль hermes: `docker compose --profile hermes up -d`; вход в подписку — сервис hermes-login (один раз).
+    profiles: [hermes]
+    environment:
+      API_SERVER_KEY: ${HERMES_AGENT_KEY:-}
+      ADVISOR_MCP_TOKEN: ${ADVISOR_MCP_TOKEN:-}
+      HERMES_MODEL: ${HERMES_MODEL:-gpt-5.5}
+    tmpfs: [/tmp, /home/hermes]
+    depends_on:
+      advisor: {condition: service_healthy}
+    volumes: ["${HERMES_DATA:-hermes-data}:/data"]
+    networks: [internal, edge]
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8642/health', timeout=2)"]
+
+  hermes-login:
+    build: {context: .., dockerfile: infra/hermes/Dockerfile}
+    # вход в подписку ChatGPT/Codex по коду устройства: `docker compose --profile hermes run --rm hermes-login`
+    profiles: [hermes]
+    entrypoint: ["hermes", "auth", "add", "openai-codex"]
+    volumes: ["${HERMES_DATA:-hermes-data}:/data"]
+    networks: [edge]
 
   backoffice:
     <<: *hardening
@@ -421,5 +452,6 @@ volumes:
   notifier-data:
   llm-gateway-data:
   backoffice-data:
+  hermes-data:
   notify-data:
   fns-data:

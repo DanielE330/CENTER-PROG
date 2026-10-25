@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Bot, Loader2, Send, User } from 'lucide-react'
+import { Bot, CheckCircle2, Loader2, Send, Settings2, User } from 'lucide-react'
 import { PageContainer, PageHeader } from '../../components/shared/Page'
 import { EmptyState, ErrorState, LoadingState } from '../../components/shared/States'
 import { Badge } from '../../components/shared/StatusBadge'
 import { Button } from '../../components/ui/Button'
-import { useAdvisorAsk, useForecast, useScenario } from '../../hooks/queries'
+import { useAdvisorAsk, useAdvisorPrompts, useForecast, useScenario } from '../../hooks/queries'
+import { ApiError } from '../../lib/errors'
 import { cn } from '../../lib/utils'
 import { errorText, tm } from '../../i18n/helpers'
 import { Notice } from '../../components/shared/Notice'
@@ -16,6 +17,7 @@ import { SuggestionCard } from './SuggestionCard'
 import type { AdvisorAnswer, AdvisorHistoryItem } from './advisorTypes'
 import type { Intent } from './answers'
 
+/** Static prompts: used only when the advisor gave none (service down or prompts switched off). */
 const suggestions: Array<{ key: string; intent: Intent; days?: number }> = [
   { key: 'cause', intent: 'gap' },
   { key: 'delay', intent: 'delay', days: 14 },
@@ -50,6 +52,9 @@ export default function AssistantPage() {
   const q = useForecast()
   const scenario = useScenario()
   const advisor = useAdvisorAsk()
+  const lang = i18n.language.startsWith('en') ? 'en' : 'ru'
+  const prompts = useAdvisorPrompts(lang)
+  const [disabled, setDisabled] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([welcome])
   const [aiProvider, setAiProvider] = useState<string | null>(null)
   const [input, setInput] = useState('')
@@ -106,13 +111,14 @@ export default function AssistantPage() {
     try {
       let answer: AdvisorAnswer | null = null
       try {
-        answer = await advisor.mutateAsync({ question, history, lang: i18n.language.startsWith('en') ? 'en' : 'ru' })
-      } catch {
+        answer = await advisor.mutateAsync({ question, history, lang })
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'advisor_disabled') setDisabled(true)
         answer = null // advisor/api unreachable or rejected: answer by rules instead
       }
       if (answer) {
         const a = answer
-        setAiProvider(a.provider === 'none' ? null : a.provider)
+        setAiProvider(a.provider === 'none' ? null : a.model ? `${a.provider} · ${a.model}` : a.provider)
         setMessages((all) => [...all, { id: crypto.randomUUID(), role: 'assistant', advisor: a }])
       } else {
         setAiProvider(null)
@@ -124,6 +130,11 @@ export default function AssistantPage() {
       setBusy(false)
     }
   }
+
+  const last = [...messages].reverse().find((m) => m.role === 'assistant' && m.id !== 'welcome')
+  const followups = last?.advisor?.followups ?? []
+  const fromAdvisor = followups.length > 0 ? followups : (prompts.data?.items ?? []).map((p) => p.text)
+  const disabledNow = disabled || (prompts.error instanceof ApiError && prompts.error.code === 'advisor_disabled')
 
   return (
     <PageContainer>
@@ -156,6 +167,16 @@ export default function AssistantPage() {
                     <>
                       <ProviderNotice m={m} />
                       {m.advisor ? m.advisor.answer : m.parts?.map((p) => tm(t, p.key, p.params)).join('\n')}
+                      {m.advisor?.actions && m.advisor.actions.length > 0 && (
+                        <ul className="flex flex-col gap-1.5 mt-3 whitespace-normal" aria-label={t('assistant.actionsAria')}>
+                          {m.advisor.actions.map((a) => (
+                            <li key={`${a.type}-${a.id}`} className="flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-[13px]">
+                              <CheckCircle2 size={16} className="text-primary shrink-0 mt-0.5" aria-hidden />
+                              <span><span className="font-medium">{t('assistant.done')}</span> {a.title}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       {m.advisor && m.advisor.suggestions.length > 0 && (
                         <div className="flex flex-col gap-2 mt-3 whitespace-normal" role="group" aria-label={t('assistant.proposalsAria')}>
                           {m.advisor.suggestions.map((s) => <SuggestionCard key={s.id} s={s} />)}
@@ -175,6 +196,28 @@ export default function AssistantPage() {
           </div>
 
           <div className="border-t border-line p-3 sm:p-4 flex flex-col gap-3">
+            {disabledNow && (
+              <Notice tone="info" title={t('assistant.disabledTitle')}>
+                {t('assistant.disabledText')}{' '}
+                <Link to="/settings#advisor" className="text-primary font-medium hover:underline inline-flex items-center gap-1"><Settings2 size={14} aria-hidden />{t('assistant.openSettings')}</Link>
+              </Notice>
+            )}
+            {fromAdvisor.length > 0 ? (
+              <ul className="flex flex-wrap gap-2" aria-label={followups.length > 0 ? t('assistant.followupsAria') : t('assistant.suggestionsAria')}>
+                {fromAdvisor.map((text) => (
+                  <li key={text}>
+                    <button
+                      type="button"
+                      onClick={() => void ask(text)}
+                      disabled={busy}
+                      className="rounded-full border border-line bg-surface px-3 py-1.5 text-[13px] text-left enabled:hover:bg-primary-soft enabled:hover:border-primary cursor-pointer disabled:opacity-50"
+                    >
+                      {text}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
             <ul className="flex flex-wrap gap-2" aria-label={t('assistant.suggestionsAria')}>
               {suggestions.map((s) => (
                 <li key={s.key}>
@@ -189,6 +232,7 @@ export default function AssistantPage() {
                 </li>
               ))}
             </ul>
+            )}
             <form
               className="flex gap-2"
               onSubmit={(e) => {
