@@ -279,6 +279,16 @@ async fn snapshot_since_revision_returns_only_appended_rows_and_category_edit_re
 }
 
 #[tokio::test]
+async fn snapshot_includes_rows_imported_before_revisions_existed() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    import_confirmed(&e.app, &cid, "a.csv", base_txs()).await;
+    // строки из базы до появления колонки rev получили rev = 0 при миграции
+    rusqlite::Connection::open(e._dir.join("ledger.db")).unwrap().execute("UPDATE transactions SET rev = 0", []).unwrap();
+    assert_eq!(snap_since(&e.app, &cid, 0).await.1["transactions"].as_array().unwrap().len(), 4);
+}
+
+#[tokio::test]
 async fn import_identical_rows_inside_one_file_are_kept_separately() {
     let e = env().await;
     let cid = company(&e.app, "u1").await;
