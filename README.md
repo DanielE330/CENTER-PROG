@@ -7,7 +7,7 @@
     ./run.sh            # сборка, запуск всех сервисов и загрузка демо-данных (первая сборка 15–25 мин, дальше быстро)
 
 Откройте http://localhost:3000, демо-вход `demo@example.com` / `demo12345` или кнопки «Тестовый вход» (Директор / Редактор / Наблюдатель) под формой входа.
-Письма (подтверждение почты, восстановление пароля, приглашения, алерты о разрывах, сводка) по умолчанию ловит Mailpit: http://localhost:8025. Реальный SMTP задаётся `SMTP_*` в `infra/.env`, подробности в `docs/notify.md`.
+Письма (подтверждение почты, восстановление пароля, приглашения, алерты о разрывах, сводка) по умолчанию ловит Mailpit: http://localhost:8025. Реальный SMTP задаётся `SMTP_*` в `infra/.env`.
 `./run.sh stop` — остановить, `./run.sh reset` — удалить данные, `./run.sh logs`, `./run.sh status`.
 Первый оператор платформы задаётся `OPERATOR_EMAIL`/`OPERATOR_PASSWORD` в `infra/.env` (или командой `python -m backoffice.create_operator`), вход на `/operator`.
 Порт, HTTPS, данные для имитаторов настраиваются в `infra/.env` (шаблон `infra/.env.example`).
@@ -16,10 +16,10 @@
 
 ## Архитектура
 - Шлюз Caddy (`infra/docker/Caddyfile`): единственная публичная точка входа (`:3000`), раздаёт SPA, проксирует `/api/*` в Rust API, скрывает `/internal/*`, выставляет заголовки безопасности; автоматический TLS при `SITE_ADDRESS=<домен>` и `CADDY_AUTO_HTTPS=on` (тогда же задайте `COOKIE_SECURE=true`).
-- Rust workspace (`backend/`, один `Cargo.lock`): `api` (BFF, публичный `:3000` + внутренний `:3100`, без базы данных), `ledger` (`:3002`, владеет `ledger.db`), `forecast` (`:3003`, владеет `forecast.db`), `planfact` (`:3004`), общая библиотека `common`. Внутренние сервисы слушают только внутренние адреса; публичный контракт `/api/v1/...` не менялся. Подробнее в `docs/microservices.md`.
-- Python-сервисы (`backend/services/`): `auth` (`:8001`), `parser` (`:8002`), `gov` (`:8003`), `ecp` (`:8007`), `integrator` (`:8008`), `notifier` (`:8009`, Telegram-уведомления, цели и консультант Hermes, `docs/notifications.md`), `notify` (`:8014`, письма через SMTP/Mailpit: служебные и почтовый канал отчётов notifier, `docs/notify.md`), `demo_feed` (`:8012`, лента демо «Прошла неделя»), `llm_gateway` (`:8010`, единственный выход к облачным LLM с маскированием и бюджетом токенов), `backoffice` (`:8013`, панель оператора платформы `/operator`, см. `docs/backoffice.md`), `advisor` (`:8011`, ИИ-консультант: Hermes Agent по подписке Codex с инструментами компании по MCP и правами от владельца, `docs/advisor-hermes.md`; запасной путь — `llm_gateway`, без модели — шаблон из прогноза), `hermes` (`:8642`, профиль `hermes`) `fns` (`:8015`, сведения ФНС: налоги на год, ЕНС из справки, проверка контрагентов по открытым реестрам с настройками компании, `docs/fns.md`) и имитаторы внешних систем `onec` (`:8004`), `edo` (`:8005`), `bank` (`:8006`), FastAPI/uvicorn.
+- Rust workspace (`backend/`, один `Cargo.lock`): `api` (BFF, публичный `:3000` + внутренний `:3100`, без базы данных), `ledger` (`:3002`, владеет `ledger.db`), `forecast` (`:3003`, владеет `forecast.db`), `planfact` (`:3004`), общая библиотека `common`. Внутренние сервисы слушают только внутренние адреса; публичный контракт `/api/v1/...` не менялся. Подробнее.
+- Python-сервисы (`backend/services/`): `auth` (`:8001`), `parser` (`:8002`), `gov` (`:8003`), `ecp` (`:8007`), `integrator` (`:8008`), `notifier` (`:8009`, Telegram-уведомления, цели и консультант Hermes), `notify` (`:8014`, письма через SMTP/Mailpit: служебные и почтовый канал отчётов notifier), `demo_feed` (`:8012`, лента демо «Прошла неделя»), `llm_gateway` (`:8010`, единственный выход к облачным LLM с маскированием и бюджетом токенов), `backoffice` (`:8013`, панель оператора платформы `/operator`), `advisor` (`:8011`, ИИ-консультант: Hermes Agent по подписке Codex с инструментами компании по MCP и правами от владельца; запасной путь — `llm_gateway`, без модели — шаблон из прогноза), `hermes` (`:8642`, профиль `hermes`) `fns` (`:8015`, сведения ФНС: налоги на год, ЕНС из справки, проверка контрагентов по открытым реестрам с настройками компании) и имитаторы внешних систем `onec` (`:8004`), `edo` (`:8005`), `bank` (`:8006`), FastAPI/uvicorn.
 - Фронтенд (`frontend/`, Vite + React + Tailwind) собирается в образ API и раздаётся Rust API.
-- SQLite — временная замена PostgreSQL на время разработки, см. `docs/architecture.md`.
+- SQLite — временная замена PostgreSQL на время разработки.
 
 ## Структура репозитория
     backend/           Rust workspace: common, api (BFF), ledger, forecast (финансовое ядро: src/model.rs, bin eval), planfact
@@ -27,7 +27,6 @@
                        integrator, onec/edo/bank (имитаторы), tests/
     frontend/          React + TypeScript SPA (Vite, Tailwind, TanStack Query, i18n RU/EN, тёмная тема)
     infra/             docker/ (Dockerfile, Caddyfile), docker-compose.yml, Makefile, scripts/ (dev.sh, smoke.sh, gen_statement.py)
-    docs/              knowledge-base.md (начните отсюда), architecture.md, design.md, microservices.md, task/ (описание кейса, PDF), forecast_evaluation.md
     data/              в .gitignore: датасет (data/dataset/ из data/raw/*.zip), состояние локального запуска (data/run/)
 
 ## Запуск без Docker
@@ -45,10 +44,10 @@
     make -C infra seed        # демо-данные для demo@example.com (стек должен быть запущен)
     make -C infra down
 
-Откройте http://localhost:3000. Демо-вход: `demo@example.com` / `demo12345` (создаётся при `DEMO_SEED=1`, это значение по умолчанию; для отключения задайте `DEMO_SEED=0`). У демо-пользователя выписка загружена до 2026-07-12; кнопка «Прошла неделя» на «Обзоре» подаёт следующую неделю через обычный импорт и пересчитывает прогноз (`DEMO_FEED_ENABLED`, `DEMO_CUTOFF`, см. `docs/microservices.md`).
+Откройте http://localhost:3000. Демо-вход: `demo@example.com` / `demo12345` (создаётся при `DEMO_SEED=1`, это значение по умолчанию; для отключения задайте `DEMO_SEED=0`). У демо-пользователя выписка загружена до 2026-07-12; кнопка «Прошла неделя» на «Обзоре» подаёт следующую неделю через обычный импорт и пересчитывает прогноз (`DEMO_FEED_ENABLED`, `DEMO_CUTOFF`).
 
 ### Тестовый вход (кнопки для жюри)
-На странице входа под формой есть блок «Тестовый вход»: три кнопки (Директор, Редактор, Наблюдатель) входят в демо-компанию одним нажатием, без ввода пароля; у каждой подсказка, что может эта роль (подробно в `docs/roles.md`). Аккаунты: `demo@example.com` (director), `demo-editor@example.com` (editor), `demo-viewer@example.com` (viewer); пароль у всех `demo12345` (`DEMO_PASSWORD` в `infra/.env`). Сотрудников создаёт `infra/scripts/seed_demo.sh` (его запускает `./run.sh`; повторный запуск безопасен), экран «Смените пароль» им не показывается.
+На странице входа под формой есть блок «Тестовый вход»: три кнопки (Директор, Редактор, Наблюдатель) входят в демо-компанию одним нажатием, без ввода пароля; у каждой подсказка, что может эта роль (подробно). Аккаунты: `demo@example.com` (director), `demo-editor@example.com` (editor), `demo-viewer@example.com` (viewer); пароль у всех `demo12345` (`DEMO_PASSWORD` в `infra/.env`). Сотрудников создаёт `infra/scripts/seed_demo.sh` (его запускает `./run.sh`; повторный запуск безопасен), экран «Смените пароль» им не показывается.
 - Включение: `DEMO_LOGIN=1`; если переменная пуста, она равна `DEMO_SEED` (по умолчанию 1). Выключение: `DEMO_LOGIN=0` в `infra/.env` и `./run.sh` (кнопок нет, `POST /api/v1/auth/demo/login` отвечает 404 `demo_disabled`).
 - Пароль подставляет сервер и в ответах и логах не появляется; войти можно только в три демо-почты. Если включена 2FA (`AUTH_REQUIRE_2FA=1`), после кнопки всё равно запрашивается код.
 - Контракт: `GET /api/v1/auth/demo` -> `{enabled, accounts:[{id, role, email}]}`; `POST /api/v1/auth/demo/login {account: director|editor|viewer}` -> как `POST /auth/login` (cookie `session`). Лимит 30 запросов в минуту на IP, 429 `demo_rate_limited`.
@@ -59,6 +58,6 @@
 
 ## Установка одной командой
 
-`./install.sh` поднимает сервисы, создаёт оператора с обязательной двухфакторной защитой (TOTP) и печатает адрес, логин и пароль. Подробности и сброс 2FA: [docs/install.md](docs/install.md).
+`./install.sh` поднимает сервисы, создаёт оператора с обязательной двухфакторной защитой (TOTP) и печатает адрес, логин и пароль. Сброс 2FA: `docker compose … exec backoffice python -m backoffice.create_operator --reset-2fa <email>`.
 
-Telegram-уведомления (`notifier`): алерт кассового разрыва за 7/3/1 день, недельный риск-отчёт, итоги недели и месяца с планом, agile-цели, Excel-отчёт, консультант Hermes (`HERMES_URL`), роли и политики отделов, команда компании с ролями (`docs/team.md`), ML-лаборатория и единый бэктест (`ml/`, `docs/ml-architecture.md`). Токен бота — `TELEGRAM_BOT_TOKEN` в окружении. Те же алерты и отчёты приходят на почту через `notify` (`docs/notify.md`), даже без Telegram.
+Telegram-уведомления (`notifier`): алерт кассового разрыва за 7/3/1 день, недельный риск-отчёт, итоги недели и месяца с планом, agile-цели, Excel-отчёт, консультант Hermes (`HERMES_URL`), роли и политики отделов, команда компании с ролями , ML-лаборатория и единый бэктест (`ml/`). Токен бота — `TELEGRAM_BOT_TOKEN` в окружении. Те же алерты и отчёты приходят на почту через `notify` , даже без Telegram.
