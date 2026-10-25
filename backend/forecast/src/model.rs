@@ -1256,6 +1256,26 @@ pub fn simulate_with_risk(f: &Fitted, events: &[Event], scenario: &Scenario, p: 
         }
     }
 
+    // риск клиента: ниже уверенность в поступлении и больше задержка оплаты (только поступления)
+    let mut extra_delay = vec![0i64; occs.len()];
+    if !risk_ix.is_empty() {
+        for (i, o) in occs.iter_mut().enumerate() {
+            let income = match o.rule_ix {
+                Some(ri) => rules[ri].direction == "in",
+                None => o.fixed_amount > 0,
+            };
+            if let (true, Some(r)) = (income, risk_ix.get(&norm_name(&o.counterparty))) {
+                let (conf, extra) = match r.level {
+                    "high" => (HIGH_RISK_CONFIDENCE, HIGH_RISK_EXTRA_DELAY_BD),
+                    "medium" => (MEDIUM_RISK_CONFIDENCE, MEDIUM_RISK_EXTRA_DELAY_BD),
+                    _ => (1.0, 0),
+                };
+                o.p_include *= conf;
+                extra_delay[i] = extra;
+            }
+        }
+    }
+
     // --- плановый календарь (детерминированный, для объяснений) ---
     let mut planned: Vec<PlannedItem> = occs
         .iter()
@@ -2584,6 +2604,20 @@ mod tests {
         let f: Fitted = serde_json::from_str(&serde_json::to_string(&fit(&v, &b).unwrap()).unwrap()).unwrap();
         let cached = simulate(&f, &[ev], &Scenario::default(), &p).unwrap();
         assert_eq!(serde_json::to_value(&full).unwrap(), serde_json::to_value(&cached).unwrap());
+    }
+
+    #[test]
+    fn cached_fit_gives_the_same_result_with_and_without_km_delays() {
+        // задержки оплат (Каплан–Мейер) считаются в simulate, а не в fit: один кэш обученной модели служит обоим режимам
+        let (v, b) = sample();
+        let f: Fitted = serde_json::from_str(&serde_json::to_string(&fit(&v, &b).unwrap()).unwrap()).unwrap();
+        assert_eq!(f.model_version, MODEL_VERSION, "кэш другой версии модели routes.rs отбрасывает по этому полю");
+        for km in [true, false] {
+            let p = Params { horizon: 30, seed: 5, n_paths: 100, km_delays: km, ..Default::default() };
+            let full = forecast(&v, &b, &[], &Scenario::default(), &p).unwrap();
+            let cached = simulate(&f, &[], &Scenario::default(), &p).unwrap();
+            assert_eq!(serde_json::to_value(&full).unwrap(), serde_json::to_value(&cached).unwrap(), "km_delays={km}");
+        }
     }
 
     #[test]
