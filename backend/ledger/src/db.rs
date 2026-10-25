@@ -49,7 +49,13 @@ pub fn open(path: &str) -> Db {
             PRIMARY KEY(company_id, inn));
         CREATE TABLE IF NOT EXISTS company_settings(
             company_id TEXT NOT NULL REFERENCES companies(id), key TEXT NOT NULL, value TEXT NOT NULL,
-            updated_at TEXT NOT NULL, PRIMARY KEY(company_id, key));",
+            updated_at TEXT NOT NULL, PRIMARY KEY(company_id, key));
+        CREATE TABLE IF NOT EXISTS integration_connections(
+            company_id TEXT NOT NULL REFERENCES companies(id), kind TEXT NOT NULL,
+            url TEXT NOT NULL, username TEXT NOT NULL, password_enc TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unchecked', last_check_at TEXT, last_error TEXT, last_sync_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(company_id, kind));",
     )
     .expect("migrate");
     // реквизиты компании (из сертификата ЭЦП) добавлены позже

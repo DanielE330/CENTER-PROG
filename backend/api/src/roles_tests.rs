@@ -76,6 +76,18 @@ pub(crate) struct Fake {
     pub(crate) settings: HashMap<String, Value>,
     /// тела запросов advisor ask (что api передал консультанту)
     pub(crate) asks: Vec<Value>,
+    /// подключение 1С в заглушке ledger (запись integration_connections без пароля) и флаг «нет INTEGRATIONS_KEY»
+    pub(crate) integ: Option<Value>,
+    pub(crate) integ_key_missing: bool,
+    /// тела PUT integrations/onec и PUT integrations/onec/status
+    pub(crate) integ_puts: Vec<Value>,
+    pub(crate) integ_status: Vec<Value>,
+    /// заглушка integrator: тела проверок 1С, ответ проверки, принудительная ошибка, query запросов obligations и их ответ
+    pub(crate) onec_tests: Vec<Value>,
+    pub(crate) onec_result: Option<Value>,
+    pub(crate) onec_fail: Option<(StatusCode, String)>,
+    pub(crate) obl_queries: Vec<String>,
+    pub(crate) obligations: Option<Value>,
 }
 
 pub(crate) type Shared = Arc<Mutex<Fake>>;
@@ -535,6 +547,67 @@ async fn adv_ask(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
         "actions": [{"type": "add_expected_payment", "id": "ev1", "title": "t"}, {"type": "drop_table", "id": "x"}]})))
 }
 
+async fn l_integ_list(State(f): State<Shared>) -> Resp {
+    let g = f.lock().unwrap();
+    (StatusCode::OK, Json(json!({"key_configured": !g.integ_key_missing, "items": g.integ.clone().into_iter().collect::<Vec<_>>()})))
+}
+
+async fn l_integ_put(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    if g.integ_key_missing && b["password"].is_string() {
+        return lerr(StatusCode::SERVICE_UNAVAILABLE, "integrations_key_missing");
+    }
+    g.integ_puts.push(b.clone());
+    let row = json!({"kind": "onec", "url": b["url"], "username": b["username"], "password_set": true, "status": "unchecked",
+        "last_check_at": null, "last_error": null, "last_sync_at": null});
+    g.integ = Some(row.clone());
+    (StatusCode::OK, Json(row))
+}
+
+async fn l_integ_status(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    g.integ_status.push(b.clone());
+    let Some(row) = g.integ.as_mut() else { return lerr(StatusCode::NOT_FOUND, "not_found") };
+    let ok = b["ok"].as_bool().unwrap_or(false);
+    row["status"] = json!(if ok { "ok" } else { "error" });
+    row["last_error"] = if ok { Value::Null } else { b["error"].clone() };
+    if b["event"] == "check" {
+        row["last_check_at"] = json!("2026-10-25T10:00:00Z");
+    } else if ok {
+        row["last_sync_at"] = json!("2026-10-25T10:05:00Z");
+    }
+    (StatusCode::OK, Json(row.clone()))
+}
+
+async fn l_integ_delete(State(f): State<Shared>) -> StatusCode {
+    f.lock().unwrap().integ = None;
+    StatusCode::NO_CONTENT
+}
+
+async fn i_check_url(Json(b): Json<Value>) -> Resp {
+    let url = b["url"].as_str().unwrap_or_default();
+    if url.contains("10.0.0.1") || url.contains("localhost") {
+        return lerr(StatusCode::UNPROCESSABLE_ENTITY, "url_forbidden");
+    }
+    (StatusCode::OK, Json(json!({"ok": true, "url": url.trim_end_matches('/')})))
+}
+
+async fn i_onec_test(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
+    let mut g = f.lock().unwrap();
+    g.onec_tests.push(b);
+    if let Some((s, code)) = g.onec_fail.clone() {
+        return (s, Json(json!({"error": {"code": code, "message": "m"}})));
+    }
+    let r = g.onec_result.clone().unwrap_or_else(|| json!({"ok": true, "code": "ok", "message": "Подключение работает", "documents": 3, "more": false, "source": "live"}));
+    (StatusCode::OK, Json(r))
+}
+
+async fn i_obligations(State(f): State<Shared>, uri: axum::http::Uri) -> Resp {
+    let mut g = f.lock().unwrap();
+    g.obl_queries.push(uri.query().unwrap_or_default().to_string());
+    (StatusCode::OK, Json(g.obligations.clone().unwrap_or_else(|| json!({"items": [], "ok": true}))))
+}
+
 async fn fallback() -> Json<Value> {
     Json(json!({"items": [], "ok": true}))
 }
@@ -567,6 +640,12 @@ fn fake_router(f: Shared) -> Router {
         .route("/internal/v1/companies/{cid}/counterparties/top", get(l_top))
         .route("/internal/v1/companies/{cid}/counterparty-risk", axum::routing::put(l_risk_put))
         .route("/internal/v1/companies/{cid}/settings/{key}", get(l_settings_get).put(l_settings_put))
+        .route("/internal/v1/companies/{cid}/integrations", get(l_integ_list))
+        .route("/internal/v1/companies/{cid}/integrations/onec", axum::routing::put(l_integ_put).delete(l_integ_delete))
+        .route("/internal/v1/companies/{cid}/integrations/onec/status", axum::routing::put(l_integ_status))
+        .route("/internal/v1/onec/check-url", post(i_check_url))
+        .route("/internal/v1/onec/test", post(i_onec_test))
+        .route("/internal/v1/obligations", get(i_obligations))
         .route("/internal/v1/companies/{cid}/ask", post(adv_ask))
         .route("/internal/v1/companies/{cid}/advisor/chats/{chat}/messages", post(adv_chat_send))
         .route("/internal/v1/companies/{cid}/members", get(l_members).post(l_member_add))
@@ -772,6 +851,10 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
         ("POST", format!("{co}/expected-events/tax-calendar"), Edit),
         ("POST", format!("{co}/integrations/sync"), Edit),
         ("POST", format!("{co}/integrations/fns/sync"), Edit),
+        ("GET", format!("{co}/integrations"), Read),
+        ("PUT", format!("{co}/integrations/onec"), Manage),
+        ("POST", format!("{co}/integrations/onec/test"), Manage),
+        ("DELETE", format!("{co}/integrations/onec"), Manage),
         ("GET", format!("{co}/fns/ens"), Read),
         ("POST", format!("{co}/fns/ens/import"), Edit),
         ("GET", format!("{co}/fns/counterparties"), Read),
@@ -793,6 +876,7 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
         ("DELETE", format!("{co}/advisor/plans/{CHAT}"), Edit),
         ("GET", format!("{co}/demo/status"), Read),
         ("POST", format!("{co}/demo/advance-week"), Edit),
+        ("POST", format!("{co}/demo/rewind-week"), Edit),
         ("GET", "/api/v1/gov/key-rate".into(), Read),
         ("POST", format!("{co}/forecasts"), Read),
         ("GET", format!("{co}/forecasts/latest"), Read),
@@ -865,7 +949,7 @@ async fn every_route_enforces_its_permission_for_each_role() {
     let (cid, toks) = t.team4();
     let roles = ["director", "admin", "editor", "viewer"];
     let table = route_table(&cid);
-    assert_eq!(table.len(), 75, "таблица маршрутов должна совпадать с docs/roles.md");
+    assert_eq!(table.len(), 80, "таблица маршрутов должна совпадать с docs/roles.md");
     for (method, uri, need) in &table {
         for (i, tok) in toks.iter().enumerate() {
             let before = t.calls().len();

@@ -3,6 +3,7 @@
 
 mod admin;
 mod counterparties;
+mod integrations;
 mod settings;
 mod db;
 mod members;
@@ -21,6 +22,8 @@ use common::{Upstream, mw};
 pub struct AppState {
     pub db: db::Db,
     pub parser: Upstream,
+    /// главный ключ шифрования паролей интеграций (`INTEGRATIONS_KEY`); без него пароли не принимаются
+    pub integrations_key: Option<[u8; 32]>,
 }
 
 #[tokio::main]
@@ -28,7 +31,11 @@ async fn main() {
     let st = AppState {
         db: db::open(&mw::env("DB_PATH", "data/run/ledger.db")),
         parser: Upstream::new("parser", "Сервис разбора", &mw::env("PARSER_URL", "http://127.0.0.1:8002"), 60),
+        integrations_key: integrations::master_key(&mw::env("INTEGRATIONS_KEY", "")),
     };
+    if st.integrations_key.is_none() {
+        eprintln!("INTEGRATIONS_KEY не задан или короче 16 символов: подключения интеграций (1С) принимать пароли не будут");
+    }
     let app = build(st);
     mw::serve("ledger", &mw::env("INTERNAL_ADDR", "127.0.0.1:3002"), app).await;
 }
@@ -51,7 +58,7 @@ pub fn build(st: AppState) -> Router {
         .route(co, get(get_company).patch(update_company))
         .route(&format!("{co}/snapshot"), get(snapshot))
         .route(&format!("{co}/imports"), get(list_imports).post(upload_import).layer(DefaultBodyLimit::max(26 * 1024 * 1024)))
-        .route(&format!("{co}/imports/{{iid}}"), get(get_import))
+        .route(&format!("{co}/imports/{{iid}}"), get(get_import).delete(delete_import))
         .route(&format!("{co}/imports/{{iid}}/confirm"), post(confirm_import))
         .route(&format!("{co}/transactions"), get(list_transactions))
         .route(&format!("{co}/transactions/{{id}}/category"), patch(set_category))
@@ -65,5 +72,10 @@ pub fn build(st: AppState) -> Router {
         .route(&format!("{co}/counterparties/top"), get(counterparties::top))
         // настройки компании по разделам (fns, advisor)
         .route(&format!("{co}/settings/{{key}}"), get(settings::get_settings).put(settings::put_settings))
+        // подключения интеграций компании (1С): пароль шифруется, расшифрованные реквизиты — только для integrator
+        .route(&format!("{co}/integrations"), get(integrations::list))
+        .route(&format!("{co}/integrations/onec"), axum::routing::put(integrations::put_onec).delete(integrations::delete_onec))
+        .route(&format!("{co}/integrations/onec/status"), axum::routing::put(integrations::put_status))
+        .route(&format!("{co}/integrations/onec/credentials"), get(integrations::credentials))
         .with_state(st)
 }

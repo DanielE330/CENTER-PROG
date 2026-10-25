@@ -30,6 +30,7 @@ import { LeaveTeam, TeamInvites } from './TeamInvites'
 import { NotificationSettings } from './NotificationSettings'
 import { ForecastUpdateSettings } from './ForecastUpdateSettings'
 import { FnsSettingsCard } from './FnsSettingsCard'
+import { IntegrationsPanel } from './IntegrationsPanel'
 import { AdvisorSettingsCard } from './AdvisorSettingsCard'
 import { MembersPanel } from '../account/MembersPanel'
 import { canEdit } from '../../lib/roles'
@@ -123,6 +124,8 @@ export default function SettingsPage() {
           <ApiTokens />
 
           <ForecastUpdateSettings />
+
+          <IntegrationsPanel />
 
           <FnsSettingsCard />
 

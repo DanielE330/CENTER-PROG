@@ -2,7 +2,7 @@
  * Public API client. Same origin (the Vite dev server proxies /api to the backend), cookie `session`,
  * money as kopeck strings. Components never call fetch directly — they use hooks/queries.ts.
  */
-import type { AccountMethods, AuditPage, DemoLoginAccount, DemoLoginStatus, ApiTokenInfo, Backtest, Department, ExpectedEvent, FnsCounterparties, FnsEns, FnsEnsImportResult, FnsSyncResult, Goal, GoalStatus, ForecastRun, ImportPreview, DemoAdvance, DemoStatus, ImportRow, KeyRate, Me, MeWithCodes, MfaChallenge, MfaSetup, Member, NewMemberRequest, NewMemberResult, MemberResetResult, NotificationPrefs, ForecastUpdateMode, Role, NewApiToken, NewInvite, NewExpectedEvent, PlanFact, Retro, ScenarioParams, ScenarioResponse, SprintHistoryItem, SprintView, SyncResult, TgLink, TgKind, TgMember, TgPrefs, TgRole, TgStatus, TgTeam, TaxCalendarRequest, TaxCalendarResult, TeamInvite, Taxonomy, TransactionPage, FnsSettings, FnsSettingsView } from '../types'
+import type { AccountMethods, AuditPage, DemoLoginAccount, DemoLoginStatus, ApiTokenInfo, Backtest, Department, ExpectedEvent, FnsCounterparties, FnsEns, FnsEnsImportResult, FnsSyncResult, Goal, GoalStatus, ForecastRun, ImportPreview, DemoAdvance, DemoRewind, DemoStatus, ImportRow, KeyRate, Me, MeWithCodes, MfaChallenge, MfaSetup, Member, NewMemberRequest, NewMemberResult, MemberResetResult, NotificationPrefs, ForecastUpdateMode, Role, NewApiToken, NewInvite, NewExpectedEvent, PlanFact, Retro, ScenarioParams, ScenarioResponse, SprintHistoryItem, SprintView, SyncResult, TgLink, TgKind, TgMember, TgPrefs, TgRole, TgStatus, TgTeam, TaxCalendarRequest, TaxCalendarResult, TeamInvite, Taxonomy, TransactionPage, FnsSettings, FnsSettingsView, IntegrationsView, OnecConnectionInput } from '../types'
 import type { EvalRow } from './datasetSplit'
 import { AppError } from '../i18n/helpers'
 import { ApiError } from './errors'
@@ -194,6 +194,12 @@ export const api = {
   syncIntegrations: (externalCompany: string) =>
     request<SyncResult>('POST', co('/integrations/sync'), { body: { external_company: externalCompany } }),
 
+  // ----- интеграции компании (Настройки → Интеграции) -----
+  integrations: () => request<IntegrationsView>('GET', co('/integrations')),
+  saveOnec: (b: OnecConnectionInput) => request<IntegrationsView>('PUT', co('/integrations/onec'), { body: b }),
+  testOnec: (b: Partial<OnecConnectionInput> = {}) => request<IntegrationsView>('POST', co('/integrations/onec/test'), { body: b }),
+  disconnectOnec: () => request<void>('DELETE', co('/integrations/onec')),
+
   // ----- ФНС -----
   fnsEns: () => request<FnsEns>('GET', co('/fns/ens')),
   fnsCounterparties: (top?: number) => request<FnsCounterparties>('GET', co(top ? `/fns/counterparties?top=${top}` : '/fns/counterparties')),
@@ -240,6 +246,7 @@ export const api = {
   // ----- demo «Прошла неделя» -----
   demoStatus: () => request<DemoStatus>('GET', co('/demo/status')),
   demoAdvanceWeek: () => request<DemoAdvance>('POST', co('/demo/advance-week'), { body: {} }),
+  demoRewindWeek: () => request<DemoRewind>('POST', co('/demo/rewind-week'), { body: {} }),
 
   // ----- advisor (LLM assistant; it only proposes, the user applies) -----
   advisorAsk: (question: string, history: AdvisorHistoryItem[], lang: string) =>

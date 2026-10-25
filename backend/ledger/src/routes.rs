@@ -394,6 +394,26 @@ pub async fn get_import(State(st): State<AppState>, Path((cid, iid)): Path<(Stri
     Ok(Json(json!({"import_id": iid, "status": status, "filename": filename, "summary": serde_json::from_str::<Value>(&summary).unwrap_or(Value::Null)})))
 }
 
+/// Отмена подтверждённого импорта: удаляет его операции и запись импорта, повышает ревизию данных (прогноз пересчитается).
+pub async fn delete_import(State(st): State<AppState>, ctx: Ctx, Path((cid, iid)): Path<(String, String)>) -> R<Json<Value>> {
+    let mut c = lock(&st);
+    let exists: Option<i64> = c
+        .query_row("SELECT 1 FROM imports WHERE id=? AND company_id=?", params![iid, cid], |r| r.get(0))
+        .optional()
+        .map_err(internal)?;
+    if exists.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "not_found", "Не найдено"));
+    }
+    let tx = c.transaction().map_err(internal)?;
+    let removed = tx.execute("DELETE FROM transactions WHERE import_id=? AND company_id=?", params![iid, cid]).map_err(internal)?;
+    tx.execute("DELETE FROM imports WHERE id=? AND company_id=?", params![iid, cid]).map_err(internal)?;
+    tx.execute("UPDATE companies SET data_revision=data_revision+1 WHERE id=?", [&cid]).map_err(internal)?;
+    tx.commit().map_err(internal)?;
+    drop(c);
+    let _ = (&ctx, removed);
+    Ok(Json(json!({"import_id": iid, "removed": removed})))
+}
+
 pub async fn confirm_import(State(st): State<AppState>, ctx: Ctx, Path((cid, iid)): Path<(String, String)>) -> R<Json<Value>> {
     let mut c = lock(&st);
     let row: Option<(String, Option<String>)> = c

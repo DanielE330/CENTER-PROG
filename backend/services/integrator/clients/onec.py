@@ -31,6 +31,20 @@ def client(transport: httpx.BaseTransport | None = None) -> httpx.Client:
     )
 
 
+def live_client(conn, transport: httpx.BaseTransport | None = None, resolver=None) -> httpx.Client:
+    """Клиент настоящей 1С по реквизитам, которые ввёл пользователь компании (`conn.url/username/password`).
+
+    Защита от SSRF (guard.py): соединение только с публичными адресами, без редиректов, размер и время ответа ограничены,
+    переменные окружения прокси не используются. `transport` подменяется в тестах (проверка адреса при этом остаётся)."""
+    from .. import guard  # локальный импорт: guard сам зависит от clients.base
+
+    inner = transport or guard.guarded_transport(resolver)
+    return base.make_http(
+        conn.url, guard.LimitedTransport(inner), auth=(conn.username, conn.password), trust_env=False,
+        timeout=float(base.env("INTEGRATIONS_TIMEOUT", "20")),
+    )
+
+
 def fetch_all(http: httpx.Client, entity: str, flt: str | None = None, page: int = PAGE, **kw) -> list[dict]:
     """Пагинация $top/$skip до пустой (или неполной) страницы."""
     out, skip = [], 0

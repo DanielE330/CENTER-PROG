@@ -1473,7 +1473,8 @@ pub async fn integrations_sync(axum::extract::State(st): axum::extract::State<Ap
     if ext.is_empty() || ext.len() > 32 || !ext.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_company", "Некорректный код компании в источнике"));
     }
-    let v = st.integrator.get(&format!("/internal/v1/obligations?company={ext}"), &actx).await?;
+    // tenant: если компания подключила свою 1С (Настройки → Интеграции), integrator берёт данные оттуда
+    let v = st.integrator.get(&format!("/internal/v1/obligations?company={ext}&tenant={cid}"), &actx).await?;
     let items = v["items"].as_array().cloned().unwrap_or_default();
     let events: Vec<Value> = items.iter().filter_map(obligation_to_event).collect();
     let invalid = items.len() - events.len();
@@ -1484,6 +1485,7 @@ pub async fn integrations_sync(axum::extract::State(st): axum::extract::State<Ap
         skipped += r["skipped"].as_u64().unwrap_or(0) as usize;
     }
     audit(&st, &ctx, &p, "integrations.sync", &ext).await;
+    crate::integrations::record_sync(&st, &actx, &cid, &v).await;
     // контрагенты с ИНН сразу проверяются в ФНС: флаги риска попадают в ledger, и прогноз учитывает их без лишнего шага.
     // Без ИНН компании или при недоступном сервисе ФНС синхронизация всё равно успешна.
     let check = events.iter().any(|e| e["inn"].as_str().is_some_and(|s| !s.is_empty()))
@@ -1501,7 +1503,8 @@ pub async fn integrations_sync(axum::extract::State(st): axum::extract::State<Ap
     } else {
         Value::Null
     };
-    Ok(Json(json!({"created": created, "skipped": skipped, "sources": v["sources"], "fns": fns})))
+    // onec: sim | live — откуда пришли данные 1С (имитатор или подключённая настоящая 1С)
+    Ok(Json(json!({"created": created, "skipped": skipped, "sources": v["sources"], "onec": v["onec"], "fns": fns})))
 }
 
 #[cfg(test)]

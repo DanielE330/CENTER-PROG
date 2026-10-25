@@ -348,6 +348,16 @@ export interface DemoStatus {
   finished?: boolean
 }
 
+/** Result of the demo "step back": the last fed week is removed and the forecast is recomputed. */
+export interface DemoRewind {
+  removed: number
+  from: string | null
+  to: string | null
+  new_as_of: string | null
+  previous_as_of: string
+  recalc_ms: number
+}
+
 export interface DemoAdvance {
   added: number
   skipped_duplicates: number
@@ -366,7 +376,9 @@ export interface DemoAdvance {
 export interface SyncResult {
   created: number
   skipped: number
-  sources?: unknown
+  /** откуда пришли данные 1С: имитатор или подключённая настоящая 1С (Настройки → Интеграции) */
+  onec?: 'sim' | 'live' | null
+  sources?: { onec?: { status: string; error?: string | null; code?: string }; edo?: { status: string }; [k: string]: unknown }
   /** проверка контрагентов с ИНН (счета 1С) в ФНС сразу после синхронизации; null — проверять было некого */
   fns?: { checked: number; flagged?: number; saved?: boolean; error?: string } | null
 }
@@ -772,6 +784,48 @@ export interface FnsSettingsView {
   updated_at: string | null
   info: { fedresurs_configured: boolean; debt_as_of: string | null; debt_state: string } | null
   sources_info: Record<string, string>
+}
+
+/** Настройки → Интеграции: подключения компании. Пароля в ответах нет; адрес и логин видит только владелец. */
+export type IntegrationStatus = 'not_connected' | 'unchecked' | 'ok' | 'error' | 'sim'
+
+export interface IntegrationItem {
+  kind: 'onec' | 'edo' | 'bank'
+  connected: boolean
+  source: 'sim' | 'live'
+  status: IntegrationStatus
+  last_check_at: string | null
+  last_error: string | null
+  last_sync_at: string | null
+  url?: string
+  username?: string
+  password_set?: boolean
+}
+
+/** Результат проверки подключения 1С; `code` — причина (bad_credentials, odata_not_published, url_forbidden, timeout…). */
+export interface IntegrationCheck {
+  ok: boolean
+  code: string
+  message: string
+  documents?: number
+  more?: boolean
+  optional_missing?: string[]
+  missing?: string[]
+}
+
+export interface IntegrationsView {
+  can_manage: boolean
+  /** задан ли на сервере ключ шифрования паролей; null для тех, кто не управляет подключениями */
+  key_configured: boolean | null
+  items: IntegrationItem[]
+  check?: IntegrationCheck | null
+  recorded?: boolean
+}
+
+export interface OnecConnectionInput {
+  url: string
+  username: string
+  password?: string
 }
 
 export interface FnsSyncResult {

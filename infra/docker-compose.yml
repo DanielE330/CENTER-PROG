@@ -154,8 +154,12 @@ services:
       MOCK_TODAY: ${MOCK_TODAY:-2026-09-29}
       INTEGRATOR_TODAY: ${INTEGRATOR_TODAY:-${MOCK_TODAY:-2026-09-29}}
       INTEGRATOR_TIMEOUT: ${INTEGRATOR_TIMEOUT:-30}
+      # подключения 1С, введённые компаниями: реквизиты берутся из ledger; адрес проверяется на SSRF (docs/integrator.md)
+      LEDGER_URL: http://ledger:3002
+      INTEGRATIONS_ALLOW_HTTP: ${INTEGRATIONS_ALLOW_HTTP:-0}
     networks: [internal, edge]
     depends_on:
+      ledger: {condition: service_healthy}
       onec: {condition: service_healthy}
       edo: {condition: service_healthy}
       bank: {condition: service_healthy}
@@ -358,6 +362,8 @@ services:
       INTERNAL_ADDR: 0.0.0.0:3002
       DB_PATH: /data/ledger.db
       PARSER_URL: http://parser:8002
+      # ключ шифрования паролей, которые компании вводят в «Настройки → Интеграции» (создают install.sh и run.sh); пусто — пароли не принимаются
+      INTEGRATIONS_KEY: ${INTEGRATIONS_KEY:-}
     volumes: [ledger-data:/data]
     networks: [internal]
     depends_on:

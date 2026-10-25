@@ -35,9 +35,21 @@ if [ -z "${DEMO_PASSWORD:-}" ]; then
 fi
 export DEMO_PASSWORD=${DEMO_PASSWORD:-demo12345}
 
+# Ключ шифрования паролей интеграций («Настройки → Интеграции»): создаётся один раз в infra/.env, существующий не меняется.
+ensure_integrations_key() {
+  local env=infra/.env key
+  grep -qE '^INTEGRATIONS_KEY=[^[:space:]#]+' "$env" 2>/dev/null && return 0
+  key=$(openssl rand -hex 24 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(24))')
+  [ -f "$env" ] || { cp infra/.env.example "$env"; chmod 600 "$env"; }
+  if grep -qE '^INTEGRATIONS_KEY=' "$env"; then sed -i.bak "s|^INTEGRATIONS_KEY=.*|INTEGRATIONS_KEY=$key|" "$env"; rm -f "$env.bak"
+  else printf 'INTEGRATIONS_KEY=%s\n' "$key" >> "$env"; fi
+  echo "создан ключ INTEGRATIONS_KEY в $env (не теряйте его: им зашифрованы пароли 1С)"
+}
+
 case "${1:-up}" in
   up)
     need_docker
+    ensure_integrations_key
     $C up --build -d
     P=$(port); P=${P:-3000}
     printf 'Ждём запуска'

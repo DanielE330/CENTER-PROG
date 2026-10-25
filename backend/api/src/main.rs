@@ -9,6 +9,9 @@ mod fns;
 #[cfg(test)]
 mod fns_tests;
 mod http;
+mod integrations;
+#[cfg(test)]
+mod integrations_tests;
 mod legacy;
 mod mail;
 #[cfg(test)]
@@ -166,6 +169,10 @@ pub fn tenant_routes() -> Router<AppState> {
         .route(&format!("{co}/expected-events/tax-calendar"), post(http::tax_calendar))
         .route(&format!("{co}/expected-events/{{eid}}"), delete(http::to_ledger))
         .route(&format!("{co}/integrations/sync"), post(http::integrations_sync))
+        // подключение интеграций пользователем: статусы (read), 1С — реквизиты, проверка, отключение (manage); integrations.rs
+        .route(&format!("{co}/integrations"), get(integrations::get))
+        .route(&format!("{co}/integrations/onec"), axum::routing::put(integrations::put_onec).delete(integrations::delete_onec))
+        .route(&format!("{co}/integrations/onec/test"), post(integrations::test_onec))
         // сведения ФНС: налоговые события на год, ЕНС, проверка контрагентов (fns.rs)
         .route(&format!("{co}/integrations/fns/sync"), post(fns::sync))
         .route(&format!("{co}/fns/ens"), get(fns::ens))
@@ -185,6 +192,7 @@ pub fn tenant_routes() -> Router<AppState> {
         // демо «Прошла неделя»: только для демо-пользователя при DEMO_FEED_ENABLED=1
         .route(&format!("{co}/demo/status"), get(demo::status))
         .route(&format!("{co}/demo/advance-week"), post(demo::advance_week))
+        .route(&format!("{co}/demo/rewind-week"), post(demo::rewind_week))
         .route("/api/v1/gov/key-rate", get(http::gov_key_rate))
         .route(&format!("{co}/forecasts"), post(http::create_forecast))
         .route(&format!("{co}/forecasts/latest"), get(http::to_forecast))

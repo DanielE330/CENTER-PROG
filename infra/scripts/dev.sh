@@ -27,14 +27,19 @@ MOCK_TODAY=${MOCK_TODAY:-2026-09-29}
  echo $! >$ROOT/$RUN/gov.pid)
 for spec in ecp:8007 onec:8004 edo:8005 bank:8006 integrator:8008; do
   svc=${spec%%:*}; port=${spec##*:}
-  (cd backend/services && ECP_DB=$ROOT/$RUN/ecp.db AUTH_URL=http://127.0.0.1:8001 MOCK_TODAY=$MOCK_TODAY INTEGRATOR_TODAY=$MOCK_TODAY ONEC_URL=http://127.0.0.1:8004 EDO_URL=http://127.0.0.1:8005 BANK_URL=http://127.0.0.1:8006 setsid nohup uv run uvicorn $svc.app:app --host 127.0.0.1 --port $port >$ROOT/$RUN/$svc.log 2>&1 < /dev/null &
+  (cd backend/services && ECP_DB=$ROOT/$RUN/ecp.db AUTH_URL=http://127.0.0.1:8001 MOCK_TODAY=$MOCK_TODAY INTEGRATOR_TODAY=$MOCK_TODAY ONEC_URL=http://127.0.0.1:8004 EDO_URL=http://127.0.0.1:8005 BANK_URL=http://127.0.0.1:8006 LEDGER_URL=http://127.0.0.1:3002 INTEGRATIONS_ALLOW_HTTP=${INTEGRATIONS_ALLOW_HTTP:-0} setsid nohup uv run uvicorn $svc.app:app --host 127.0.0.1 --port $port >$ROOT/$RUN/$svc.log 2>&1 < /dev/null &
    echo $! >$ROOT/$RUN/$svc.pid)
 done
 (cd backend/services && DEMO_DATASET_DIR=${DEMO_DATASET_DIR:-} DEMO_CUTOFF=${DEMO_CUTOFF:-2026-07-12} setsid nohup uv run uvicorn demo_feed.app:app --host 127.0.0.1 --port 8012 >$ROOT/$RUN/demo_feed.log 2>&1 < /dev/null &
  echo $! >$ROOT/$RUN/demo_feed.pid)
 BIN=backend/target/release
 LEDGER_URL=http://127.0.0.1:3002; FORECAST_URL=http://127.0.0.1:3003; PLANFACT_URL=http://127.0.0.1:3004
-DB_PATH=$RUN/ledger.db INTERNAL_ADDR=127.0.0.1:3002 PARSER_URL=http://127.0.0.1:8002 setsid nohup $BIN/ledger >$RUN/ledger.log 2>&1 < /dev/null &
+# ключ шифрования паролей интеграций («Настройки → Интеграции»): создаётся один раз, лежит рядом с БД (data/run/integrations.key, права 600)
+if [ -z "${INTEGRATIONS_KEY:-}" ]; then
+  [ -s "$RUN/integrations.key" ] || (umask 077; python3 -c 'import secrets; print(secrets.token_hex(24))' >"$RUN/integrations.key")
+  INTEGRATIONS_KEY=$(cat "$RUN/integrations.key")
+fi
+DB_PATH=$RUN/ledger.db INTEGRATIONS_KEY=$INTEGRATIONS_KEY INTERNAL_ADDR=127.0.0.1:3002 PARSER_URL=http://127.0.0.1:8002 setsid nohup $BIN/ledger >$RUN/ledger.log 2>&1 < /dev/null &
 echo $! >$RUN/ledger.pid
 DB_PATH=$RUN/forecast.db INTERNAL_ADDR=127.0.0.1:3003 LEDGER_URL=$LEDGER_URL setsid nohup $BIN/forecast >$RUN/forecast.log 2>&1 < /dev/null &
 echo $! >$RUN/forecast.pid

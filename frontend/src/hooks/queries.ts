@@ -248,6 +248,11 @@ export function useAdvanceWeek() {
   return useMutation({ mutationFn: () => api.demoAdvanceWeek(), onSuccess: () => void all() })
 }
 
+export function useRewindWeek() {
+  const all = useInvalidateAll()
+  return useMutation({ mutationFn: () => api.demoRewindWeek(), onSuccess: () => void all() })
+}
+
 export function useKeyRate() {
   const key = useKey()
   return useQuery({ queryKey: key('key-rate'), queryFn: api.keyRate, staleTime: 60 * 60_000 })
