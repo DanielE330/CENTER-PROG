@@ -49,11 +49,11 @@
       "listLabel": "Demo accounts",
       "director": {
         "name": "Director",
-        "hint": "Role \u201cOwner\u201d: all data, the team, company settings and sign-in methods."
+        "hint": "Role “Owner”: all data, the team, company settings and sign-in methods."
       },
       "editor": {
         "name": "Editor",
-        "hint": "Role \u201cAnalyst\u201d: view and change data (imports, payments, categories), no team management."
+        "hint": "Role “Analyst”: view and change data (imports, payments, categories), no team management."
       },
       "viewer": {
         "name": "Viewer",
@@ -476,7 +476,6 @@
     }
   },
   "fns": {
-    "modeSim": "simulation",
     "sync": "Update taxes from the Federal Tax Service",
     "importOpen": "Upload the unified account statement",
     "checkedAt": "checked {{at}}",
@@ -487,9 +486,7 @@
     "syncDoneText": "Tax events for {{year}}: {{created}} created, {{skipped}} already existed.",
     "syncEstimated": "For {{count}} payments the amount is estimated from the statement.",
     "syncNoAmount": "For {{count}} payments the amount cannot be estimated (annual taxes, income-based contributions): add it manually.",
-    "syncSim": "Simulated tax service data, not real.",
     "sourceName": {
-      "fns_sim": "Tax service simulator",
       "import": "Tax service statement",
       "egrul": "Business registry",
       "data_nalog": "Tax open data",
@@ -542,7 +539,9 @@
       "taxDebt": "owes the tax office",
       "unreliable": "unreliable registry data",
       "disqualified": "disqualified director",
-      "massAddress": "mass registration address"
+      "massAddress": "mass registration address",
+      "notInRegistry": "not in the business registry",
+      "taxDebtLarge": "large tax debt"
     },
     "cp": {
       "title": "Counterparties and risks",
@@ -559,7 +558,6 @@
       "emptyTitle": "No counterparties yet",
       "emptyText": "They will appear after a statement is uploaded or 1C is synced.",
       "source": "Source: {{source}}",
-      "sourceMixed": "Sources: business registry and tax open data for real TINs (1C counterparties), tax service simulator for dataset TINs",
       "checked": "checked {{date}}",
       "notSaved": "risk flags were not saved, the forecast will not use them",
       "fromOnec": "from 1C",
@@ -568,7 +566,12 @@
       "expectedMark": "exp.",
       "expectedShareHint": "Share of expected receipts (1C invoices)",
       "debtAsOf": "as of {{date}}",
-      "inn": "TIN {{inn}}"
+      "inn": "TIN {{inn}}",
+      "exported": "Exported from the tax service",
+      "debtDataAsOf": "debts as of {{date}}",
+      "notInForecast": "risk is not used in the forecast",
+      "configure": "Configure",
+      "egrulOff": "Business registry is turned off in settings"
     }
   },
   "obligations": {
@@ -901,6 +904,42 @@
       "uploaded": "Uploaded",
       "confirmed": "Confirmed",
       "preview": "Awaiting confirmation"
+    },
+    "fns": {
+      "title": "Tax service data",
+      "subtitle": "What to check for counterparties and what counts as a risk. All data comes from the open tax registries.",
+      "sources": "Sources",
+      "sourceHint": {
+        "egrul": "Status, liquidation, registration date (egrul.nalog.ru)",
+        "data_nalog": "Debts to the budget (file.nalog.ru, published yearly)",
+        "fedresurs": "Bankruptcy signs"
+      },
+      "debtAsOf": "Debts to the budget, tax service dataset as of {{date}}",
+      "fedresursNoLogin": "Bankruptcy signs. Unavailable now: the bankruptcy registry operator login is not set on the server",
+      "risk": "What counts as a risk",
+      "riskName": {
+        "bankruptcy": "Bankruptcy",
+        "liquidation": "Liquidation",
+        "tax_debt": "Tax debt",
+        "unreliable": "Unreliable registry data",
+        "disqualified": "Disqualified director",
+        "mass_address": "Mass registration address",
+        "not_in_registry": "Not in the business registry"
+      },
+      "notInRegistryHint": "Happens with a typo in the statement TIN, so it is off by default",
+      "largeDebt": "Large debt from, ₽",
+      "largeDebtHint": "A debt from this amount raises the risk more",
+      "show": "Whom to check",
+      "showStatement": "Counterparties from the statement",
+      "showExpected": "Counterparties from 1C and expected payments",
+      "top": "How many largest counterparties to check (1–50)",
+      "use": "How to use",
+      "useInForecast": "Use the risk in the forecast",
+      "useInForecastHint": "Receipts from risky customers are shifted later and treated as less likely",
+      "checkAfterSync": "Check after syncing with 1C",
+      "checkAfterSyncHint": "New counterparties from invoices are checked right away",
+      "reset": "Restore defaults",
+      "saved": "Saved, counterparties rechecked"
     }
   },
   "import": {

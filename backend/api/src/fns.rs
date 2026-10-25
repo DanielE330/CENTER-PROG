@@ -1,12 +1,14 @@
 //! Интеграция с ФНС в продукте: налоговые события на год, единый налоговый счёт (ЕНС) и проверка контрагентов.
-//! Сведения ФНС отдаёт сервис `fns` (режим `sim` — имитатор `fns_sim`, режим `live` — реальные реестры; это забота сервиса,
-//! api режима не знает и только показывает источник). Здесь оркестрация: ИНН компании из реквизитов, суммы из ЕНС или оценки
+//! Сведения ФНС отдаёт сервис `fns`: только открытые реестры (ЕГРЮЛ/ЕГРИП, открытые данные ФНС, ЕФРСБ), ЕНС — из справки,
+//! загруженной владельцем. Что проверять и что считать риском, компания задаёт в настройках (`FnsSettings`, раздел `fns` в ledger).
+//! Здесь оркестрация: ИНН компании из реквизитов, суммы из ЕНС или оценки
 //! по выписке, идемпотентная запись событий в ledger (`expected-events/bulk`, ключ `fns:<вид>:<дата>`), флаги контрагентов в ledger.
 //!
 //! Маршруты и права (таблица в docs/roles.md):
 //! - `POST /api/v1/companies/{cid}/integrations/fns/sync` — edit
 //! - `GET  /api/v1/companies/{cid}/fns/ens` — read
 //! - `GET  /api/v1/companies/{cid}/fns/counterparties?top=20` — read
+//! - `GET  /api/v1/companies/{cid}/fns/settings` — read, `PUT` — admin
 //! - `GET  /api/ext/v1/fns/ens`, `GET /api/ext/v1/fns/counterparties` — токен, read
 //!
 //! Контракты fns (внутренние): `GET /internal/v1/fns/obligations?inn=&regime=&year=`, `GET /internal/v1/fns/ens?inn=`,
@@ -15,7 +17,7 @@
 //! ИНН в журналы не пишется; в ответах SPA ИНН контрагентов есть (они и так видны в выписке компании).
 
 use crate::AppState;
-use crate::http::{Editor, Principal, Reader, TokenPrincipal, audit, estimate_tax, estimate_usn, estimate_vat_installment, with_actor};
+use crate::http::{Administrator, Editor, Principal, Reader, TokenPrincipal, audit, estimate_tax, estimate_usn, estimate_vat_installment, with_actor};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -23,7 +25,7 @@ use axum::{
 };
 use chrono::{Datelike, NaiveDate};
 use common::{ApiError, Ctx, R, Snapshot, Tx, Upstream, err, internal};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashSet};
 
@@ -76,15 +78,141 @@ fn date_of(o: &Value, keys: &[&str]) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(str_of(o, keys)?.get(..10)?, "%Y-%m-%d").ok()
 }
 
-/// Источник и режим ответа fns: `source` (`fns_sim`, `egrul`, ...) и `mode` (`sim` | `live`).
-fn meta(v: &Value) -> (String, String) {
-    let source = str_of(v, &["source"]).unwrap_or("fns").to_string();
-    let mode = match str_of(v, &["mode"]) {
-        Some(m) if m == "sim" || m == "live" => m.to_string(),
-        _ if source.contains("sim") => "sim".to_string(),
-        _ => "live".to_string(),
-    };
-    (source, mode)
+/// Источник ответа fns: `egrul`, `data_nalog`, `import` (справка ЕНС), `rules` (календарь по закону).
+fn source_of(v: &Value) -> String {
+    str_of(v, &["source"]).unwrap_or("fns").to_string()
+}
+
+// ---------- настройки компании ----------
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct FnsSources {
+    /// ЕГРЮЛ/ЕГРИП: статус, ликвидация, дата регистрации
+    pub egrul: bool,
+    /// открытые данные ФНС: задолженность перед бюджетом
+    pub data_nalog: bool,
+    /// ЕФРСБ: банкротство (нужен логин оператора на сервере)
+    pub fedresurs: bool,
+}
+
+impl Default for FnsSources {
+    fn default() -> Self {
+        Self { egrul: true, data_nalog: true, fedresurs: true }
+    }
+}
+
+/// Какие признаки считать риском. Не найденный в ЕГРЮЛ ИНН по умолчанию риском не считается: так бывает с опечаткой в выписке.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct FnsRisk {
+    pub bankruptcy: bool,
+    pub liquidation: bool,
+    pub not_in_registry: bool,
+    pub unreliable: bool,
+    pub disqualified: bool,
+    pub tax_debt: bool,
+    pub mass_address: bool,
+    /// долг от этой суммы — «крупный» (вес 2), коп.
+    pub large_debt_kop: i64,
+}
+
+impl Default for FnsRisk {
+    fn default() -> Self {
+        Self { bankruptcy: true, liquidation: true, not_in_registry: false, unreliable: true, disqualified: true, tax_debt: true, mass_address: true, large_debt_kop: 50_000_000 }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct FnsSettings {
+    pub sources: FnsSources,
+    pub risk: FnsRisk,
+    /// показывать контрагентов из выписки
+    pub show_statement: bool,
+    /// показывать контрагентов из ожидаемых событий (счета и платёжки 1С)
+    pub show_expected: bool,
+    /// сколько контрагентов проверять (1..=50)
+    pub top: usize,
+    /// учитывать флаги риска в прогнозе (сдвиг и уверенность поступлений)
+    pub use_in_forecast: bool,
+    /// проверять контрагентов сразу после синхронизации интеграций
+    pub check_after_sync: bool,
+}
+
+impl Default for FnsSettings {
+    fn default() -> Self {
+        Self { sources: FnsSources::default(), risk: FnsRisk::default(), show_statement: true, show_expected: true, top: DEFAULT_TOP, use_in_forecast: true, check_after_sync: true }
+    }
+}
+
+impl FnsSettings {
+    fn validate(&self) -> R<()> {
+        let bad = |m: &str| Err(err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings", m));
+        if !(1..=MAX_TOP).contains(&self.top) {
+            return bad("top: число от 1 до 50");
+        }
+        if !(0..1_000_000_000_000_000).contains(&self.risk.large_debt_kop) {
+            return bad("large_debt_kop: неотрицательное число копеек");
+        }
+        if !self.show_statement && !self.show_expected {
+            return bad("Нужно показывать хотя бы один вид контрагентов");
+        }
+        if !(self.sources.egrul || self.sources.data_nalog || self.sources.fedresurs) {
+            return bad("Нужен хотя бы один источник");
+        }
+        Ok(())
+    }
+}
+
+/// Настройки компании из ledger; нет записи или запись не разбирается — значения по умолчанию.
+pub(crate) async fn load_settings(st: &AppState, ctx: &Ctx, cid: &str) -> R<FnsSettings> {
+    let v = st.ledger.get(&format!("/internal/v1/companies/{cid}/settings/fns"), ctx).await?;
+    Ok(serde_json::from_value(v["value"].clone()).unwrap_or_default())
+}
+
+/// Состояние источников в сервисе fns (дата набора задолженности, есть ли логин ЕФРСБ); сервис недоступен — null.
+async fn fns_info(st: &AppState, ctx: &Ctx) -> Value {
+    match st.fns.json(Method::GET, "/internal/v1/fns/info", ctx, None).await {
+        Ok(r) if r.status.is_success() => {
+            let v = r.json();
+            json!({"fedresurs_configured": v["fedresurs_configured"], "debt_as_of": v["debt_index"]["as_of"], "debt_state": v["debt_index"]["state"]})
+        }
+        _ => Value::Null,
+    }
+}
+
+fn settings_json(s: &FnsSettings, updated_at: &Value, info: Value) -> Value {
+    json!({"settings": s, "defaults": FnsSettings::default(), "updated_at": updated_at, "info": info, "sources_info": {
+            "egrul": "ЕГРЮЛ/ЕГРИП (egrul.nalog.ru): статус, ликвидация, дата регистрации",
+            "data_nalog": "Открытые данные ФНС (file.nalog.ru, набор debtam): задолженность перед бюджетом, публикуется раз в год",
+            "fedresurs": "ЕФРСБ: признаки банкротства; нужен логин оператора на сервере"}})
+}
+
+/// GET /api/v1/companies/{cid}/fns/settings -> {settings, defaults, updated_at}
+pub async fn get_settings(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(cid): Path<String>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let v = st.ledger.get(&format!("/internal/v1/companies/{cid}/settings/fns"), &with_actor(&ctx, &p)).await?;
+    let s: FnsSettings = serde_json::from_value(v["value"].clone()).unwrap_or_default();
+    Ok(Json(settings_json(&s, &v["updated_at"], fns_info(&st, &ctx).await)))
+}
+
+/// PUT /api/v1/companies/{cid}/fns/settings {FnsSettings} (admin) -> {settings, defaults, updated_at}
+pub async fn put_settings(State(st): State<AppState>, Administrator(p): Administrator, ctx: Ctx, Path(cid): Path<String>, Json(b): Json<Value>) -> R<Json<Value>> {
+    authorize(&p, &cid)?;
+    let s: FnsSettings = serde_json::from_value(b).map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings", format!("Настройки ФНС: {e}")))?;
+    s.validate()?;
+    let actx = with_actor(&ctx, &p);
+    let r = st.ledger.json(Method::PUT, &format!("/internal/v1/companies/{cid}/settings/fns"), &actx, Some(&json!(s))).await?;
+    if !r.status.is_success() {
+        return Err(err(StatusCode::BAD_GATEWAY, "settings_not_saved", "Настройки не сохранены"));
+    }
+    // флаги риска пересчитываются под новые правила сразу (без ИНН компании или без сервиса ФНС — при следующем открытии)
+    if !p.company_inn.trim().is_empty() {
+        let _ = counterparties_view(&st, &actx, &p, None).await;
+    }
+    audit(&st, &ctx, &p, "fns.settings", "").await;
+    Ok(Json(settings_json(&s, &r.json()["updated_at"], fns_info(&st, &ctx).await)))
 }
 
 fn stringify(v: Option<i64>) -> Value {
@@ -121,7 +249,6 @@ struct Ens {
     upcoming: Vec<Obligation>,
     checked_at: Option<String>,
     source: String,
-    mode: String,
 }
 
 fn parse_ens(v: &Value) -> Ens {
@@ -146,15 +273,14 @@ fn parse_ens(v: &Value) -> Ens {
                 .collect()
         })
         .unwrap_or_default();
-    let (source, mode) = meta(v);
-    Ens { balance, debt, upcoming, checked_at: str_of(v, &["checked_at", "as_of", "updated_at"]).map(str::to_string), source, mode }
+    Ens { balance, debt, upcoming, checked_at: str_of(v, &["checked_at", "as_of", "updated_at"]).map(str::to_string), source: source_of(v) }
 }
 
 fn ens_json(e: &Ens) -> Value {
     json!({
         "balance_kop": stringify(e.balance), "debt_kop": e.debt.to_string(), "has_debt": e.debt > 0,
         "upcoming": e.upcoming.iter().map(|o| json!({"kind": o.kind, "date": o.date, "amount_kop": stringify(o.amount), "title": o.title})).collect::<Vec<_>>(),
-        "checked_at": e.checked_at, "source": e.source, "source_label": SOURCE_LABEL, "mode": e.mode,
+        "checked_at": e.checked_at, "source": e.source, "source_label": SOURCE_LABEL,
     })
 }
 
@@ -191,7 +317,10 @@ struct Cp {
     tax_debt_as_of: Option<String>,
     checked_at: Option<String>,
     source: String,
-    mode: String,
+    /// причины риска по настройкам компании (коды fns: tax_debt_large, liquidated, ...)
+    reasons: Vec<String>,
+    /// по каким источникам сведения получены (`ok`), выключены (`off`) или недоступны
+    sources: Value,
     /// данные из просроченного кэша: источник сейчас недоступен
     stale: bool,
     /// сведения получены хотя бы от одного источника (иначе проверка не состоялась)
@@ -230,13 +359,14 @@ fn parse_cp(v: &Value, fallback_inn: Option<&str>) -> Option<Cp> {
         _ if tax_debt > 0 || unreliable || mass_address || disqualified => "medium",
         _ => "low",
     };
-    let (source, mode) = meta(v);
+    let source = source_of(v);
+    let reasons = v["risk_reasons"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
     Some(Cp {
         inn, status, risk_level, tax_debt, bankruptcy, unreliable, mass_address, disqualified,
         registered_at: str_of(v, &["registered_at", "registration_date"]).map(str::to_string),
         tax_debt_as_of: str_of(&v["tax_debt"], &["as_of"]).map(str::to_string),
         checked_at: str_of(v, &["checked_at"]).map(str::to_string),
-        source, mode, stale: flag(&v["stale"]), usable,
+        source, reasons, sources: v["sources"].clone(), stale: flag(&v["stale"]), usable,
     })
 }
 
@@ -346,11 +476,8 @@ pub struct SyncBody {
     regime: Option<String>,
 }
 
-fn event_title(base: &str, mode: &str, estimated: bool) -> String {
+fn event_title(base: &str, estimated: bool) -> String {
     let mut t = format!("{base} · {SOURCE_LABEL}");
-    if mode == "sim" {
-        t.push_str(" (имитация)");
-    }
     if estimated {
         t.push_str(" · оценка по выписке");
     }
@@ -359,7 +486,7 @@ fn event_title(base: &str, mode: &str, estimated: bool) -> String {
 
 /// Собирает события для ledger из обязательств fns. Сумма: из fns, иначе из ближайших платежей ЕНС, иначе оценка по выписке.
 /// Возвращает (события, превью для ответа, число оценённых, число без суммы).
-fn build_events(obls: &[Obligation], ens: Option<&Ens>, regime: &str, txs: &[Tx], base: NaiveDate, mode: &str) -> (Vec<Value>, Vec<Value>, usize, usize) {
+fn build_events(obls: &[Obligation], ens: Option<&Ens>, regime: &str, txs: &[Tx], base: NaiveDate) -> (Vec<Value>, Vec<Value>, usize, usize) {
     let (mut events, mut preview, mut estimated, mut no_amount) = (vec![], vec![], 0, 0);
     for o in obls.iter().filter(|o| o.date > base) {
         let from_ens = ens.and_then(|e| e.upcoming.iter().find(|u| u.date == o.date && (u.kind == o.kind || u.kind == "enp")).and_then(|u| u.amount));
@@ -377,7 +504,7 @@ fn build_events(obls: &[Obligation], ens: Option<&Ens>, regime: &str, txs: &[Tx]
             estimated += 1;
         }
         let name = o.title.clone().unwrap_or_else(|| kind_title(&o.kind).to_string());
-        let title = event_title(&name, mode, is_est);
+        let title = event_title(&name, is_est);
         events.push(json!({
             "external_id": format!("fns:{}:{}", o.kind, o.date), "date": o.date, "amount_kop": -amount, "title": title,
             "counterparty": COUNTERPARTY_NAME, "source": "tax", "confidence": if is_est { 0.9 } else { 1.0 },
@@ -387,7 +514,7 @@ fn build_events(obls: &[Obligation], ens: Option<&Ens>, regime: &str, txs: &[Tx]
     (events, preview, estimated, no_amount)
 }
 
-/// POST /api/v1/companies/{cid}/integrations/fns/sync {year?, regime?} -> {created, skipped, estimated, no_amount, year, regime, regime_source, source, mode, fetched_at, items, debt_kop}
+/// POST /api/v1/companies/{cid}/integrations/fns/sync {year?, regime?} -> {created, skipped, estimated, no_amount, year, regime, regime_source, source, fetched_at, items, debt_kop}
 /// Налоговые события на год из ФНС (сроки — сервис fns, суммы — ФНС/ЕНС или оценка по выписке) -> ожидаемые события ledger, идемпотентно.
 pub async fn sync(State(st): State<AppState>, Editor(p): Editor, ctx: Ctx, Path(cid): Path<String>, body: Option<Json<SyncBody>>) -> R<Json<Value>> {
     authorize(&p, &cid)?;
@@ -414,21 +541,21 @@ pub async fn sync(State(st): State<AppState>, Editor(p): Editor, ctx: Ctx, Path(
 
     let v = fns_call(&st.fns, Method::GET, &format!("/internal/v1/fns/obligations?inn={inn}&regime={regime}&year={year}"), &actx, None).await?;
     let obls = parse_obligations(&v);
-    let (source, mode) = meta(&v);
+    let source = source_of(&v);
     // ЕНС нужен для сумм и недоимки; без него синхронизация всё равно работает (оценка по выписке)
     let ens = match fns_call(&st.fns, Method::GET, &format!("/internal/v1/fns/ens?inn={inn}"), &actx, None).await {
         Ok(e) => Some(parse_ens(&e)),
         Err(_) => None,
     };
 
-    let (mut events, preview, estimated, no_amount) = build_events(&obls, ens.as_ref(), &regime, &txs, base, &mode);
+    let (mut events, preview, estimated, no_amount) = build_events(&obls, ens.as_ref(), &regime, &txs, base);
     // недоимка на ЕНС — просроченное обязательство; ключ по сумме: повторная синхронизация с той же недоимкой ничего не дублирует
     let mut debt_kop = None;
     if let Some(e) = ens.as_ref().filter(|e| e.debt > 0) {
         debt_kop = Some(e.debt);
         events.push(json!({
             "external_id": format!("fns:ens_debt:{}", e.debt), "date": base, "amount_kop": -e.debt,
-            "title": event_title("Задолженность по ЕНС", &mode, false), "counterparty": COUNTERPARTY_NAME, "source": "tax", "confidence": 0.95,
+            "title": event_title("Задолженность по ЕНС", false), "counterparty": COUNTERPARTY_NAME, "source": "tax", "confidence": 0.95,
         }));
     }
     let (mut created, mut skipped) = (0, 0);
@@ -440,7 +567,7 @@ pub async fn sync(State(st): State<AppState>, Editor(p): Editor, ctx: Ctx, Path(
     audit(&st, &ctx, &p, "integrations.fns.sync", &format!("{year}")).await;
     Ok(Json(json!({
         "created": created, "skipped": skipped, "estimated": estimated, "no_amount": no_amount, "year": year,
-        "regime": regime, "regime_source": regime_source, "source": source, "source_label": SOURCE_LABEL, "mode": mode,
+        "regime": regime, "regime_source": regime_source, "source": source, "source_label": SOURCE_LABEL,
         "fetched_at": chrono::Utc::now().to_rfc3339(), "items": preview, "debt_kop": stringify(debt_kop),
     })))
 }
@@ -496,34 +623,58 @@ pub struct TopQuery {
     top: Option<String>,
 }
 
-fn parse_top(q: &TopQuery) -> R<usize> {
+/// `top` из запроса; не задан — из настроек компании.
+fn parse_top(q: &TopQuery) -> R<Option<usize>> {
     match q.top.as_deref().map(str::trim) {
-        None | Some("") => Ok(DEFAULT_TOP),
-        Some(s) => s.parse::<usize>().ok().filter(|n| (1..=MAX_TOP).contains(n)).ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_top", "top: число от 1 до 50")),
+        None | Some("") => Ok(None),
+        Some(s) => s.parse::<usize>().ok().filter(|n| (1..=MAX_TOP).contains(n)).map(Some).ok_or_else(|| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_top", "top: число от 1 до 50")),
     }
 }
 
-/// Топ контрагентов компании (ledger) -> проверка в fns (пакетом, кэш на стороне fns) -> флаги в ledger -> ответ с источником и временем проверки.
-pub(crate) async fn counterparties_view(st: &AppState, ctx: &Ctx, p: &Principal, top: usize) -> R<Value> {
+/// Контрагент проходит фильтр настроек: из выписки и/или из ожидаемых событий (1С).
+fn shown(row: &Value, s: &FnsSettings) -> bool {
+    let has = |k: &str| row["origin"].as_array().is_some_and(|a| a.iter().any(|x| x == k));
+    let statement = !row["origin"].is_array() || has("statement");
+    (s.show_statement && statement) || (s.show_expected && has("expected"))
+}
+
+/// Топ контрагентов компании (ledger) -> проверка в fns по настройкам компании (пакетом, кэш на стороне fns) -> флаги в ledger
+/// -> ответ с источником, датой сведений и временем проверки. `top` не задан — из настроек.
+pub(crate) async fn counterparties_view(st: &AppState, ctx: &Ctx, p: &Principal, top: Option<usize>) -> R<Value> {
     company_inn(p)?; // компания без ИНН не может пользоваться ФНС-функциями: единое сообщение для всех маршрутов
     let cid = &p.company_id;
-    let t = st.ledger.get(&format!("/internal/v1/companies/{cid}/counterparties/top?limit={top}"), ctx).await?;
-    let rows: Vec<Value> = t["items"].as_array().cloned().unwrap_or_default();
+    let cfg = load_settings(st, ctx, cid).await?;
+    let top = top.unwrap_or(cfg.top);
+    // при выключенном виде контрагентов берём с запасом, чтобы после фильтра осталось `top`
+    let limit = if cfg.show_statement && cfg.show_expected { top } else { (top * 3).min(MAX_TOP * 2) };
+    let t = st.ledger.get(&format!("/internal/v1/companies/{cid}/counterparties/top?limit={limit}"), ctx).await?;
+    let rows: Vec<Value> = t["items"].as_array().cloned().unwrap_or_default().into_iter().filter(|r| shown(r, &cfg)).take(top).collect();
     let now = chrono::Utc::now().to_rfc3339();
     if rows.is_empty() {
-        return Ok(json!({"items": [], "checked_at": now, "source": null, "source_label": SOURCE_LABEL, "mode": null, "saved": true, "total_income_kop": "0"}));
+        return Ok(json!({"items": [], "checked_at": now, "source": null, "source_label": SOURCE_LABEL, "exported_from": "fns", "saved": true, "total_income_kop": "0", "settings": cfg}));
     }
     let own = p.company_inn.trim();
     let inns: Vec<String> = rows.iter().filter_map(|r| r["inn"].as_str()).filter(|i| valid_inn(i) && *i != own).map(str::to_string).collect();
-    let v = fns_call(&st.fns, Method::POST, "/internal/v1/fns/counterparties/batch", ctx, Some(&json!({"inns": inns}))).await?;
+    let body = json!({"inns": inns, "settings": {"sources": cfg.sources, "risk": cfg.risk}});
+    let v = fns_call(&st.fns, Method::POST, "/internal/v1/fns/counterparties/batch", ctx, Some(&body)).await?;
     let checked: BTreeMap<String, Cp> = parse_batch(&v).into_iter().filter(|c| c.usable).map(|c| (c.inn.clone(), c)).collect();
-    // источник и режим — по самим проверкам (у пакета верхнего `source` нет), иначе по ответу целиком
-    let (batch_source, batch_mode) = checked.values().next().map_or_else(|| meta(&v), |c| (c.source.clone(), c.mode.clone()));
+    // источник — по самим проверкам (у пакета верхнего `source` нет)
+    let batch_source = checked.values().next().map_or_else(|| source_of(&v), |c| c.source.clone());
+    // дата, на которую ФНС опубликовала сведения о задолженности (одна на весь набор debtam)
+    let debt_as_of = checked.values().find_map(|c| c.tax_debt_as_of.clone());
 
-    // флаги в ledger: от них зависит прогноз (ошибка записи не мешает показать результат)
+    // флаги в ledger: от них зависит прогноз (ошибка записи не мешает показать результат). Учёт риска выключен —
+    // флаги нейтральные: прогноз ведёт себя так, будто проверки не было.
     let flags: Vec<Value> = checked
         .values()
-        .map(|c| json!({"inn": c.inn, "risk_level": c.risk_level, "status": c.status, "tax_debt_kop": c.tax_debt, "bankruptcy_flag": c.bankruptcy, "checked_at": c.checked_at.clone().unwrap_or_else(|| now.clone()), "source": c.source}))
+        .map(|c| {
+            let at = c.checked_at.clone().unwrap_or_else(|| now.clone());
+            if cfg.use_in_forecast {
+                json!({"inn": c.inn, "risk_level": c.risk_level, "status": c.status, "tax_debt_kop": c.tax_debt, "bankruptcy_flag": c.bankruptcy, "checked_at": at, "source": c.source})
+            } else {
+                json!({"inn": c.inn, "risk_level": "low", "status": "", "tax_debt_kop": 0, "bankruptcy_flag": false, "checked_at": at, "source": c.source})
+            }
+        })
         .collect();
     let saved = flags.is_empty() || st.ledger.json(Method::PUT, &format!("/internal/v1/companies/{cid}/counterparty-risk"), ctx, Some(&json!({"items": flags}))).await.is_ok_and(|r| r.status.is_success());
 
@@ -561,7 +712,8 @@ pub(crate) async fn counterparties_view(st: &AppState, ctx: &Ctx, p: &Principal,
                     o.insert("tax_debt_as_of".into(), json!(c.tax_debt_as_of));
                     o.insert("checked_at".into(), json!(c.checked_at.clone().unwrap_or_else(|| now.clone())));
                     o.insert("source".into(), json!(c.source));
-                    o.insert("mode".into(), json!(c.mode));
+                    o.insert("risk_reasons".into(), json!(c.reasons));
+                    o.insert("sources".into(), c.sources.clone());
                     o.insert("stale".into(), json!(c.stale));
                 }
                 None => {
@@ -576,12 +728,13 @@ pub(crate) async fn counterparties_view(st: &AppState, ctx: &Ctx, p: &Principal,
         })
         .collect();
     Ok(json!({
-        "items": items, "checked_at": now, "source": batch_source, "source_label": SOURCE_LABEL, "mode": batch_mode, "saved": saved,
+        "items": items, "checked_at": now, "source": batch_source, "source_label": SOURCE_LABEL, "exported_from": "fns", "debt_as_of": debt_as_of,
+        "saved": saved, "settings": cfg,
         "total_income_kop": stringify(kop_of(&t["total_income_kop"])),
     }))
 }
 
-/// GET /api/v1/companies/{cid}/fns/counterparties?top=20 -> {items[], checked_at, source, source_label, mode, saved}
+/// GET /api/v1/companies/{cid}/fns/counterparties[?top=] -> {items[], checked_at, source, source_label, exported_from, debt_as_of, saved, settings}
 pub async fn counterparties(State(st): State<AppState>, Reader(p): Reader, ctx: Ctx, Path(cid): Path<String>, Query(q): Query<TopQuery>) -> R<Json<Value>> {
     authorize(&p, &cid)?;
     let top = parse_top(&q)?;
@@ -633,8 +786,8 @@ mod tests {
             Obligation { kind: "usn_annual".into(), date: d("2027-03-31"), amount: None, title: None },
             Obligation { kind: "enp".into(), date: d("2026-09-28"), amount: Some(5), title: None },
         ];
-        let ens = Ens { balance: Some(0), debt: 0, upcoming: vec![Obligation { kind: "enp".into(), date: d("2026-11-30"), amount: Some(123_000), title: None }], checked_at: None, source: "fns_sim".into(), mode: "sim".into() };
-        let (ev, preview, estimated, no_amount) = build_events(&obls, Some(&ens), "usn_income", &txs, base, "sim");
+        let ens = Ens { balance: Some(0), debt: 0, upcoming: vec![Obligation { kind: "enp".into(), date: d("2026-11-30"), amount: Some(123_000), title: None }], checked_at: None, source: "import".into() };
+        let (ev, preview, estimated, no_amount) = build_events(&obls, Some(&ens), "usn_income", &txs, base);
         // прошедший срок (до конца выписки) пропущен; годовой налог без суммы — не оценивается
         assert_eq!((ev.len(), estimated, no_amount), (3, 1, 1), "{ev:?}");
         assert_eq!((ev[0]["amount_kop"].as_i64(), ev[0]["external_id"].as_str()), (Some(-777), Some("fns:usn_advance:2026-10-28")));
@@ -644,29 +797,28 @@ mod tests {
         assert_eq!(ev[2]["confidence"].as_f64(), Some(0.9));
         for e in &ev {
             assert_eq!((e["source"].as_str(), e["counterparty"].as_str()), (Some("tax"), Some("ФНС России")));
-            assert!(e["title"].as_str().unwrap().contains("ФНС (имитация)"));
+            assert!(e["title"].as_str().unwrap().contains("· ФНС") && !e["title"].as_str().unwrap().contains("имитац"));
         }
         assert!(ev[2]["title"].as_str().unwrap().contains("оценка по выписке") && !ev[0]["title"].as_str().unwrap().contains("оценка"));
         assert_eq!((preview[2]["estimated"].as_bool(), preview[0]["estimated"].as_bool()), (Some(true), Some(false)));
-        // live: без пометки «имитация»
-        let (live, _, _, _) = build_events(&obls[..1], None, "usn_income", &txs, base, "live");
-        assert_eq!(live[0]["title"], "Аванс по УСН · ФНС");
+        let (one, _, _, _) = build_events(&obls[..1], None, "usn_income", &txs, base);
+        assert_eq!(one[0]["title"], "Аванс по УСН · ФНС");
     }
 
     #[test]
     fn ens_is_parsed_with_debt_and_upcoming() {
-        let e = parse_ens(&json!({"balance_kop": -2500000, "upcoming": [{"date": "2026-11-30", "amount_kop": 1200000, "kind": "enp"}, {"date": "bad"}], "checked_at": "2026-10-24T09:00:00Z", "source": "fns_sim"}));
-        assert_eq!((e.balance, e.debt, e.upcoming.len(), e.mode.as_str()), (Some(-2_500_000), 2_500_000, 1, "sim"));
-        let e = parse_ens(&json!({"balance_kop": "700", "debt_kop": "0", "mode": "live", "source": "lk"}));
-        assert_eq!((e.balance, e.debt, e.mode.as_str()), (Some(700), 0, "live"));
+        let e = parse_ens(&json!({"balance_kop": -2500000, "upcoming": [{"date": "2026-11-30", "amount_kop": 1200000, "kind": "enp"}, {"date": "bad"}], "checked_at": "2026-10-24T09:00:00Z", "source": "import"}));
+        assert_eq!((e.balance, e.debt, e.upcoming.len(), e.source.as_str()), (Some(-2_500_000), 2_500_000, 1, "import"));
+        let e = parse_ens(&json!({"balance_kop": "700", "debt_kop": "0", "source": "import"}));
+        assert_eq!((e.balance, e.debt), (Some(700), 0));
         let j = ens_json(&parse_ens(&json!({"debt": {"amount_kop": 5}})));
         assert_eq!((j["debt_kop"].as_str(), j["has_debt"].as_bool(), j["source_label"].as_str()), (Some("5"), Some(true), Some("ФНС")));
     }
 
     #[test]
     fn counterparty_is_normalized_and_risk_is_derived_when_missing() {
-        let c = parse_cp(&json!({"inn": "7701234567", "status": "Действует", "tax_debt": {"has": true, "amount": 90000}, "unreliable": false, "source": "fns_sim"}), None).unwrap();
-        assert_eq!((c.status, c.risk_level, c.tax_debt, c.mode.as_str()), ("active", "medium", 90_000, "sim"));
+        let c = parse_cp(&json!({"inn": "7701234567", "status": "Действует", "tax_debt": {"has": true, "amount": 90000}, "unreliable": false, "source": "egrul", "risk_reasons": ["tax_debt"]}), None).unwrap();
+        assert_eq!((c.status, c.risk_level, c.tax_debt, c.source.as_str(), c.reasons.as_slice()), ("active", "medium", 90_000, "egrul", ["tax_debt".to_string()].as_slice()));
         let c = parse_cp(&json!({"inn": "7701234568", "status": "Ликвидируется"}), None).unwrap();
         assert_eq!((c.status, c.risk_level), ("liquidating", "high"));
         let c = parse_cp(&json!({"inn": "7701234569", "status": "active", "bankruptcy": {"flag": true, "source": "efrsb"}}), None).unwrap();
@@ -681,10 +833,36 @@ mod tests {
     #[test]
     fn top_param_is_validated() {
         let q = |s: Option<&str>| parse_top(&TopQuery { top: s.map(str::to_string) });
-        assert_eq!(q(None).unwrap(), 20);
-        assert_eq!(q(Some("5")).unwrap(), 5);
+        assert_eq!(q(None).unwrap(), None, "из настроек компании");
+        assert_eq!(q(Some("5")).unwrap(), Some(5));
         for bad in ["0", "51", "-1", "abc"] {
             assert_eq!(q(Some(bad)).err().map(|e| e.1).as_deref(), Some("invalid_top"), "{bad}");
         }
+    }
+
+    #[test]
+    fn settings_defaults_partial_json_and_validation() {
+        let d = FnsSettings::default();
+        assert!(!d.risk.not_in_registry && d.use_in_forecast && d.check_after_sync && d.top == 20);
+        let s: FnsSettings = serde_json::from_value(json!({"risk": {"not_in_registry": true}, "top": 5})).unwrap();
+        assert!(s.risk.not_in_registry && s.risk.tax_debt && s.top == 5 && s.sources.egrul, "недостающие поля — по умолчанию");
+        assert!(serde_json::from_value::<FnsSettings>(json!({"risk": {"bogus": true}})).is_err(), "неизвестные поля отклоняются");
+        assert!(s.validate().is_ok());
+        for bad in [json!({"top": 0}), json!({"top": 51}), json!({"show_statement": false, "show_expected": false}),
+                    json!({"sources": {"egrul": false, "data_nalog": false, "fedresurs": false}}), json!({"risk": {"large_debt_kop": -1}})] {
+            let s: FnsSettings = serde_json::from_value(bad.clone()).unwrap();
+            assert_eq!(s.validate().err().map(|e| e.1).as_deref(), Some("invalid_settings"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn rows_are_filtered_by_origin_settings() {
+        let st = json!({"origin": ["statement"]});
+        let onec = json!({"origin": ["expected", "onec"]});
+        let both = json!({"origin": ["expected", "onec", "statement"]});
+        let only_onec = FnsSettings { show_statement: false, ..Default::default() };
+        let only_st = FnsSettings { show_expected: false, ..Default::default() };
+        assert_eq!([shown(&st, &only_onec), shown(&onec, &only_onec), shown(&both, &only_onec)], [false, true, true]);
+        assert_eq!([shown(&st, &only_st), shown(&onec, &only_st), shown(&json!({}), &only_st)], [true, false, true]);
     }
 }

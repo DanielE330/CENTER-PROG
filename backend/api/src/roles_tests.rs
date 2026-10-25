@@ -72,6 +72,8 @@ pub(crate) struct Fake {
     pub(crate) top: Option<Value>,
     /// тела PUT counterparty-risk
     pub(crate) risk_puts: Vec<Value>,
+    /// настройки компаний: "cid/key" -> значение
+    pub(crate) settings: HashMap<String, Value>,
 }
 
 pub(crate) type Shared = Arc<Mutex<Fake>>;
@@ -506,6 +508,17 @@ async fn l_risk_put(State(f): State<Shared>, Json(b): Json<Value>) -> Resp {
     (StatusCode::OK, Json(json!({"upserted": n, "changed": n})))
 }
 
+async fn l_settings_get(State(f): State<Shared>, Path((cid, key)): Path<(String, String)>) -> Resp {
+    let g = f.lock().unwrap();
+    let v = g.settings.get(&format!("{cid}/{key}")).cloned().unwrap_or(Value::Null);
+    (StatusCode::OK, Json(json!({"key": key, "value": v, "updated_at": null})))
+}
+
+async fn l_settings_put(State(f): State<Shared>, Path((cid, key)): Path<(String, String)>, Json(b): Json<Value>) -> Resp {
+    f.lock().unwrap().settings.insert(format!("{cid}/{key}"), b.clone());
+    (StatusCode::OK, Json(json!({"key": key, "value": b, "updated_at": "2026-10-25T10:00:00Z", "changed": true})))
+}
+
 async fn fallback() -> Json<Value> {
     Json(json!({"items": [], "ok": true}))
 }
@@ -537,6 +550,7 @@ fn fake_router(f: Shared) -> Router {
         .route("/internal/v1/companies/{cid}/expected-events/bulk", post(l_bulk))
         .route("/internal/v1/companies/{cid}/counterparties/top", get(l_top))
         .route("/internal/v1/companies/{cid}/counterparty-risk", axum::routing::put(l_risk_put))
+        .route("/internal/v1/companies/{cid}/settings/{key}", get(l_settings_get).put(l_settings_put))
         .route("/internal/v1/companies/{cid}/members", get(l_members).post(l_member_add))
         .route("/internal/v1/companies/{cid}/members/join", post(l_member_join))
         .route("/internal/v1/companies/{cid}/members/{uid}", patch(l_member_patch).delete(l_member_delete))
@@ -741,6 +755,8 @@ fn route_table(c: &str) -> Vec<(&'static str, String, Need)> {
         ("GET", format!("{co}/fns/ens"), Read),
         ("POST", format!("{co}/fns/ens/import"), Edit),
         ("GET", format!("{co}/fns/counterparties"), Read),
+        ("GET", format!("{co}/fns/settings"), Read),
+        ("PUT", format!("{co}/fns/settings"), Admin),
         ("POST", format!("{co}/advisor/ask"), Read),
         ("POST", format!("{co}/advisor/suggestions/apply"), Edit),
         ("GET", format!("{co}/demo/status"), Read),
@@ -816,7 +832,7 @@ async fn every_route_enforces_its_permission_for_each_role() {
     let (cid, toks) = t.team4();
     let roles = ["director", "admin", "editor", "viewer"];
     let table = route_table(&cid);
-    assert_eq!(table.len(), 60, "таблица маршрутов должна совпадать с docs/roles.md");
+    assert_eq!(table.len(), 62, "таблица маршрутов должна совпадать с docs/roles.md");
     for (method, uri, need) in &table {
         for (i, tok) in toks.iter().enumerate() {
             let before = t.calls().len();

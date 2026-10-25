@@ -63,7 +63,7 @@ export function FnsEnsCard() {
             )}
             <p className="text-xs text-muted flex flex-wrap items-center gap-1.5">
               <Landmark size={13} aria-hidden />
-              <Badge tone={e.mode === 'sim' ? 'warning' : 'neutral'}>{sourceText(t, e.source, e.mode)}</Badge>
+              <Badge tone="neutral">{sourceText(t, e.source)}</Badge>
               {e.checked_at && <span>{t('fns.checkedAt', { at: formatDateTime(e.checked_at) })}</span>}
             </p>
           </>
@@ -82,7 +82,6 @@ export function FnsEnsCard() {
             {t('fns.syncDoneText', { created: sync.data.created, skipped: sync.data.skipped, year: sync.data.year })}
             {sync.data.estimated > 0 && <> {t('fns.syncEstimated', { count: sync.data.estimated })}</>}
             {sync.data.no_amount > 0 && <> {t('fns.syncNoAmount', { count: sync.data.no_amount })}</>}
-            {sync.data.mode === 'sim' && <> {t('fns.syncSim')}</>}
           </Notice>
         )}
         {sync.isError && <Notice tone="danger">{errorText(t, sync.error)}</Notice>}

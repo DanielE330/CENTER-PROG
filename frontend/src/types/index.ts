@@ -657,7 +657,6 @@ export interface AuditPage {
 }
 
 // ----- ФНС: ЕНС, налоговые события, проверка контрагентов -----
-export type FnsMode = 'sim' | 'live'
 export type FnsRisk = 'low' | 'medium' | 'high' | 'unknown'
 
 export interface FnsUpcoming {
@@ -673,10 +672,9 @@ export interface FnsEns {
   has_debt: boolean
   upcoming: FnsUpcoming[]
   checked_at: string | null
-  /** `fns_sim` (имитатор), `import` (загруженная справка) или реестр режима live. */
+  /** `import` — загруженная справка о состоянии расчётов */
   source: string
   source_label: string
-  mode: FnsMode
 }
 
 export interface FnsEnsImportResult extends FnsEns {
@@ -704,7 +702,10 @@ export interface FnsCounterparty {
   tax_debt_as_of?: string | null
   checked_at: string | null
   source: string | null
-  mode?: FnsMode
+  /** причины риска по настройкам компании: tax_debt_large, liquidated, not_in_registry, ... */
+  risk_reasons?: string[]
+  /** состояние источников: ok, off (выключен в настройках) или unavailable:<причина> */
+  sources?: Record<string, string>
   stale?: boolean
   /** откуда контрагент: выписка и/или ожидаемые события (счета и платёжки 1С) */
   origin?: ('statement' | 'expected' | 'onec')[]
@@ -719,9 +720,40 @@ export interface FnsCounterparties {
   checked_at: string
   source: string | null
   source_label: string
-  mode: FnsMode | null
+  /** сведения выгружены из открытых источников ФНС */
+  exported_from: 'fns'
+  /** дата, на которую ФНС опубликовала набор о задолженности */
+  debt_as_of?: string | null
   saved: boolean
   total_income_kop: Kop | null
+  settings?: FnsSettings
+}
+
+export interface FnsSettings {
+  sources: { egrul: boolean; data_nalog: boolean; fedresurs: boolean }
+  risk: {
+    bankruptcy: boolean
+    liquidation: boolean
+    not_in_registry: boolean
+    unreliable: boolean
+    disqualified: boolean
+    tax_debt: boolean
+    mass_address: boolean
+    large_debt_kop: number
+  }
+  show_statement: boolean
+  show_expected: boolean
+  top: number
+  use_in_forecast: boolean
+  check_after_sync: boolean
+}
+
+export interface FnsSettingsView {
+  settings: FnsSettings
+  defaults: FnsSettings
+  updated_at: string | null
+  info: { fedresurs_configured: boolean; debt_as_of: string | null; debt_state: string } | null
+  sources_info: Record<string, string>
 }
 
 export interface FnsSyncResult {
@@ -734,7 +766,6 @@ export interface FnsSyncResult {
   regime_source: 'request' | 'statement' | 'default'
   source: string
   source_label: string
-  mode: FnsMode
   fetched_at: string
   items: { kind: string; title: string; date: string; amount_kop: Kop; estimated: boolean }[]
   debt_kop: Kop | null

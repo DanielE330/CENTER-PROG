@@ -46,7 +46,10 @@ pub fn open(path: &str) -> Db {
             company_id TEXT NOT NULL REFERENCES companies(id), inn TEXT NOT NULL,
             risk_level TEXT NOT NULL, status TEXT NOT NULL, tax_debt_kop INTEGER NOT NULL DEFAULT 0,
             bankruptcy_flag INTEGER NOT NULL DEFAULT 0, checked_at TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY(company_id, inn));",
+            PRIMARY KEY(company_id, inn));
+        CREATE TABLE IF NOT EXISTS company_settings(
+            company_id TEXT NOT NULL REFERENCES companies(id), key TEXT NOT NULL, value TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY(company_id, key));",
     )
     .expect("migrate");
     // реквизиты компании (из сертификата ЭЦП) добавлены позже

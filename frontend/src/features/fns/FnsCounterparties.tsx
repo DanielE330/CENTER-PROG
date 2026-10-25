@@ -10,8 +10,11 @@ import { useFnsCounterparties } from '../../hooks/queries'
 import { formatDate, formatKop, formatPercent } from '../../lib/formatters'
 import { errorText } from '../../i18n/helpers'
 import { ApiError } from '../../lib/errors'
-import type { FnsCounterparty, FnsRisk } from '../../types'
+import type { FnsCounterparty, FnsRisk, FnsSettings } from '../../types'
 import { riskReasons, riskTone, sourceText, statusLabel } from './labels'
+
+const enabledSources = (s?: FnsSettings) =>
+  s ? (['egrul', 'data_nalog', 'fedresurs'] as const).filter((k) => s.sources[k]) : ['egrul', 'data_nalog']
 
 const RANK: Record<FnsRisk, number> = { high: 3, medium: 2, low: 1, unknown: 0 }
 /** С какой доли ожидаемых поступлений клиент считается крупным для предупреждения. */
@@ -21,10 +24,11 @@ const BIG_SHARE = 0.1
 const expectedOnly = (c: FnsCounterparty) => !!c.origin?.includes('expected') && !c.origin?.includes('statement')
 const shareOf = (c: FnsCounterparty) => (expectedOnly(c) ? c.expected_share : c.income_share) ?? null
 
-/** Таблица «Контрагенты и риски» и предупреждение о рисковом клиенте. Данные — открытые реестры ФНС (или имитатор). */
+/** Таблица «Контрагенты и риски» и предупреждение о рисковом клиенте. Данные выгружены из открытых реестров ФНС;
+ * что проверять и что считать риском, компания задаёт в «Настройки → Сведения ФНС». */
 export function FnsCounterparties() {
   const { t } = useTranslation()
-  const q = useFnsCounterparties(20)
+  const q = useFnsCounterparties()
   const noInn = q.error instanceof ApiError && q.error.code === 'inn_required'
   if (noInn) return null // подсказку про ИНН уже показывает карточка ЕНС
   const items = q.data?.items ?? []
@@ -54,14 +58,13 @@ export function FnsCounterparties() {
         return expectedOnly(c) ? <span title={t('fns.cp.expectedShareHint')}>{formatPercent(s)} <span className="text-xs text-muted">{t('fns.cp.expectedMark')}</span></span> : formatPercent(s)
       },
     },
-    { key: 'status', header: t('fns.cp.status'), sortValue: (c) => c.status, render: (c) => (c.checked ? statusLabel(t, c.status) : '—') },
+    { key: 'status', header: t('fns.cp.status'), sortValue: (c) => c.status, render: (c) => (c.checked ? <span title={c.sources?.egrul === 'off' ? t('fns.cp.egrulOff') : undefined}>{statusLabel(t, c.status)}</span> : '—') },
     {
       key: 'debt', header: t('fns.cp.debt'), numeric: true, sortValue: (c) => Number(c.tax_debt_kop ?? 0),
       render: (c) => {
         if (!c.checked) return '—'
-        // дата сведений и откуда они: открытые данные ФНС или имитатор (ИНН датасета выдуманные)
-        const origin = c.mode === 'sim' ? t('fns.modeSim') : t('fns.sourceName.data_nalog')
-        const asOf = c.tax_debt_as_of ? <span className="block text-xs text-muted">{t('fns.cp.debtAsOf', { date: formatDate(c.tax_debt_as_of) })}<br />{origin}</span> : null
+        // дата, на которую ФНС опубликовала сведения о задолженности
+        const asOf = c.tax_debt_as_of ? <span className="block text-xs text-muted">{t('fns.cp.debtAsOf', { date: formatDate(c.tax_debt_as_of) })}<br />{t('fns.sourceName.data_nalog')}</span> : null
         return c.has_tax_debt ? <span><span className="text-danger font-semibold">{formatKop(c.tax_debt_kop)}</span>{asOf}</span> : <span>{t('fns.cp.noDebt')}{asOf}</span>
       },
     },
@@ -88,12 +91,14 @@ export function FnsCounterparties() {
         {q.data && items.length > 0 && (
           <>
             <DataTable columns={columns} rows={items} getRowKey={(c) => c.inn} defaultSort={{ key: 'share', dir: 'desc' }} rowClassName={(c) => (c.checked && c.risk_level === 'high' ? 'bg-danger-soft' : undefined)} />
-            <p className="px-5 text-xs text-muted">
-              {new Set(items.filter((c) => c.checked).map((c) => c.mode)).size > 1
-                ? t('fns.cp.sourceMixed')
-                : t('fns.cp.source', { source: sourceText(t, q.data.source, q.data.mode) })}
-              {q.data.checked_at && <> · {t('fns.cp.checked', { date: formatDate(q.data.checked_at) })}</>}
-              {!q.data.saved && <> · {t('fns.cp.notSaved')}</>}
+            <p className="px-5 text-xs text-muted flex flex-wrap items-center gap-1.5">
+              <Badge tone="neutral">{t('fns.cp.exported')}</Badge>
+              <span>{enabledSources(q.data.settings).map((s) => sourceText(t, s)).join(', ')}</span>
+              {q.data.debt_as_of && <span>· {t('fns.cp.debtDataAsOf', { date: formatDate(q.data.debt_as_of) })}</span>}
+              {q.data.checked_at && <span>· {t('fns.cp.checked', { date: formatDate(q.data.checked_at) })}</span>}
+              {q.data.settings && !q.data.settings.use_in_forecast && <span>· {t('fns.cp.notInForecast')}</span>}
+              {!q.data.saved && <span>· {t('fns.cp.notSaved')}</span>}
+              <Link to="/settings#fns" className="underline">{t('fns.cp.configure')}</Link>
             </p>
           </>
         )}

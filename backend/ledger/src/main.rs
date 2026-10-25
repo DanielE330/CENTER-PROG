@@ -3,6 +3,7 @@
 
 mod admin;
 mod counterparties;
+mod settings;
 mod db;
 mod members;
 mod routes;
@@ -62,5 +63,7 @@ pub fn build(st: AppState) -> Router {
         // флаги контрагентов по ИНН (проверка ФНС) и топ контрагентов по обороту
         .route(&format!("{co}/counterparty-risk"), get(counterparties::list_risk).put(counterparties::put_risk))
         .route(&format!("{co}/counterparties/top"), get(counterparties::top))
+        // настройки компании по разделам (fns, advisor)
+        .route(&format!("{co}/settings/{{key}}"), get(settings::get_settings).put(settings::put_settings))
         .with_state(st)
 }

@@ -1229,3 +1229,31 @@ async fn expected_events_with_inn_join_fns_checks_and_risk_names() {
     let r = &v["counterparty_risks"][0];
     assert_eq!((r["inn"].as_str(), r["names"].clone(), r["risk_level"].as_str()), (Some("6166065050"), json!(["ДОНАГРО ООО"]), Some("medium")));
 }
+
+#[tokio::test]
+async fn company_settings_by_section_with_revision_for_fns() {
+    let e = env().await;
+    let cid = company(&e.app, "u1").await;
+    let url = |k: &str| format!("/internal/v1/companies/{cid}/settings/{k}");
+    let snap = format!("/internal/v1/companies/{cid}/snapshot");
+    let app = e.app.clone();
+    let rev = |_: &axum::Router| {
+        let (app, snap) = (app.clone(), snap.clone());
+        async move { call(&app, "GET", &snap, None).await.1["data_revision"].as_i64().unwrap() }
+    };
+    let (s, v) = call(&e.app, "GET", &url("fns"), None).await;
+    assert_eq!((s, v["value"].is_null()), (StatusCode::OK, true));
+    let r0 = rev(&e.app).await;
+    let (s, v) = call(&e.app, "PUT", &url("fns"), Some(json!({"risk": {"not_in_registry": true}}))).await;
+    assert_eq!((s, v["changed"].as_bool()), (StatusCode::OK, Some(true)));
+    assert_eq!(rev(&e.app).await, r0 + 1, "учёт риска в прогнозе мог измениться");
+    let (_, v) = call(&e.app, "PUT", &url("fns"), Some(json!({"risk": {"not_in_registry": true}}))).await;
+    assert_eq!((v["changed"].as_bool(), rev(&e.app).await), (Some(false), r0 + 1), "те же настройки — ревизия не двигается");
+    // advisor не влияет на прогноз
+    call(&e.app, "PUT", &url("advisor"), Some(json!({"permissions": ["read_forecast"]}))).await;
+    assert_eq!(rev(&e.app).await, r0 + 1);
+    assert_eq!(call(&e.app, "GET", &url("advisor"), None).await.1["value"], json!({"permissions": ["read_forecast"]}));
+    assert_eq!(call(&e.app, "GET", &url("nope"), None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&e.app, "PUT", &url("fns"), Some(json!([1]))).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(call(&e.app, "PUT", "/internal/v1/companies/missing/settings/fns", Some(json!({}))).await.0, StatusCode::NOT_FOUND);
+}

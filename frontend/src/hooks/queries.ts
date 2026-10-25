@@ -106,9 +106,10 @@ export function useFnsEns() {
   return useQuery({ queryKey: key('fns', 'ens'), queryFn: api.fnsEns, retry: false })
 }
 
-export function useFnsCounterparties(top = 20) {
+/** Без `top` — сколько задано в настройках ФНС компании. */
+export function useFnsCounterparties(top?: number) {
   const key = useKey()
-  return useQuery({ queryKey: key('fns', 'counterparties', top), queryFn: () => api.fnsCounterparties(top), retry: false })
+  return useQuery({ queryKey: key('fns', 'counterparties', top ?? 'settings'), queryFn: () => api.fnsCounterparties(top), retry: false })
 }
 
 /** Налоги на год из ФНС создают ожидаемые события, поэтому обновляются все экраны. */

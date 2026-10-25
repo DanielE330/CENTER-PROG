@@ -1486,8 +1486,10 @@ pub async fn integrations_sync(axum::extract::State(st): axum::extract::State<Ap
     audit(&st, &ctx, &p, "integrations.sync", &ext).await;
     // контрагенты с ИНН сразу проверяются в ФНС: флаги риска попадают в ledger, и прогноз учитывает их без лишнего шага.
     // Без ИНН компании или при недоступном сервисе ФНС синхронизация всё равно успешна.
-    let fns = if events.iter().any(|e| e["inn"].as_str().is_some_and(|s| !s.is_empty())) {
-        match crate::fns::counterparties_view(&st, &actx, &p, 20).await {
+    let check = events.iter().any(|e| e["inn"].as_str().is_some_and(|s| !s.is_empty()))
+        && crate::fns::load_settings(&st, &actx, &cid).await.is_ok_and(|s| s.check_after_sync);
+    let fns = if check {
+        match crate::fns::counterparties_view(&st, &actx, &p, None).await {
             Ok(view) => {
                 let items = view["items"].as_array().cloned().unwrap_or_default();
                 let checked = items.iter().filter(|i| i["checked"] == json!(true)).count();
